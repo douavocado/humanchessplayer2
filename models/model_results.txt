@@ -1,0 +1,6 @@
+endgame piece_to: Accuracy: 59.9%, Avg loss: 1.203231 
+midgame piece_to: Accuracy: 71.0%, Avg loss: 0.821922 
+opening piece_to: Accuracy: 84.6%, Avg loss: 0.414347 
+opening piece selector: Accuracy: 52.7%, Avg loss: 1.371883
+midgame piece selector: Accuracy: 44.2%, Avg loss: 1.641367 
+endgame piece selector: Accuracy: 60.0%, Avg loss: 1.087521 
