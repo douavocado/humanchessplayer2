@@ -12,12 +12,12 @@ import random
 import json
 
 from engine import Engine
-from board_information import phase_of_game
+from common.board_information import phase_of_game
 
 engine = Engine()
 
-pgn_file = random.choice(os.listdir("test_PGNs"))
-pgn_path = os.path.join("test_PGNs", pgn_file)
+pgn_file = random.choice(os.listdir("train_PGNs"))
+pgn_path = os.path.join("train_PGNs", pgn_file)
 
 games_used = 1
 pgn = open(pgn_path, encoding="utf-8")
@@ -83,11 +83,14 @@ while games_processed < games_used and games_tried < 100:
                      "last_moves": last_moves[:],
                      }
         engine.update_info(input_dic)
+        engine.mood = "confident"
         game_phase = phase_of_game(game.board())
         move_dic  = engine.get_human_probabilities(game.board(), game_phase)
-        altered_move_dic = engine._alter_move_probabilties(move_dic)
+        altered_move_dic = engine._alter_move_probabilties(move_dic, game.board())
         
-        no_moves = engine._decide_breadth()
+        # no_moves = engine._decide_breadth()
+        no_moves = 6
+        
         sorted_moves = sorted(altered_move_dic.keys(), reverse=True, key=lambda x: altered_move_dic[x])
         
         move_made = game.next().move.uci()

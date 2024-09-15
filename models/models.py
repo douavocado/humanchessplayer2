@@ -9,7 +9,7 @@ import chess
 import torch
 from torch import nn
 
-from board_encodings import moveto_position_list_one_hot, position_list_one_hot
+from common.board_encodings import moveto_position_list_one_hot, position_list_one_hot
 
 chess.BaseBoard.from_position_list_one_hot = position_list_one_hot
 chess.BaseBoard.to_position_list_one_hot = moveto_position_list_one_hot
@@ -47,11 +47,11 @@ class MoveScorer:
     
     def __init__(self, move_from_weights_path, move_to_weights_path):
         self.model_from = PieceSelectorNN()
-        self.model_from.load_state_dict(torch.load(move_from_weights_path))
+        self.model_from.load_state_dict(torch.load(move_from_weights_path, weights_only=True))
         self.model_from.eval()
         
         self.model_to = PieceSelectorNN(input_channels=16)
-        self.model_to.load_state_dict(torch.load(move_to_weights_path))
+        self.model_to.load_state_dict(torch.load(move_to_weights_path, weights_only=True))
         self.model_to.eval()
 
     def get_moves(self, board, san=True, top=5):
@@ -102,6 +102,8 @@ class MoveScorer:
         return return_dic
     
     def get_move_dic(self, board, san=True, top=5):
+        # we must ensure that the board is white's turn, as that is how the neural nets have been trained
+        assert board.turn == chess.WHITE
         from_input_ = torch.tensor(board.from_position_list_one_hot()).reshape(1,8,8,14).permute(0,3,1,2).float()
         from_output_ = self.model_from(from_input_, logits=False)[0]
         
@@ -112,7 +114,6 @@ class MoveScorer:
         for square in starting_sqs:
             to_input_ = torch.tensor(board.to_position_list_one_hot(square)).reshape(1,8,8,16).permute(0,3,1,2).float()
             to_output_ = self.model_to(to_input_, logits=False)[0]
-            
             possible_to_squares = set([move.to_square for move in board.legal_moves if move.from_square == square])
             for to_square_mr in possible_to_squares:
                 prob = from_output_[chess.square_mirror(square)].item()*to_output_[chess.square_mirror(to_square_mr)].item()
@@ -176,3 +177,9 @@ class StockFishSelector:
                 top_move_dic[move.uci()] = eval_
                 
         return top_move_dic
+
+
+if __name__ == "__main__":
+    board = chess.Board("3q1rk1/pr2bpp1/1p2pn1B/n3N3/8/2NP4/PPQ1PP1P/R3K1R1 b Q - 0 17")
+    move_scorer = MoveScorer("model_weights/piece_selector_midgame_weights.pth", "model_weights/piece_to_weights_midgame.pth")
+    print(move_scorer.get_move_dic(board.mirror(), top=20))
