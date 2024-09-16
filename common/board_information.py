@@ -572,13 +572,15 @@ def is_offer_exchange(board:chess.Board, move_uci: str):
     else:
         return False
 
-def check_best_takeback_exists(board:chess.Board, last_move_uci:str):
+def check_best_takeback_exists(prev_board:chess.Board, last_move_uci:str):
     """ Given a board and the last move played, check whether the current turn side
         has a takeback, and whether the takeback is (significantly) the best move. 
         
         Returns bool and the takeback move uci string. If the takeback move is not best
         then returns False, None
     """
+    board = prev_board.copy()
+    board.push_uci(last_move_uci)
     stockfish_analysis = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=2)
     if isinstance(stockfish_analysis, dict):
         stockfish_analysis = [stockfish_analysis]
@@ -587,7 +589,7 @@ def check_best_takeback_exists(board:chess.Board, last_move_uci:str):
         cp_diff = stockfish_analysis[0]["score"].pov(board.turn).score(mate_score=2500) - stockfish_analysis[1]["score"].pov(board.turn).score(mate_score=2500)
     best_move_uci = stockfish_analysis[0]["pv"][0].uci()
     
-    if is_takeback(last_move_uci, best_move_uci):
+    if is_takeback(prev_board, last_move_uci, best_move_uci):
         if cp_diff > 70:
             return True, best_move_uci                  
         else:

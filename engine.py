@@ -26,7 +26,7 @@ from common.utils import flip_uci, get_move_made
 
 # TODO: Openings
 # TODO: add shock to opponent blunder
-
+# TODO: time control, make things less regular
 class Engine:
     """ Class for engine instance.
     
@@ -197,11 +197,12 @@ class Engine:
         # Factor is given by factor = np.exp(lvl_diff/10)
         lower_threshold_prob = sum(move_dic.values())/len(move_dic)
         
-        # TODO: positions with greater material for us are more appealing
+        # Capturing enpris pieces are more appealing, the more the piece is enpris the more appealing
+        capture_en_pris_sf = 1.5
         # Squares that pinned pieces attack that break the pin are more desirable
         break_pin_sf = 3.0
         # Captures are just generally more appealing. The bigger the capture the more appealing
-        capture_sf = 2.0
+        capture_sf = 1.5
         # Capturable pieces are more appealling to move
         capturable_sf = 1.3
         
@@ -276,11 +277,12 @@ class Engine:
             # psychologically, protecting pieces is more favorable than attacking pieces
             # therefore we weight being in a safer position more heavily than being in a 
             # more pressuring situation
+            # however this happens only if our move is not a capture.
             lvl_diff = opp_lvl_diff - self_lvl_diff*1.5
             # if our move was a capture, we must take that into account that we gained some material
             piece_type = board.piece_type_at(move_obj.to_square)
             if piece_type is not None: # if we captured something
-                lvl_diff += PIECE_VALS[piece_type]            
+                lvl_diff += PIECE_VALS[piece_type] * 1.5          
             factor = np.exp(lvl_diff/2)     
             
             # Some moves of the strengthening moves are weird and unlikely due to the
@@ -313,8 +315,7 @@ class Engine:
         if log:
             self.log += "Found moves that take advantage of pinned pieces: {} \n".format(adv_pinned_moves)
         
-        
-        # Capturing moves are more appealling
+        # Capturing moves are more appealing
         capturing_moves = []
         for move_uci in move_dic.keys():
             if is_capturing_move(board, move_uci):
@@ -324,6 +325,19 @@ class Engine:
                 capturing_moves.append(board.san(chess.Move.from_uci(move_uci)))
         if log:
             self.log += "Found capturing moves from position: {} \n".format(capturing_moves)
+        
+        # Capturing enpris pieces are more appealing
+        capturing_enpris_moves = []
+        for move_uci in move_dic.keys():
+            if is_capturing_move(board, move_uci):
+                # it is a capturing move
+                move_obj = chess.Move.from_uci(move_uci)
+                threatened_lvls = calculate_threatened_levels(move_obj.to_square, board)
+                if threatened_lvls > 0.6:  # captured piece is enpris
+                    move_dic[move_uci] *= capture_en_pris_sf * (threatened_lvls**0.25)
+                    capturing_enpris_moves.append(board.san(move_obj))
+        if log:
+            self.log += "Found capturing enpris moves from position: {} \n".format(capturing_moves)
         
         # Capturable pieces are more appealling to move
         capturable_moves = []
@@ -599,11 +613,11 @@ class Engine:
         # we re-evaluated the moves the lesser the noise
         for move_uci in human_move_evals.keys():
             if move_uci in re_evaluate_moves:
-                noise = (1+np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*70/(5*target_time*(depth + 1))
+                noise = (np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*30/(5*target_time*(depth + 1))
             else:
                 # if we haven't re-evaluated the move, wehave slight negative bias towards it, hence the
                 # slight negative mean
-                noise = -70 + (1+np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*90/(5*target_time)
+                noise = -70 + (1+np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*50/(5*target_time)
             
             human_move_evals[move_uci] += noise
         
@@ -771,10 +785,9 @@ class Engine:
                 self.log += "Detected top move {} is a takeback. \n".format(best_move_uci)
                 # check if the takeback is a blunder, if it is then capturing it is not an obvious moved
                 last_move_obj = chess.Move.from_uci(last_move_uci)
-                best_move_obj = chess.Move.from_uci(best_move_uci)
-                if PIECE_VALS[self.current_board.piece_type_at(last_move_obj.to_square)] - PIECE_VALS[self.current_board.piece_type_at(best_move_obj.from_square)] > 0.6:
+                if calculate_threatened_levels(last_move_obj.to_square, prev_board)  <= 0 and PIECE_VALS[self.current_board.piece_type_at(last_move_obj.to_square)] - PIECE_VALS[prev_board.piece_type_at(last_move_obj.to_square)] > 0.6:
                     # then it is blunder
-                    self.log += "Opponent has captured a piece that was not enpris: {}, not considering it as takeback. \n".format(self.current_board.san(last_move_obj))
+                    self.log += "Opponent has captured a piece that was not enpris: {}, not considering it as takeback. \n".format(self.prev_board.san(last_move_obj))
                     self.opponent_just_blundered = True
                 else:                    
                     if cp_diff > 100:
@@ -813,7 +826,7 @@ class Engine:
             Returns target time, a non-negative float.
         """
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = 0.6*self_initial_time/(85 + self_initial_time*0.25)
+        base_time = 0.7*self_initial_time/(85 + self_initial_time*0.25)
         
         mood_sf_dic = {"confident": 1,
                         "cocky": 0.6,
@@ -839,7 +852,7 @@ class Engine:
         """
         self.log += "Deciding time taken to make the move from receiving input. \n"
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = 0.8*self_initial_time/(85 + self_initial_time*0.25)
+        base_time = 0.9*self_initial_time/(85 + self_initial_time*0.25)
         
         obvious_sf = 0.8
         # default value for time_taken
@@ -888,7 +901,7 @@ class Engine:
                     time_taken = base_time * (2.3 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
             elif self.mood == "cautious":
                 # medium variation, slow moves
-                if np.random.random() < 0.6: # then we have a quick low variation move
+                if np.random.random() < 0.5: # then we have a quick low variation move
                     time_taken = base_time * (1.3+ np.clip(0.1*np.random.randn(), -0.3, 0.3))
                 elif np.random.random() < 0.6: # medium low variation move
                     time_taken = base_time * (2.1+ np.clip(0.15*np.random.randn(), -0.4, 0.4))
@@ -1012,7 +1025,7 @@ class Engine:
         complexity = self.lucas_analytics["complexity"]
         eff_mob = self.lucas_analytics["eff_mob"]
         if abs(current_eval) < 250:
-            if np.random.random() < (0.13 + complexity/(100*eff_mob + 100))**0.6:
+            if np.random.random() < (0.2 + complexity/(100*eff_mob + 100))**0.6:
                 return "cautious"
             else:
                 self.log += "Postion is close to even (current eval {}) and complex (complexity {}). But by chance not cautious. \n".format(current_eval, complexity)
@@ -1045,9 +1058,7 @@ class Engine:
             if piece_type_to is not None:
                 to_value = PIECE_VALS[piece_type_to]
                 if to_value - from_value > -0.6: # roughly similar trade
-                    dummy_board = board.copy()
-                    dummy_board.push(move_obj)
-                    exists, takeback_move_uci = check_best_takeback_exists(dummy_board, move_obj.uci())
+                    exists, takeback_move_uci = check_best_takeback_exists(board, move_obj.uci())
                     if exists == True:
                         # then we have a best takeback
                         premove_uci = takeback_move_uci
