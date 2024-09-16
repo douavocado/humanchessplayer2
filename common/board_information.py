@@ -503,13 +503,18 @@ def is_attacked_by_pinned(board:chess.Board, square: chess.Square, side: bool):
                 pinned_attackers += 1
     return pinned_attackers
 
-def is_takeback(prev_move_uci: str, move_uci: str):
+def is_takeback(prev_board: chess.Board, prev_move_uci: str, move_uci: str):
     """ Given a move and the previously played move, return True if move_uci is
         a takeback. Otherwise return False.
     """
+    # check if opponent actually captured our piece in the previous board
     prev_move_obj = chess.Move.from_uci(prev_move_uci)
     move_obj = chess.Move.from_uci(move_uci)
-    return move_obj.to_square == prev_move_obj.to_square
+    
+    if prev_board.piece_at(prev_move_obj.to_square) is not None:
+        return move_obj.to_square == prev_move_obj.to_square
+    else:
+        return False
 
 def is_check_move(board:chess.Board, move_uci:str):
     """ Returns whether a move gives a check or not.
