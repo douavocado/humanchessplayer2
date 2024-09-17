@@ -47,6 +47,7 @@ DIFFICULTY = int(config["DEFAULT"]["difficulty"])
 
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
 SCRAPE_EVERY = 0.5 # the time gap between scraping
+MOVE_DELAY = 0.25 # the amount of time we take per move minus the time the engine calc time from other aspects (time scrape, position updates, moving pieces etc.)
 
 SCREEN_CAPTURE = screenshot.Screenshot()
 
@@ -303,6 +304,7 @@ class LichessClient:
                     initial_time = self.game_info["initial_time"]
                     base_time = 0.6*initial_time/(85 + initial_time*0.4)
                     wait_time = base_time*(0.8+random.random())
+                    self.log += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                     time.sleep(wait_time)
                     successful = self.make_move(response_uci)
                     if successful == True:
@@ -330,8 +332,8 @@ class LichessClient:
             self.log += "Time taken to get move from engine: {} \n".format(end-start)
             # if there is time left over, then wait a bit
             intended_break = output_dic["time_take"]
-            if end - start - intended_break < -0.05:
-                time.sleep(intended_break - (end-start))
+            if end - start - intended_break < -1*MOVE_DELAY:
+                time.sleep(intended_break - (end-start) - MOVE_DELAY)
                 
             move_made_uci = output_dic["move_made"]
             premove = output_dic["premove"]

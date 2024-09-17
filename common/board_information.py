@@ -585,6 +585,8 @@ def check_best_takeback_exists(prev_board:chess.Board, last_move_uci:str):
     if isinstance(stockfish_analysis, dict):
         stockfish_analysis = [stockfish_analysis]
         cp_diff = 2500
+    elif len(stockfish_analysis) == 1:
+        cp_diff = 2500
     else:
         cp_diff = stockfish_analysis[0]["score"].pov(board.turn).score(mate_score=2500) - stockfish_analysis[1]["score"].pov(board.turn).score(mate_score=2500)
     best_move_uci = stockfish_analysis[0]["pv"][0].uci()
