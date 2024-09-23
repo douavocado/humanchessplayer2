@@ -4,17 +4,20 @@ Created on Tue Sep 10 11:29:08 2024
 
 @author: xusem
 """
-import chess
 import datetime
 import os
 import time
 import numpy as np
 import random
 
+import chess
+import chess.polyglot
+
 from models.models import MoveScorer, StockFishSelector
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH, 
-                              MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH
+                              MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
+                              QUICKNESS
                               )
 
 from common.board_information import (
@@ -25,9 +28,10 @@ from common.board_information import (
 from common.utils import flip_uci, get_move_made
 
 # TODO: Openings
-# TODO: add shock to opponent blunder
 # TODO: time control, make things less regular
 # TODO: allow premoves for obvious moves
+# TODO: Add resign functionality
+# TODO: 3-fold repetition logic
 
 class Engine:
     """ Class for engine instance.
@@ -38,7 +42,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: str = os.path.join(os.getcwd(), 'Engine_logs',str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt')):
+    def __init__(self, playing_level:int = 6, log_file: str = os.path.join(os.getcwd(), 'Engine_logs',str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt'), opening_book_path:str = "Opening_books/bullet.bin"):
         self.input_info = {
             "side": None,
             "fens": None,
@@ -61,6 +65,9 @@ class Engine:
         self.stockfish_scorer = StockFishSelector(PATH_TO_STOCKFISH)
         self.stockfish_analysis = None
         
+        # Getting opening books
+        self.opening_book = chess.polyglot.open_reader(opening_book_path)
+        
         # lucas statistics for the current position
         self.lucas_analytics = {
             "complexity": None,
@@ -69,6 +76,8 @@ class Engine:
             "narrowness": None,
             "activity": None,
             }
+        # A bool to track whether we have updated analytics following updating info
+        self.analytics_updated = False
         
         self.playing_level = playing_level
         self.mood = None
@@ -80,7 +89,41 @@ class Engine:
             log.write(self.log)
             log.close()
         self.log = ""
+    
+    def _decide_resign(self):
+        """ The decision making function which decides whether to resign.
         
+            Returns bool
+        """
+        self.log += "Deciding whether to resign the current position. \n"
+        # Can only decide to resign if analytics are updated
+        if self.analytics_updated == False:
+            self.log += "WARNING: _decide_resign() function has been called with outdated analytics. Please call .calculate_analytics() first to get accurate output. \n"
+        
+        own_time = self.input_info["self_clock_times"][-1]
+        opp_time = self.input_info["opp_clock_times"][-1]
+        starting_time = self.input_info["self_initial_time"]
+        
+        # does not resign in the first 15 moves
+        if self.current_board.fullmove_number < 15:
+            return False
+        elif opp_time <= 10:
+            return False
+        elif own_time/(opp_time-10) > 3:
+            return False
+        win_pct = self.lucas_analytics["win_prob"]
+        
+        # We shall only resign if our win percentage is sufficiently low, and the material
+        # imbalance is obvious
+        mat_dic = {1:1, 2:3.1, 3:3.5, 4:5.5, 5:9.9, 6:3}
+        our_mat = sum([len(self.current_board.pieces(x, self.current_board.turn))*mat_dic[x] for x in range(1,7)])
+        opp_mat = sum([len(self.current_board.pieces(x, not self.current_board.turn))*mat_dic[x] for x in range(1,7)])
+        if win_pct < np.log(starting_time)* opp_time/(500*starting_time) and opp_mat - our_mat > 5:
+            self.log += "Win percentage too low, material imbalance too large and opponent time too high, resigning... \n"
+            return True
+        else:
+            return False
+    
     def _decide_human_filters(self):
         """ Decide if given the position we want to use human filters or not. When
             using human filters we would need to use more processing time, which
@@ -517,9 +560,9 @@ class Engine:
             else:
                 no_moves = max(self.playing_level-1, 1)
         else:
-            # There are plenty of good moves
+            # There are plenty of good moves, search wide so close the game out effectively
             if game_phase != 'endgame' and king_dang < 500:
-                no_moves = max(min(6, self.playing_level-1),1)
+                no_moves = max(5, self.playing_level)
             elif king_dang > 500: 
                 # king is in danger, need to pay attention
                 no_moves = self.playing_level+1
@@ -548,6 +591,24 @@ class Engine:
         
         game_phase = phase_of_game(self.current_board)
         self.log += "Evaluated current game phase: {} \n".format(game_phase)
+        
+        # If the game phase is in the opening, we check to see if we can use our opening
+        # book to return a move
+        if game_phase == "opening":
+            self.log += "Detected game phase is opening, consulting opening book for matching positions. \n"
+            result = list(self.opening_book.find_all(self.current_board))
+            if len(result) != 0:
+                self.log += "Found matching position in opening database. Outputting top results: \n"
+                top_results = result[:5]
+                for res in top_results:
+                    self.log += "{} : {} \n".format(self.current_board.san(res.move), res.weight)
+                excluded_moves = [res.move for res in result[5:]]
+                # Now get weighted choice of move to play
+                played_move_obj = self.opening_book.weighted_choice(self.current_board, exclude_moves=excluded_moves).move
+                self.log += "Chosen move from opening book: {} \n".format(self.current_board.san(played_move_obj))
+                return played_move_obj.uci()
+            else:
+                self.log += "Did not find matching position in opening database. Resorting to human move. \n"
         
         # Now get the human moves from the position and their probabilities
         start = time.time()
@@ -630,16 +691,17 @@ class Engine:
         # we re-evaluated the moves the lesser the noise
         for move_uci in human_move_evals.keys():
             if move_uci in re_evaluate_moves:
-                noise = (np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*10/(5*target_time*(depth + 1))
+                noise = (np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*100/(5*target_time*(depth + 1))
             else:
                 # if we haven't re-evaluated the move, wehave slight negative bias towards it, hence the
                 # slight negative mean
-                noise = -70 + (1+np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*10/(5*target_time)
+                noise = -70 + (1+np.abs(human_move_evals[move_uci])**0.2)*np.random.randn()*100/(5*target_time)
             
             human_move_evals[move_uci] += noise
         
         san_human_move_evals = {self.current_board.san(chess.Move.from_uci(k)): v for k, v in human_move_evals.items()}
         self.log += "Updated human move evaluations after noise are: {} \n".format(san_human_move_evals)
+        self._write_log()
         top_move = max(human_move_evals.keys(), key= lambda x: human_move_evals[x])
         self.log += "Decided output move from human move function: {} \n".format(self.current_board.san(chess.Move.from_uci(top_move)))
         return top_move
@@ -739,7 +801,7 @@ class Engine:
         return return_dic
             
     
-    def update_info(self, info_dic : dict):
+    def update_info(self, info_dic : dict, auto_update_analytics:bool = True):
         """ The engine is fed the following thins in the info_dic, which a dictionary
             of board information: 
                 - side: either chess.WHITE or chess.BLACK - indicates what side we are
@@ -760,6 +822,43 @@ class Engine:
         # make sure the last fen entry is indeed our turn
         assert self.current_board.turn == self.input_info["side"]
         
+        self.analytics_updated = False
+        
+        if auto_update_analytics == True:
+            self.calculate_analytics()
+        
+    def calculate_analytics(self):
+        """ Before any move making or human analysis is performed, statistics must be computed for
+            the infomation dict self.input_info. This function must be called after every
+            update_info, or everytime the info dic is updated.
+            
+            Returns None
+        """
+        self.log += "Calculating analytics for current information dictionary. \n"
+        self.log += "Evaluating from the board (capital letters are white pieces): \n"
+        self.log += str(self.current_board) + "\n"
+        
+        # Performing a quick initial analysis of the position
+        self.log += "Performing initial quick analysis perhaps used later by stockfish. \n"
+        start = time.time()
+        analysis = STOCKFISH.analyse(self.current_board, limit=chess.engine.Limit(time=0.05), multipv=25)
+        if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
+            analysis = [analysis]
+        self.stockfish_analysis = analysis
+        end = time.time()
+        self.log += "Analysis computed in {} seconds. \n".format(end-start)
+        self.log += "Printing stockfish analysis object: {} \n".format(self.stockfish_analysis)
+        # Getting lucas analytics for the position
+        self.log += "Calculating lucas analytics for the position. \n"
+        xcomp, xmlr, xemo, xnar, xact = get_lucas_analytics(self.current_board, analysis=self.stockfish_analysis)
+        lucas_dict = {"complexity": xcomp, "win_prob": xmlr, "eff_mob": xemo, "narrowness": xnar, "activity": xact}
+        self.lucas_analytics.update(lucas_dict)
+        self.log += "Lucas analytics: {} \n".format(lucas_dict)
+        
+        # Now determine our player "mood" and set it as our mode for the rest of the calculations
+        self.mood = self._set_mood()
+        self.log += "Setted mood to be: {} \n".format(self.mood)
+        self.analytics_updated = True
     
     def check_obvious_move(self):
         """ Given input information, check whether there is an obvious move in the
@@ -831,13 +930,17 @@ class Engine:
             Returns target time, a non-negative float.
         """
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = 1.2*self_initial_time/(85 + self_initial_time*0.25)
+        own_time = self.input_info["self_clock_times"][-1]
         
+        base_time = QUICKNESS*self_initial_time/(85 + self_initial_time*0.25)
+        
+        # if we are in hurry mode (i.e. we are in low time), then we adjust our base 
+        # time accordingly
         mood_sf_dic = {"confident": 1,
                         "cocky": 0.6,
                         "cautious": 1.6,
                         "tilted": 0.4,
-                        "hurry": 0.5,
+                        "hurry": (own_time/self_initial_time)**0.7,
                         "flagging": 0.8}
         
         # we need to leverage information from lucas analytics
@@ -857,12 +960,12 @@ class Engine:
         """
         self.log += "Deciding time taken to make the move from receiving input. \n"
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = 1.2*self_initial_time/(85 + self_initial_time*0.25)
+        base_time = QUICKNESS*self_initial_time/(85 + self_initial_time*0.25)
         self.log += "Initial base time without calculations: {} \n".format(base_time)
         # we move faster depending on whether we are proportionally behind on time
         # or move slower if we are ahead
-        own_time = self.input_info["self_clock_times"][-1]
-        opp_time = self.input_info["opp_clock_times"][-1]
+        own_time = max(self.input_info["self_clock_times"][-1],1)
+        opp_time = max(self.input_info["opp_clock_times"][-1],1)
         base_time *= (own_time/opp_time)**(20/self_initial_time)
         self.log += "Base time after relative time vs opponent: {} \n".format(base_time)
         
@@ -880,7 +983,7 @@ class Engine:
             game_phase = phase_of_game(self.current_board)
             # in the opening and endgame we spend less time on average than the mid game
             if game_phase == "opening":
-                base_time *= 0.6
+                base_time *= 0.2
             elif game_phase == "midgame":
                 base_time *= 1.2
             else:
@@ -888,17 +991,23 @@ class Engine:
             
             self.log += "Base time after game phase analysis: {} \n".format(base_time)
             
-            # The more complex the position is, the more we think
-            complexity = self.lucas_analytics["complexity"]
-            complexity_sf = ((complexity+15)/30)**0.4
-            base_time *= complexity_sf
+            # The more activity we have in the position, the more we think
+            activity = self.lucas_analytics["activity"]
+            activity_sf = ((activity+12)/25)**0.4
+            base_time *= activity_sf
             
-            self.log += "Base time after complexity analysis: {} \n".format(base_time)
+            self.log += "Base time after activity analysis: {} \n".format(base_time)
+            
+            # The greater the proportion of good moves in a position, the less we think
+            eff_mob = self.lucas_analytics["eff_mob"]
+            if eff_mob > 25:
+                base_time *= 0.7
+                self.log += "Base time after eff_mob analysis: {} \n".format(base_time)
             
             # If opponent has just blundered, then act startled
             if self.opponent_just_blundered == True:
                 self.log += "Opponent has just blundered, acting startled with longer think time. \n"
-                base_time *= 3.5
+                base_time *= 2
             
             # Now sort according to moods
             if self.mood == "confident":
@@ -942,6 +1051,10 @@ class Engine:
                 else:
                     # slightly longer think
                     time_taken = base_time * (1.7 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
+                
+                # if we are in hurry mode (i.e. we are in low time), then our time taken
+                # depends on how much time we have left
+                time_taken *= (3*own_time/self_initial_time)**0.9
             elif self.mood == "flagging":
                 # large variation, quick move times
                 if np.random.random() < 0.4:
@@ -1076,7 +1189,7 @@ class Engine:
             if piece_type_to is not None:
                 to_value = PIECE_VALS[piece_type_to]
                 if to_value - from_value > -0.6: # roughly similar trade
-                    exists, takeback_move_uci = check_best_takeback_exists(board, move_obj.uci())
+                    exists, takeback_move_uci = check_best_takeback_exists(board.copy(), move_obj.uci())
                     if exists == True:
                         # then we have a best takeback
                         premove_uci = takeback_move_uci
@@ -1188,7 +1301,7 @@ class Engine:
         prev_board = chess.Board(self.input_info["fens"][-2])
         prev_analysis = STOCKFISH.analyse(prev_board, limit=chess.engine.Limit(time=0.01))
         prev_eval = prev_analysis["score"].pov(self.current_board.turn).score(mate_score=2500)
-        if curr_eval - prev_eval > 300: # then opponent just blundered
+        if curr_eval - prev_eval > 150: # then opponent just blundered
             self.log += "Opponent has blundered, checking to see if it is from hung piece. \n"
             # now check if opponent just hung piece they played
             last_move_obj = chess.Move.from_uci(self.input_info["last_moves"][-1])
@@ -1199,7 +1312,7 @@ class Engine:
             else:
                 self.log += "Opponent has not hung a piece. \n"
         else:
-            self.log += "Opponent has not blundered. \n"
+            self.log += "Opponent has not blundered. Current eval {}, previous eval {} \n".format(curr_eval, prev_eval)
     
     def make_move(self, log:bool=True):
         """ This is the main function for prompting a move output from the engine. 
@@ -1213,35 +1326,21 @@ class Engine:
                         This entry tends to get returned when we have had long think time for
                         our move.
         """
+        if log == True:
+            self._write_log()
+        
         move_start = time.time()
-        self.log += "Make move function called. \n"
-        self.log += "Evaluating from the board (capital letters are white pieces): \n"
-        self.log += str(self.current_board) + "\n"
-        
         return_dic = {}
-        # Performing a quick initial analysis of the position
-        self.log += "Performing initial quick analysis perhaps used later by stockfish. \n"
-        start = time.time()
-        analysis = STOCKFISH.analyse(self.current_board, limit=chess.engine.Limit(time=0.05), multipv=25)
-        if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
-            analysis = [analysis]
-        self.stockfish_analysis = analysis
-        end = time.time()
-        self.log += "Analysis computed in {} seconds: \n".format(end-start)
-        # Getting lucas analytics for the position
-        self.log += "Calculating lucas analytics for the position. \n"
-        xcomp, xmlr, xemo, xnar, xact = get_lucas_analytics(self.current_board, analysis=self.stockfish_analysis)
-        lucas_dict = {"complexity": xcomp, "win_prob": xmlr, "eff_mob": xemo, "narrowness": xnar, "activity": xact}
-        self.lucas_analytics.update(lucas_dict)
-        self.log += "Lucas analytics: {} \n".format(lucas_dict)
+        self.log += "Make move function called. \n"
         
-        # Now determine our player "mood" and set it as our mode for the rest of the calculations
-        self.mood = self._set_mood()
-        self.log += "Setted mood to be: {} \n".format(self.mood)
+        # If analytics for the position hasn't been called, issue warning.
+        if self.analytics_updated == False:
+            self.log += "WARNING: calculating move with outdated analytics. Please run .calculate_analytics() function to update for the new information dict. \n"
         
         # We should check for obvious moves that don't require much thought
         obvious_move, obvious_move_found = self.check_obvious_move()
-        
+        if log == True:
+            self._write_log()
         if obvious_move_found == True:
             return_dic["move_made"] = obvious_move
             use_human_filters = False
@@ -1266,23 +1365,36 @@ class Engine:
                 stockfish_end = time.time()
                 self.log += "Stockfish move gotten in {} seconds. \n".format(stockfish_end-stockfish_start)
         
+        if log == True:
+            self._write_log()
         # Now that we have decided what move are going to make, lets check whether the opponent
         # hung a big piece the previous move (and it was a blunder), so we can act startled
         self.log += "Checking for opponent blunders. \n"
         self._check_opp_blunder()
+        if log == True:
+            self._write_log()
         
         # If we are in a hurry, and our time is absolutely low then we also return 
         # a premove for the next move.
         # If we are not in a hurry, look for takeback premoves
-        own_time = self.input_info["self_clock_times"][-1]
+        # Sometimes if the time control is bullet, and we are in the opening, we
+        # may also premove with some probability
+        own_time = self.input_info["self_clock_times"][-1]        
         after_board = self.current_board.copy()
         after_board.push_uci(return_dic["move_made"])
         if after_board.outcome() is None:
+            self_initial_time = self.input_info["self_initial_time"]
             premove_start = time.time()
-            if self.mood == "hurry" and own_time < 20:            
-                self_initial_time = self.input_info["self_initial_time"]
+            if self.mood == "hurry" and own_time < 20:
                 # with some probability we return a premove
-                if np.random.random() < 0.3*self_initial_time/(own_time + 0.3*self_initial_time):
+                if np.random.random() < 0.4*self_initial_time/(own_time + 0.4*self_initial_time):
+                    return_dic["premove"] = self.get_premove(after_board, self.current_board.turn)
+                else:
+                    # look for takeback premoves only
+                    return_dic["premove"] = self.get_premove(after_board, self.current_board.turn, takeback_only=True)
+            elif self_initial_time <= 60 and phase_of_game(self.current_board) == "opening":
+                # with some probability return a forced premove, otherwise just look for takeback premoves
+                if np.random.random() < 0.2:
                     return_dic["premove"] = self.get_premove(after_board, self.current_board.turn)
                 else:
                     # look for takeback premoves only
@@ -1296,11 +1408,13 @@ class Engine:
             return_dic["premove"] = None
         
         self.log += "Gotten premove: {} \n".format(return_dic["premove"])
-        
+        if log == True:
+            self._write_log()
         # Finally decide how much time we are going to spend (including thinking time)
         return_dic["time_take"] = self._get_time_taken(obvious=obvious_move_found, human_filters=use_human_filters)
         move_end = time.time()
-        
+        if log == True:
+            self._write_log()
         # If we have extra time than that of alloted then we may do some pondering for the position after our move
         time_spent = move_end - move_start
         
@@ -1314,6 +1428,8 @@ class Engine:
             ponder_dic = None
         return_dic["ponder_dic"] = ponder_dic
         
+        if log == True:
+            self._write_log()
         self.log += "Returning return dic with all of our engine's calculations: \n"
         self.log += "{} \n".format(return_dic)
         
@@ -1326,7 +1442,7 @@ class Engine:
 if __name__ == "__main__":
     engine = Engine()
     # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
-    input_dic = {'fens': ['4r1k1/R4p1p/4p3/4P1P1/P4R2/4n2P/B5PK/2r5 w - - 4 35', '4r1k1/R4R1p/4p3/4P1P1/P7/4n2P/B5PK/2r5 b - - 0 35', '4r1k1/R4R1p/4p3/4P1P1/P7/7P/B5PK/2r2n2 w - - 1 36', '4r1k1/R4R1p/4p3/4P1P1/P7/7P/B5P1/2r2nK1 b - - 2 36', '4r1k1/R4R1p/4p3/4P1P1/P7/7P/B1r3P1/5nK1 w - - 3 37', '4r1k1/R4R1p/4p3/4P1P1/P7/7P/B1r3P1/5K2 b - - 0 37','4r1k1/R4R1p/4p3/4P1P1/P7/7P/r5P1/5K2 w - - 0 38', "4r1k1/R5Rp/4p3/4P1P1/P7/7P/r5P1/5K2 b - - 1 38"], 'self_clock_times': [10.6], 'opp_clock_times': [23.25], 'last_moves': ['f4f7', 'e3f1', 'h2g1', 'c1c2', 'g1f1', 'c2a2', 'f7g7'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
+    input_dic ={'fens': ['4r3/p1p3pp/8/1p2k3/2p2p1P/2P2KP1/P7/8 w - - 0 31', '4r3/p1p3pp/8/1p2k3/2p2pPP/2P2K2/P7/8 b - - 0 31', '4r3/p1p4p/6p1/1p2k3/2p2pPP/2P2K2/P7/8 w - - 0 32', '4r3/p1p4p/6p1/1p2k2P/2p2pP1/2P2K2/P7/8 b - - 0 32', '4r3/p1p4p/8/1p2k1pP/2p2pP1/2P2K2/P7/8 w - - 0 33', '4r3/p1p4p/7P/1p2k1p1/2p2pP1/2P2K2/P7/8 b - - 0 33', '4r3/2p4p/7P/pp2k1p1/2p2pP1/2P2K2/P7/8 w - - 0 34', '4r3/2p4p/7P/pp2k1p1/P1p2pP1/2P2K2/8/8 b - - 0 34'], 'self_clock_times': [31, 30, 29, 29, 28, 27, 26, 25], 'opp_clock_times': [35, 34, 34, 33, 33, 32, 31, 30], 'last_moves': ['g3g4', 'g7g6', 'h4h5', 'g6g5', 'h5h6', 'a7a5', 'a2a4'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
     start = time.time()
     engine.update_info(input_dic)
     print(engine.make_move(log=False))

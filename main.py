@@ -20,7 +20,7 @@ parser.add_argument("-n", "--nolog", help="Disable log output into /Engine_logs/
 args = parser.parse_args()
 
 # from lichess_premove_continuous_client import GameFinder 
-from lichess_client import GameFinder   
+from no_scrape_lichess_client import GameFinder   
 
 # clearing memory
 try:
@@ -30,5 +30,5 @@ try:
 except:
     pass
 
-finder = GameFinder(config['lichess.org']['username'], shadow_mode=args.shadow, log= not args.nolog)
+finder = GameFinder(shadow_mode=args.shadow, log= not args.nolog)
 finder.run()
