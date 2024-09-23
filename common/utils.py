@@ -51,7 +51,11 @@ def patch_fens(fen_before, fen_after):
                 next_move_made = get_move_made(dummy_board.fen(), fen_after)
                 if next_move_made is not None: # successful
                     last_moves = [move_uci, next_move_made]
-                    fens = [fen_before, dummy_board.fen(), fen_after]
+                    # correct move numbers
+                    fen_middle = dummy_board.fen()
+                    dummy_board.push_uci(next_move_made)
+                    fen_after = dummy_board.fen()
+                    fens = [fen_before, fen_middle, fen_after]
                     return last_moves, fens
             return None
         elif before_b.turn == chess.BLACK: # black to move first
@@ -74,7 +78,11 @@ def patch_fens(fen_before, fen_after):
                 next_move_made = get_move_made(dummy_board.fen(), fen_after)
                 if next_move_made is not None: # successful
                     last_moves = [move_uci, next_move_made]
-                    fens = [fen_before, dummy_board.fen(), fen_after]
+                    # correct move numbers
+                    fen_middle = dummy_board.fen()
+                    dummy_board.push_uci(next_move_made)
+                    fen_after = dummy_board.fen()
+                    fens = [fen_before, fen_middle, fen_after]
                     return last_moves, fens
             return None
     else:

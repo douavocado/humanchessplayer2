@@ -115,11 +115,15 @@ def game_over_found():
         Returns True or False
     """
     res = read_clock(capture_bottom_clock(state="end1"))
-    res2 = read_clock(capture_bottom_clock(state="end2"))
-    if res is None and res2 is None:
-        return False
-    else:
+    if res is not None:
         return True
+    res2 = read_clock(capture_bottom_clock(state="end2"))
+    if res2 is not None:
+        return True
+    res3 = read_clock(capture_bottom_clock(state="end3"))
+    if res3 is not None:
+        return True
+    return False
 
 class GameFinder:
     ''' During idle phases, we are scanning a particuar username to see if any active
@@ -285,8 +289,12 @@ class LichessClient:
         if check_turn_res is None:
             # then there was error, save the error in error files
             error_filename = os.path.join("Error_files", "board_img_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-            self.log += "ERROR: Couldn't find turn from fen {} with bottom {}. Check {} for board_image. \n".format(fen, bottom, error_filename)
+            self.log += "ERROR: Couldn't find turn from fen {} with bottom {}. Check {} for board_image. Defaulting to the next turn from the last fen. \n".format(fen, bottom, error_filename)
             cv2.imwrite(error_filename, board_img.astype(np.uint8))
+            last_board = chess.Board(self.dynamic_info["fens"][-1])
+            dummy_board = chess.Board(fen)
+            dummy_board.turn = not last_board.turn
+            fen = dummy_board.fen()
         elif check_turn_res == False:
             # then need to switch the turn
             dummy_board = chess.Board(fen)
@@ -584,7 +592,7 @@ class LichessClient:
             # In the meantime check for updates via screenshot method. The amount of time we
             # shall spend doing this will be enough so we can scrape again after
             tries = 0
-            tries_cap = 10 # some positive number to start with
+            tries_cap = 20 # some positive number to start with
             while tries < tries_cap:
                 # start_time = time.time()
                 if self.game_info["playing_side"] == chess.WHITE:
@@ -599,8 +607,29 @@ class LichessClient:
                 if move_change is not None:
                     move1_uci, move2_uci = move_change
                     last_board = chess.Board(self.dynamic_info["fens"][-1])
+                    # for the case of castling, move change will give the two squares of king and rook rather than move squares of the king
                     move1 = chess.Move.from_uci(move1_uci)
+                    if last_board.piece_type_at(move1.from_square) == chess.KING and last_board.color_at(move1.from_square) == chess.WHITE:
+                        if move1.from_square == chess.E1 and move1.to_square == chess.H1:
+                            move1 = chess.Move(chess.E1, chess.G1)
+                        elif move1.from_square == chess.E1 and move1.to_square == chess.A1:
+                            move1 = chess.Move(chess.E1, chess.C1)
+                    elif last_board.piece_type_at(move1.from_square) == chess.KING and last_board.color_at(move1.from_square) == chess.BLACK:
+                        if move1.from_square == chess.E8 and move1.to_square == chess.H8:
+                            move1 = chess.Move(chess.E1, chess.G1)
+                        elif move1.from_square == chess.E8 and move1.to_square == chess.A8:
+                            move1 = chess.Move(chess.E8, chess.C8)
                     move2 = chess.Move.from_uci(move2_uci)
+                    if last_board.piece_type_at(move2.from_square) == chess.KING and last_board.color_at(move2.from_square) == chess.WHITE:
+                        if move2.from_square == chess.E1 and move2.to_square == chess.H1:
+                            move2 = chess.Move(chess.E1, chess.G1)
+                        elif move2.from_square == chess.E1 and move2.to_square == chess.A1:
+                            move2 = chess.Move(chess.E1, chess.C1)
+                    elif last_board.piece_type_at(move2.from_square) == chess.KING and last_board.color_at(move2.from_square) == chess.BLACK:
+                        if move2.from_square == chess.E8 and move2.to_square == chess.H8:
+                            move2 = chess.Move(chess.E1, chess.G1)
+                        elif move2.from_square == chess.E8 and move2.to_square == chess.A8:
+                            move2 = chess.Move(chess.E8, chess.C8)
                     if move1 in last_board.legal_moves:
                         # then we have truly found a move update
                         self._update_dynamic_info_from_screenshot(move1)
