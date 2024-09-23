@@ -13,7 +13,7 @@ import time
 import numpy as np
 import chess
 
-def remove_background_colours(img, thresh = 1.15):
+def remove_background_colours(img, thresh = 1.04):
 
     res = img*np.expand_dims((np.abs(img[:,:,0]/(img[:,:,1]+10**(-10))-1) < thresh-1),-1)
     res = res*np.expand_dims((np.abs(img[:,:,0]/(img[:,:,2]+10**(-10))-1) < thresh-1),-1)
@@ -34,6 +34,7 @@ BOTTOM_CLOCK_Y = 762
 BOTTOM_CLOCK_Y_START = 790
 BOTTOM_CLOCK_Y_END = 831
 BOTTOM_CLOCK_Y_END_2 = 767
+BOTTOM_CLOCK_Y_END_3 = 795
 TOP_CLOCK_X = 1406
 TOP_CLOCK_Y = 443
 TOP_CLOCK_Y_START = 413
@@ -111,8 +112,6 @@ def multitemplate_multimatch(imgs, templates):
 def multitemplate_match_f(img, templates):
     # assumes img is 2 dimensional WxH and templates is 3 dimensional i.e. NxWxH where N is the number of templates
     # assumes that img and template are the same shape
-    no_templates = templates.shape[0]
-    no_imgs = img.shape[0]
     T = templates.astype(float)
     I = img.astype(float)
     w, h = img.shape
@@ -201,6 +200,8 @@ def capture_bottom_clock(state="play"):
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     elif state == "end2":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "end3":
+        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_3, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     img= im[:,:,:3]
     return img
 
@@ -248,7 +249,20 @@ def check_turn_from_last_moved(fen, board_img, bottom):
         if colour is not None:
             colour_count += 2*((colour == test_turn)-0.5)
     if colour_count == 0:
-        # there was error, return None
+        if len(detected_moved) > 0:
+            # then it must have been a castling move
+            if bottom == "w":
+                real_square = chess.square_mirror(detected_moved[0])
+            else:
+                real_square = chess.square_mirror(63-detected_moved[0])
+            if chess.square_rank(real_square) == 0: # first rank, must be white castles, so black move
+                return test_turn == chess.BLACK
+            elif chess.square_rank(real_square) == 7: # 8th rank, black castles, white to move
+                return test_turn == chess.WHITE
+            else:
+                # there was an error, expected to be castle move but wasn't
+                return None
+        # no detected moves, there was error, return None
         return None
     elif colour_count < 0:
         return True # then current turn is correct

@@ -841,7 +841,8 @@ class Engine:
         # Performing a quick initial analysis of the position
         self.log += "Performing initial quick analysis perhaps used later by stockfish. \n"
         start = time.time()
-        analysis = STOCKFISH.analyse(self.current_board, limit=chess.engine.Limit(time=0.05), multipv=25)
+        no_lines = len(list(self.current_board.legal_moves))
+        analysis = STOCKFISH.analyse(self.current_board, limit=chess.engine.Limit(time=0.05), multipv=no_lines)
         if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
             analysis = [analysis]
         self.stockfish_analysis = analysis
