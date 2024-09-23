@@ -581,21 +581,22 @@ def check_best_takeback_exists(prev_board:chess.Board, last_move_uci:str):
     """
     board = prev_board.copy()
     board.push_uci(last_move_uci)
-    stockfish_analysis = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=2)
-    if isinstance(stockfish_analysis, dict):
-        stockfish_analysis = [stockfish_analysis]
-        cp_diff = 2500
-    elif len(stockfish_analysis) == 1:
-        cp_diff = 2500
-    else:
-        cp_diff = stockfish_analysis[0]["score"].pov(board.turn).score(mate_score=2500) - stockfish_analysis[1]["score"].pov(board.turn).score(mate_score=2500)
-    best_move_uci = stockfish_analysis[0]["pv"][0].uci()
-    
-    if is_takeback(prev_board, last_move_uci, best_move_uci):
-        if cp_diff > 70:
-            return True, best_move_uci                  
+    if board.outcome() is None:
+        stockfish_analysis = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=2)
+        if isinstance(stockfish_analysis, dict):
+            stockfish_analysis = [stockfish_analysis]
+            cp_diff = 2500
+        elif len(stockfish_analysis) == 1:
+            cp_diff = 2500
         else:
-            return False , None # there is a takeback, but not the best move
+            cp_diff = stockfish_analysis[0]["score"].pov(board.turn).score(mate_score=2500) - stockfish_analysis[1]["score"].pov(board.turn).score(mate_score=2500)
+        best_move_uci = stockfish_analysis[0]["pv"][0].uci()
+        
+        if is_takeback(prev_board, last_move_uci, best_move_uci):
+            if cp_diff > 30:
+                return True, best_move_uci                  
+            else:
+                return False , None # there is a takeback, but not the best move by ar
     return False, None
 
 def new_attacked(prev_fen, fen, color):
