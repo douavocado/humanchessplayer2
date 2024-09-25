@@ -25,7 +25,7 @@ from common.board_information import (
     is_attacked_by_pinned, is_check_move, is_takeback, is_newly_attacked, get_threatened_board,
     is_offer_exchange, king_danger, is_open_file, calculate_threatened_levels, check_best_takeback_exists
             )
-from common.utils import flip_uci, get_move_made
+from common.utils import flip_uci, patch_fens
 
 # TODO: Openings
 # TODO: time control, make things less regular
@@ -409,7 +409,8 @@ class Engine:
         # We may only calculate this criterion if we have information of previous move
         if prev_board is not None:
             takeback_moves = []
-            last_move_uci = get_move_made(prev_board.fen(), board.fen())
+            res = patch_fens(prev_board.fen(), board.fen(), depth_lim=1)
+            last_move_uci = res[0][0]
             for move_uci in move_dic.keys():
                 if is_takeback(prev_board, last_move_uci, move_uci):
                     move_dic[move_uci] *= takeback_sf
@@ -519,7 +520,8 @@ class Engine:
         # which we could have gone to with the piece last move (including moving piece back and forth)
         if prev_board is not None and prev_prev_board is not None:
             repeat_moves = []
-            last_own_move_uci = get_move_made(prev_prev_board.fen(), prev_board.fen())
+            res = patch_fens(prev_prev_board.fen(), prev_board.fen(), depth_lim=1)
+            last_own_move_uci = res[0][0]
             last_own_move_obj = chess.Move.from_uci(last_own_move_uci)
             previous_reach = set([move.to_square for move in prev_prev_board.legal_moves if move.from_square == last_own_move_obj.from_square] + [last_own_move_obj.from_square])
             for move_uci in move_dic.keys():
@@ -587,7 +589,8 @@ class Engine:
             on self.current_board
             
             Return move_uci of move made
-        """
+        """        
+        start = time.time()
         
         game_phase = phase_of_game(self.current_board)
         self.log += "Evaluated current game phase: {} \n".format(game_phase)
@@ -611,7 +614,6 @@ class Engine:
                 self.log += "Did not find matching position in opening database. Resorting to human move. \n"
         
         # Now get the human moves from the position and their probabilities
-        start = time.time()
         un_altered_move_dic = self.get_human_probabilities(self.current_board, game_phase)
         
         # In the rare case where we have not manage to find any human moves, we 
@@ -658,7 +660,7 @@ class Engine:
         
         end = time.time()
         human_calc_time = end-start
-        BUFFER = 0.08 # the minimum extra time of human_calc time to deal with instances where we got a surprising quick time
+        BUFFER = 0.07 # the minimum extra time of human_calc time to deal with instances where we got a surprising quick time
         self.log += "Human probabilities including alterations evaluated in {} seconds. \n". format(human_calc_time)
         # Now simply selecting the best of these human evals is natural, however
         # a better way would be to cloud the judgement of the evaluations
@@ -672,8 +674,9 @@ class Engine:
         
         # If the number of re-evaluations far exceeds the numbre of top moves, we may keep 
         # re-evaluating each seed move with greater depth        
-        depth = re_evaluations // no_root_moves
+        depth = max(re_evaluations // no_root_moves,1)
         
+        reval_start = time.time()
         re_evaluate_moves = random.sample(top_human_moves, min(re_evaluations, len(top_human_moves)))
         san_re_evaluate_moves = [self.current_board.san(chess.Move.from_uci(x)) for x in re_evaluate_moves]
         self.log += "Re-evaluating moves: {} with depth {} \n".format(san_re_evaluate_moves, depth)
@@ -681,6 +684,8 @@ class Engine:
         san_re_evaluations_dic = {self.current_board.san(chess.Move.from_uci(k)):v for k,v in re_evaluations_dic.items()}
         self.log += "Re-evaluated evals are: {} \n".format(san_re_evaluations_dic)
         human_move_evals.update(re_evaluations_dic)
+        reval_end = time.time()
+        self.log += "Re-evaluations performed in {} seconds. \n".format(reval_end - reval_start)
         
         san_human_move_evals = {self.current_board.san(chess.Move.from_uci(k)): v for k, v in human_move_evals.items()}
         self.log += "Updated human move evaluations are: {} \n".format(san_human_move_evals)
@@ -701,7 +706,7 @@ class Engine:
         
         san_human_move_evals = {self.current_board.san(chess.Move.from_uci(k)): v for k, v in human_move_evals.items()}
         self.log += "Updated human move evaluations after noise are: {} \n".format(san_human_move_evals)
-        self._write_log()
+        #self._write_log()
         top_move = max(human_move_evals.keys(), key= lambda x: human_move_evals[x])
         self.log += "Decided output move from human move function: {} \n".format(self.current_board.san(chess.Move.from_uci(top_move)))
         return top_move
@@ -773,7 +778,7 @@ class Engine:
         """ Recursive function for getting evaluations during pondering. """
         ponder_results = self._ponder_moves(board, [move_uci], no_root_moves, prev_board=prev_board, log=False)
                  
-        if depth >= 1: # keep going
+        if depth > 1: # keep going
             new_board = board.copy()
             new_board.push_uci(move_uci)
             consider_move = ponder_results[move_uci][0]
@@ -848,7 +853,6 @@ class Engine:
         self.stockfish_analysis = analysis
         end = time.time()
         self.log += "Analysis computed in {} seconds. \n".format(end-start)
-        self.log += "Printing stockfish analysis object: {} \n".format(self.stockfish_analysis)
         # Getting lucas analytics for the position
         self.log += "Calculating lucas analytics for the position. \n"
         xcomp, xmlr, xemo, xnar, xact = get_lucas_analytics(self.current_board, analysis=self.stockfish_analysis)
@@ -933,7 +937,7 @@ class Engine:
         self_initial_time = self.input_info["self_initial_time"]
         own_time = self.input_info["self_clock_times"][-1]
         
-        base_time = QUICKNESS*self_initial_time/(85 + self_initial_time*0.25)
+        base_time = 0.8*QUICKNESS*self_initial_time/(85 + self_initial_time*0.25)
         
         # if we are in hurry mode (i.e. we are in low time), then we adjust our base 
         # time accordingly
@@ -967,7 +971,7 @@ class Engine:
         # or move slower if we are ahead
         own_time = max(self.input_info["self_clock_times"][-1],1)
         opp_time = max(self.input_info["opp_clock_times"][-1],1)
-        base_time *= (own_time/opp_time)**(20/self_initial_time)
+        base_time *= (own_time/opp_time)**(10/self_initial_time)
         self.log += "Base time after relative time vs opponent: {} \n".format(base_time)
         
         obvious_sf = 0.8
@@ -984,11 +988,11 @@ class Engine:
             game_phase = phase_of_game(self.current_board)
             # in the opening and endgame we spend less time on average than the mid game
             if game_phase == "opening":
-                base_time *= 0.2
+                base_time *= 0.4
             elif game_phase == "midgame":
                 base_time *= 1.2
             else:
-                base_time *=0.9
+                base_time *=0.6
             
             self.log += "Base time after game phase analysis: {} \n".format(base_time)
             
@@ -1203,23 +1207,56 @@ class Engine:
         # If no takebacks, then use computer moves to determine best premove to make.
         # We pretend opponent makes top engine move, and we respond using get_stockfish_move
         # perform analysis on current position 
-        analysis = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.01))
+        analysis = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.02))
         opp_best_move_obj = analysis["pv"][0]
         dummy_board = board.copy()
         dummy_board.push(opp_best_move_obj)
-        next_analysis = STOCKFISH.analyse(dummy_board, limit=chess.engine.Limit(time=0.01), multipv=10)
-        if isinstance(next_analysis, dict):
-            next_analysis = [next_analysis]
-        # now use get_stockfish move on this position
-        # Of course, we can only get a stockfish move if the game is not over
-        if dummy_board.outcome() is None:
-            premove_uci = self.get_stockfish_move(board=dummy_board, analysis=next_analysis, last_move_uci=opp_best_move_obj.uci(), log=False)
-            self.log += "Detected premove from stockfish evals: {} \n".format(premove_uci)
+        candidate_premove = None
+        # if we are in the opening, then check whether we could respond with opening database move
+        game_phase = phase_of_game(dummy_board)
+        if game_phase == "opening":
+            result = list(self.opening_book.find_all(dummy_board))
+            if len(result) != 0:
+                self.log += "Found matching position in opening database during premove search. Using it to find premove in opening.\n"
+                excluded_moves = [res.move for res in result[5:]]
+                # Now get weighted choice of move to play
+                played_move_obj = self.opening_book.weighted_choice(dummy_board, exclude_moves=excluded_moves).move
+                self.log += "Chosen premove from opening book: {} \n".format(dummy_board.san(played_move_obj))
+                candidate_premove = played_move_obj.uci()
+            else:
+                self.log += "Even though opening phase, did not find matching position in opening database. Resorting to stockfish premove. \n"
+        if candidate_premove is None: # didn't find opening book premove
+            next_analysis = STOCKFISH.analyse(dummy_board, limit=chess.engine.Limit(time=0.02), multipv=10)
+            if isinstance(next_analysis, dict):
+                next_analysis = [next_analysis]
+            # now use get_stockfish move on this position
+            # Of course, we can only get a stockfish move if the game is not over
+            if dummy_board.outcome() is None:
+                candidate_premove = self.get_stockfish_move(board=dummy_board, analysis=next_analysis, last_move_uci=opp_best_move_obj.uci(), log=False)
+                self.log += "Detected premove from stockfish evals: {} \n".format(candidate_premove)
+            else:
+                # game is over
+                self.log += "Cannot get premove for position {} as it is game over. \n".format(dummy_board.fen())
+                return None
+        
+        # Now that we have found our premove, we have to do some extra checks to make sure it is a human
+        # premove. for example, a human wouldn't premove a piece into a square which would be enpris
+        dummy_board_2 = board.copy()
+        dummy_board_2.turn = side # pretend it is our turn in this situation
+        move_obj = chess.Move.from_uci(candidate_premove)
+        piece_at = dummy_board_2.piece_type_at(move_obj.to_square)
+        if piece_at is None:
+            piece_val_at = 0
         else:
-            # game is over
-            self.log += "Cannot get premove for position {} as it is game over. \n".format(dummy_board.fen())
-            return None
-        \
+            piece_val_at = PIECE_VALS[piece_at]
+        dummy_board_2.push(move_obj)
+        if calculate_threatened_levels(move_obj.to_square, dummy_board) - piece_val_at > 0.6:
+            # premove moves to be enpris
+            self.log += "Premove {} moves to an enpris square, filtering the premove out. \n".format(dummy_board.san(move_obj))
+            premove_uci = None
+        else:
+            premove_uci = candidate_premove
+        
         return premove_uci
     
     def ponder(self, board: chess.Board, time_allowed : float, time_per_position : float = 0.15, prev_board:chess.Board = None):
@@ -1240,9 +1277,9 @@ class Engine:
         # depends on the time control.
         initial_time = self.input_info["self_initial_time"]
         if initial_time <= 180:
-            max_ponder_no = 1
-        else:
             max_ponder_no = 2
+        else:
+            max_ponder_no = 3
         
         search_width = self._decide_breadth() # this is slightly incorrect, but close enough
         ponder_depth = max(variations_allowed // (max_ponder_no * search_width) - 1, 0)
@@ -1388,14 +1425,14 @@ class Engine:
             premove_start = time.time()
             if self.mood == "hurry" and own_time < 20:
                 # with some probability we return a premove
-                if np.random.random() < 0.4*self_initial_time/(own_time + 0.4*self_initial_time):
+                if np.random.random() < 0.5*self_initial_time/(own_time + 0.5*self_initial_time):
                     return_dic["premove"] = self.get_premove(after_board, self.current_board.turn)
                 else:
                     # look for takeback premoves only
                     return_dic["premove"] = self.get_premove(after_board, self.current_board.turn, takeback_only=True)
             elif self_initial_time <= 60 and phase_of_game(self.current_board) == "opening":
                 # with some probability return a forced premove, otherwise just look for takeback premoves
-                if np.random.random() < 0.2:
+                if np.random.random() < 0.4:
                     return_dic["premove"] = self.get_premove(after_board, self.current_board.turn)
                 else:
                     # look for takeback premoves only
@@ -1443,7 +1480,7 @@ class Engine:
 if __name__ == "__main__":
     engine = Engine()
     # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
-    input_dic ={'fens': ['4r3/p1p3pp/8/1p2k3/2p2p1P/2P2KP1/P7/8 w - - 0 31', '4r3/p1p3pp/8/1p2k3/2p2pPP/2P2K2/P7/8 b - - 0 31', '4r3/p1p4p/6p1/1p2k3/2p2pPP/2P2K2/P7/8 w - - 0 32', '4r3/p1p4p/6p1/1p2k2P/2p2pP1/2P2K2/P7/8 b - - 0 32', '4r3/p1p4p/8/1p2k1pP/2p2pP1/2P2K2/P7/8 w - - 0 33', '4r3/p1p4p/7P/1p2k1p1/2p2pP1/2P2K2/P7/8 b - - 0 33', '4r3/2p4p/7P/pp2k1p1/2p2pP1/2P2K2/P7/8 w - - 0 34', '4r3/2p4p/7P/pp2k1p1/P1p2pP1/2P2K2/8/8 b - - 0 34'], 'self_clock_times': [31, 30, 29, 29, 28, 27, 26, 25], 'opp_clock_times': [35, 34, 34, 33, 33, 32, 31, 30], 'last_moves': ['g3g4', 'g7g6', 'h4h5', 'g6g5', 'h5h6', 'a7a5', 'a2a4'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
+    input_dic ={'fens': ['rnbq1rk1/1p2ppbp/p2p1np1/2p5/3P4/2N1PN2/PPPBBPPP/R2Q1RK1 w - - 0 8', 'rnbq1rk1/1p2ppbp/p2p1np1/2P5/8/2N1PN2/PPPBBPPP/R2Q1RK1 b - - 0 8', 'rnbq1rk1/1p2ppbp/p4np1/2p5/8/2N1PN2/PPPBBPPP/R2Q1RK1 w - - 0 9', 'rnbq1rk1/1p2ppbp/p4np1/2p5/4P3/2N2N2/PPPBBPPP/R2Q1RK1 b - - 0 9', 'r1bq1rk1/1p2ppbp/p1n2np1/2p5/4P3/2N2N2/PPPBBPPP/R2Q1RK1 w - - 1 10', 'r1bq1rk1/1p2ppbp/p1n2np1/2p5/4P3/2NB1N2/PPPB1PPP/R2Q1RK1 b - - 2 10', 'r2q1rk1/1p2ppbp/p1n2np1/2p5/4P1b1/2NB1N2/PPPB1PPP/R2Q1RK1 w - - 3 11', 'r2q1rk1/1p2ppbp/p1n2np1/2p5/4P1b1/2NB1N2/PPPBQPPP/R4RK1 b - - 4 11'], 'self_clock_times': [59, 59, 58, 57, 56, 56, 54, 53], 'opp_clock_times': [58, 57, 56, 56, 55, 54, 53, 53], 'last_moves': ['d4c5', 'd6c5', 'e3e4', 'b8c6', 'e2d3', 'c8g4', 'd1e2'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
     start = time.time()
     engine.update_info(input_dic)
     print(engine.make_move(log=False))

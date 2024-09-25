@@ -32,12 +32,14 @@ SCREEN_CAPTURE = screenshot.Screenshot()
 BOTTOM_CLOCK_X = 1406
 BOTTOM_CLOCK_Y = 762
 BOTTOM_CLOCK_Y_START = 790
+BOTTOM_CLOCK_Y_START_2 = 775
 BOTTOM_CLOCK_Y_END = 831
 BOTTOM_CLOCK_Y_END_2 = 767
 BOTTOM_CLOCK_Y_END_3 = 795
 TOP_CLOCK_X = 1406
 TOP_CLOCK_Y = 443
 TOP_CLOCK_Y_START = 413
+TOP_CLOCK_Y_START_2 = 426
 TOP_CLOCK_Y_END = 372
 TOP_CLOCK_Y_END_2 = 440
 CLOCK_WIDTH = 147
@@ -194,8 +196,10 @@ def capture_bottom_clock(state="play"):
     # TODO: configurable
     if state == "play":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start":
+    elif state == "start1":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "start2":
+        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     elif state == "end1":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     elif state == "end2":
@@ -209,8 +213,10 @@ def capture_top_clock(state="play"):
     # TODO: configurable
     if state == "play":
         im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start":
+    elif state == "start1":
         im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "start2":
+        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     elif state == "end1":
         im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     elif state == "end2":

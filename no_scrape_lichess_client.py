@@ -21,18 +21,16 @@ import configparser
 import ctypes
 import subprocess
 import time
-import json
 import datetime
 import cv2
 import numpy as np
 
 from engine import Engine
 from common.constants import QUICKNESS
-from common.utils import get_move_made, patch_fens
+from common.utils import patch_fens
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
-                                           capture_bottom_clock, is_our_turn_from_clock, is_white_turn_from_notation,
-                                           capture_white_notation, get_fen_from_image, check_fen_last_move_bottom,
+                                           capture_bottom_clock, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved)
 
 
@@ -106,8 +104,14 @@ def new_game_found():
         Returns None if not, else returns our starting initial time in seconds.
     """
     # try to read bot clock for start position. if none is found, then haven't started the game
-    res = read_clock(capture_bottom_clock(state="start"))
-    return res # either returns None or our starting initial time
+    res = read_clock(capture_bottom_clock(state="start1"))
+    if res is not None:
+        return res
+    
+    res2 = read_clock(capture_bottom_clock(state="start2"))
+    if res2 is not None:
+        return res2
+    return None # either returns None, no clock found
 
 def game_over_found():
     """ Uses screenshot to detect whether game has finished.
@@ -234,7 +238,9 @@ class LichessClient:
             opp_clock_time = read_clock(top_clock_img)
             if opp_clock_time is None:
                 # try the starting position
-                opp_clock_time = read_clock(capture_top_clock(state="start"))
+                opp_clock_time = read_clock(capture_top_clock(state="start1"))
+                if opp_clock_time is None:
+                    opp_clock_time = read_clock(capture_top_clock(state="start2"))
                 if opp_clock_time is None:
                     error_filename = os.path.join("Error_files", "top_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
                     self.log += "ERROR: Could not find the opponent clock time from move change update. Saving image to {}. \n".format(error_filename)
@@ -251,7 +257,9 @@ class LichessClient:
             self_clock_time = read_clock(bot_clock_img)
             if self_clock_time is None:
                 # try the starting position
-                self_clock_time = read_clock(capture_bottom_clock(state="start"))
+                self_clock_time = read_clock(capture_bottom_clock(state="start1"))
+                if self_clock_time is None:
+                    self_clock_time = read_clock(capture_board(state="start2"))
                 if self_clock_time is None:
                     error_filename = os.path.join("Error_files", "bot_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
                     self.log += "ERROR: Could not find own clock time from move change update. Saving image to {}. \n".format(error_filename)
@@ -262,8 +270,8 @@ class LichessClient:
             else:
                 self.dynamic_info["self_clock_times"].append(self_clock_time)
                 self.dynamic_info["self_clock_times"] = self.dynamic_info["self_clock_times"][-FEN_NO_CAP:]
-            self.log += "Updated dynamic information from move-change screenshot prompt: \n"
-            self.log += "{} \n".format(self.dynamic_info)
+        self.log += "Updated dynamic information from move-change screenshot prompt: \n"
+        self.log += "{} \n".format(self.dynamic_info)
         
     def _update_dynamic_info_from_fullimage(self):
         """ Scrape image information from screenshot and update info dic. """
@@ -324,26 +332,20 @@ class LichessClient:
         if len(self.dynamic_info["fens"]) >= 2:
             prev_fen = self.dynamic_info["fens"][-2]
             now_fen = self.dynamic_info["fens"][-1]
-            last_move_uci = get_move_made(prev_fen, now_fen)
-            if last_move_uci is not None:
-                self.dynamic_info["last_moves"].append(last_move_uci)
+            res = patch_fens(prev_fen, now_fen)
+            if res is not None:
+                self.log += "Able to find linking move(s) between {} and {}: {} \n".format(prev_fen, now_fen, res)
+                last_moves, changed_fens = res
+                del self.dynamic_info["fens"][-2:]
+                self.dynamic_info["fens"].extend(changed_fens)
+                self.dynamic_info["fens"] = self.dynamic_info["fens"][-FEN_NO_CAP:]
+                self.dynamic_info["last_moves"].extend(last_moves)
                 self.dynamic_info["last_moves"] = self.dynamic_info["last_moves"][-(FEN_NO_CAP-1):]
-                last_moves = [last_move_uci]
             else:
-                self.log += "ERROR: Couldn't find linking move between fens {} and {}. Trying to patch. \n".format(prev_fen, now_fen)
-                res = patch_fens(prev_fen, now_fen)
-                if res is not None: # successful
-                    self.log += "Able to patch up fens: {} \n".format(res)
-                    last_moves, changed_fens = res
-                    del self.dynamic_info["fens"][-2:]
-                    self.dynamic_info["fens"].extend(changed_fens)
-                    self.dynamic_info["last_moves"].extend(last_moves)
-                    self.dynamic_info["last_moves"] = self.dynamic_info["last_moves"][-(FEN_NO_CAP-1):]
-                else:
-                    last_moves = []
-                    self.log += "ERROR:Couldn't patch the fens, defaulting to singular fen history and wiping last_move history. \n"
-                    self.dynamic_info["fens"] = self.dynamic_info["fens"][-1:]
-                    self.dynamic_info["last_moves"] = []
+                self.log += "ERROR: Couldn't find linking move between fens {} and {}. Defaulting to singular fen history and wiping last_move history. \n".format(prev_fen, now_fen)
+                last_moves = []
+                self.dynamic_info["fens"] = self.dynamic_info["fens"][-1:]
+                self.dynamic_info["last_moves"] = []
         
         # Now we have worked out the last move, we need to update castling rights
         if len(last_moves) > 0:
@@ -356,9 +358,11 @@ class LichessClient:
             # then opponent just moved
             if opp_time is None:
                 # try capture at start position
-                opp_time = read_clock(capture_top_clock(state="start"))
+                opp_time = read_clock(capture_top_clock(state="start1"))
                 if opp_time is None:
-                    error_filename = os.path.join("Error_files", "top_clock_start_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
+                    opp_time = read_clock(capture_top_clock(state="start2"))
+                if opp_time is None:
+                    error_filename = os.path.join("Error_files", "top_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
                     self.log += "ERROR: Couldn't read opponent time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
                     cv2.imwrite(error_filename, top_clock_img)
                     opp_time = self.dynamic_info["opp_clock_times"][-1]
@@ -368,9 +372,11 @@ class LichessClient:
             # then we have just moved
             if our_time is None:
                 # try capture at start position
-                our_time = read_clock(capture_bottom_clock(state="start"))
+                our_time = read_clock(capture_bottom_clock(state="start1"))
                 if our_time is None:
-                    error_filename = os.path.join("Error_files", "bot_clock_start_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
+                    our_time = read_clock(capture_bottom_clock(state="start2"))
+                if our_time is None:
+                    error_filename = os.path.join("Error_files", "bot_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
                     self.log += "ERROR: Couldn't read our own time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
                     cv2.imwrite(error_filename, bot_clock_img)
                     our_time = self.dynamic_info["self_clock_times"][-1]                
@@ -447,11 +453,11 @@ class LichessClient:
         
         # If we are black, then we can check the move made
         if bottom == "b":
-            move_made_uci = get_move_made(chess.STARTING_FEN, starting_fen)
-            if move_made_uci is not None:
-                self.dynamic_info["last_moves"]= [move_made_uci]
+            res = patch_fens(chess.STARTING_FEN, starting_fen, depth_lim=1)
+            if res is not None:                
+                self.dynamic_info["last_moves"]= res[0]
             else:
-                self.log += "ERROR: Couldn't find linking move between first fen and starting board fen. \n"
+                self.log += "ERROR: Couldn't find linking move between first fen and starting board fen {}. \n".format(starting_fen)
                 self.dynamic_info["last_moves"] = []
         else:
             self.dynamic_info["last_moves"] = []
@@ -490,6 +496,11 @@ class LichessClient:
                 # Then game has ended
                 self._write_log()
                 return
+            
+            # check if manual mode on
+            if is_capslock_on():
+                continue
+            
             # start timing
             start = time.time()
             
@@ -507,7 +518,7 @@ class LichessClient:
                     
                     # wait a certain amount of time that depends on the time control
                     initial_time = self.game_info["initial_time"]
-                    base_time = 0.7*QUICKNESS*initial_time/(85 + initial_time*0.25)
+                    base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
                     wait_time = base_time*(0.8+0.4*random.random())
                     self.log += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                     time.sleep(wait_time)
@@ -530,6 +541,11 @@ class LichessClient:
             input_dic["side"] = self.game_info["playing_side"]
             input_dic["self_initial_time"] = self.game_info["initial_time"]
             input_dic["opp_initial_time"] = self.game_info["initial_time"] # TODO
+            
+            # check if manual mode on
+            if is_capslock_on():
+                continue
+            
             self.engine.update_info(input_dic)
             
             # Once we send the information to the engine, first check if 
@@ -542,7 +558,10 @@ class LichessClient:
                 else:
                     # was not able to resign, keep playing I guess
                     pass
-            
+                
+            # check if manual mode on
+            if is_capslock_on():
+                continue
             output_dic = self.engine.make_move()
             
             self.log += "Received output_dic from engine: {} \n".format(output_dic)
@@ -581,7 +600,9 @@ class LichessClient:
             # First check if game has ended
             if self._check_game_end():
                 return False
-            
+            # Check if manual mode is on
+            if is_capslock_on():
+                continue
             # Next try full body scan
             self._update_dynamic_info_from_fullimage()
             
@@ -592,14 +613,16 @@ class LichessClient:
             # In the meantime check for updates via screenshot method. The amount of time we
             # shall spend doing this will be enough so we can scrape again after
             tries = 0
-            tries_cap = 20 # some positive number to start with
+            tries_cap = 40 # some positive number to start with
             while tries < tries_cap:
                 # start_time = time.time()
                 if self.game_info["playing_side"] == chess.WHITE:
                     bottom = "w"
                 else:
                     bottom = "b"
-                
+                # Check if manual mode is on
+                if is_capslock_on():
+                    break
                 move_change = scrape_move_change(bottom)
                 # if there has been a move change detected,
                 # we need to check whether it truly corresponds to a move we can play
