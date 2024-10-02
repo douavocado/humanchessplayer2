@@ -13,11 +13,11 @@ import time
 import numpy as np
 import chess
 
-def remove_background_colours(img, thresh = 1.15):
+def remove_background_colours(img, thresh = 1.04):
 
-    res = img*np.expand_dims((np.abs(img[:,:,0]/img[:,:,1]-1) < thresh-1),-1)
-    res = res*np.expand_dims((np.abs(img[:,:,0]/img[:,:,2]-1) < thresh-1),-1)
-    res = res*np.expand_dims((np.abs(img[:,:,1]/img[:,:,2]-1) < thresh-1),-1)
+    res = img*np.expand_dims((np.abs(img[:,:,0]/(img[:,:,1]+10**(-10))-1) < thresh-1),-1)
+    res = res*np.expand_dims((np.abs(img[:,:,0]/(img[:,:,2]+10**(-10))-1) < thresh-1),-1)
+    res = res*np.expand_dims((np.abs(img[:,:,1]/(img[:,:,2]+10**(-10))-1) < thresh-1),-1)
     # res = res*np.expand_dims((img[:,:,1] < thresh*img[:,:,0]),-1)
     # res = res*np.expand_dims((img[:,:,2] < thresh*img[:,:,0]),-1)
     # res = res*np.expand_dims((img[:,:,2] < thresh*img[:,:,1]),-1)
@@ -29,36 +29,42 @@ def remove_background_colours(img, thresh = 1.15):
 
 SCREEN_CAPTURE = screenshot.Screenshot()
 
-BOTTOM_CLOCK_X = 1406
-BOTTOM_CLOCK_Y = 762
-BOTTOM_CLOCK_Y_START = 790
-BOTTOM_CLOCK_Y_END = 765
-TOP_CLOCK_X = 1406
-TOP_CLOCK_Y = 443
-TOP_CLOCK_Y_START = 413
-TOP_CLOCK_Y_END = 440
+BOTTOM_CLOCK_X = 1420 # 1397
+BOTTOM_CLOCK_Y = 742 #720
+BOTTOM_CLOCK_Y_START = 756 #734
+BOTTOM_CLOCK_Y_START_2 =  770 #748
+BOTTOM_CLOCK_Y_END = 811 # 789 # resigned or timeout
+BOTTOM_CLOCK_Y_END_2 = 747 # 725 # aborted
+BOTTOM_CLOCK_Y_END_3 = 776 # 754
+TOP_CLOCK_X = 1420
+TOP_CLOCK_Y = 424 # 401
+TOP_CLOCK_Y_START = 396 # 373
+TOP_CLOCK_Y_START_2 = 410 # 387
+TOP_CLOCK_Y_END = 355 # 332 # resigned or timeout
+TOP_CLOCK_Y_END_2 = 420 # 397 # aborted
 CLOCK_WIDTH = 147
 CLOCK_HEIGHT = 44
 W_NOTATION_X = 1458
 W_NOTATION_Y = 591
 W_NOTATION_WIDTH, W_NOTATION_HEIGHT = 166, 104
-START_X = 560
-START_Y = 213
-STEP = 103
+START_X = 542 # 550
+START_Y = 179 # 179
+STEP = 106 # 101
+PIECE_STEP = 106 # 100
 
-w_rook = remove_background_colours(cv2.imread('w_rook.png',)).astype(np.uint8)
-w_knight= remove_background_colours(cv2.imread('w_knight.png', )).astype(np.uint8)
-w_bishop = remove_background_colours(cv2.imread('w_bishop.png')).astype(np.uint8)
-w_king= remove_background_colours(cv2.imread('w_king.png',)).astype(np.uint8)
-w_queen = remove_background_colours(cv2.imread('w_queen.png', )).astype(np.uint8)
-w_pawn= remove_background_colours(cv2.imread('w_pawn.png', )).astype(np.uint8)
+w_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_bishop = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_bishop.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_king= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_king.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_queen = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_queen.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_pawn= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_pawn.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 
-b_rook = remove_background_colours(cv2.imread('b_rook.png',)).astype(np.uint8)
-b_knight= remove_background_colours(cv2.imread('b_knight.png',)).astype(np.uint8)
-b_bishop = remove_background_colours(cv2.imread('b_bishop.png',)).astype(np.uint8)
-b_king= remove_background_colours(cv2.imread('b_king.png')).astype(np.uint8)
-b_queen = remove_background_colours(cv2.imread('b_queen.png',)).astype(np.uint8)
-b_pawn= remove_background_colours(cv2.imread('b_pawn.png')).astype(np.uint8)
+b_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_bishop = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_bishop.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_king= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_king.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_queen = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_queen.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_pawn= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_pawn.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 
 ALL_PIECES = {'R': w_rook, 'N': w_knight, 'B': w_bishop, 'K': w_king, 'Q': w_queen, 'P': w_pawn,
               'r': b_rook, 'n': b_knight, 'b': b_bishop, 'k': b_king, 'q': b_queen, 'p': b_pawn,}
@@ -67,16 +73,16 @@ PIECE_TEMPLATES = np.stack([w_rook, w_knight, w_bishop, w_king, w_queen, w_pawn,
 INDEX_MAPPER = {0: "R", 1: "N", 2: "B", 3: "K", 4: "Q", 5: "P",
               6: "r", 7: "n", 8: "b", 9: "k", 10: "q", 11: "p",}
 
-one = remove_background_colours(cv2.imread('1.png'), thresh=1.6).astype(np.uint8)
-two = remove_background_colours(cv2.imread('2.png'),thresh=1.6).astype(np.uint8)
-three = remove_background_colours(cv2.imread('3.png'),thresh=1.6).astype(np.uint8)
-four = remove_background_colours(cv2.imread('4.png'),thresh=1.6).astype(np.uint8)
-five = remove_background_colours(cv2.imread('5.png'),thresh=1.6).astype(np.uint8)
-six = remove_background_colours(cv2.imread('6.png'),thresh=1.6).astype(np.uint8)
-seven = remove_background_colours(cv2.imread('7.png'),thresh=1.6).astype(np.uint8)
-eight = remove_background_colours(cv2.imread('8.png'),thresh=1.6).astype(np.uint8)
-nine = remove_background_colours(cv2.imread('9.png'),thresh=1.6).astype(np.uint8)
-zero = remove_background_colours(cv2.imread('0.png'),thresh=1.6).astype(np.uint8)
+one = remove_background_colours(cv2.imread('chessimage/1.png'), thresh=1.6).astype(np.uint8)
+two = remove_background_colours(cv2.imread('chessimage/2.png'),thresh=1.6).astype(np.uint8)
+three = remove_background_colours(cv2.imread('chessimage/3.png'),thresh=1.6).astype(np.uint8)
+four = remove_background_colours(cv2.imread('chessimage/4.png'),thresh=1.6).astype(np.uint8)
+five = remove_background_colours(cv2.imread('chessimage/5.png'),thresh=1.6).astype(np.uint8)
+six = remove_background_colours(cv2.imread('chessimage/6.png'),thresh=1.6).astype(np.uint8)
+seven = remove_background_colours(cv2.imread('chessimage/7.png'),thresh=1.6).astype(np.uint8)
+eight = remove_background_colours(cv2.imread('chessimage/8.png'),thresh=1.6).astype(np.uint8)
+nine = remove_background_colours(cv2.imread('chessimage/9.png'),thresh=1.6).astype(np.uint8)
+zero = remove_background_colours(cv2.imread('chessimage/0.png'),thresh=1.6).astype(np.uint8)
 
 ALL_NUMBERS = {1: one, 2: two, 3: three, 4: four, 5: five, 6: six,
               7: seven, 8: eight, 9: nine, 0: zero}
@@ -99,7 +105,7 @@ def multitemplate_multimatch(imgs, templates):
     scores = nums/denoms
 
     # for ever square give its argmax prob over threshold
-    threshold = 0.7
+    threshold = 0.5
     arg_maxes = scores.argmax(axis=0) # shape N
     maxes = scores.max(axis=0)
     valid_squares = np.where(maxes > threshold)[0]
@@ -109,8 +115,6 @@ def multitemplate_multimatch(imgs, templates):
 def multitemplate_match_f(img, templates):
     # assumes img is 2 dimensional WxH and templates is 3 dimensional i.e. NxWxH where N is the number of templates
     # assumes that img and template are the same shape
-    no_templates = templates.shape[0]
-    no_imgs = img.shape[0]
     T = templates.astype(float)
     I = img.astype(float)
     w, h = img.shape
@@ -177,7 +181,7 @@ def detect_last_move_from_img(board_img):
         pixel_x = int(STEP*column_i + epsilon)
         pixel_y = int(STEP*row_i + epsilon)
         rgb = board_img[pixel_y, pixel_x, :]
-        if (rgb == [143,155,59]).all() or (rgb == [205, 211, 145]).all() or (rgb == [95, 92, 60]).all():
+        if (rgb == [143,155,59]).all() or (rgb == [205, 211, 145]).all() or (rgb == [95, 92, 60]).all() or (rgb == [147, 140, 133]).all():
             detected.append(square)
     return detected
 
@@ -193,10 +197,16 @@ def capture_bottom_clock(state="play"):
     # TODO: configurable
     if state == "play":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start":
+    elif state == "start1":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end":
+    elif state == "start2":
+        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "end1":
         im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "end2":
+        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "end3":
+        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_3, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     img= im[:,:,:3]
     return img
 
@@ -204,10 +214,14 @@ def capture_top_clock(state="play"):
     # TODO: configurable
     if state == "play":
         im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start":
+    elif state == "start1":
         im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end":
+    elif state == "start2":
+        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "end1":
         im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    elif state == "end2":
+        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     img= im[:,:,:3]
     return img
 
@@ -226,6 +240,42 @@ def is_white_turn_from_notation(white_notation_img):
     has_red = (colours[:,0] > 1.1*colours[:,2]).any()
     return not has_red
 
+def check_turn_from_last_moved(fen, board_img, bottom):
+    detected_moved = detect_last_move_from_img(board_img)
+    if len(detected_moved) == 0:
+        return chess.Board(fen).turn == chess.WHITE # didn't detect any new moves. Can only assume it's white turn from opening position
+    
+    board = chess.Board(fen)
+    test_turn = board.turn
+    colour_count = 0
+    for square in detected_moved:
+        if bottom == "w":
+            colour = board.color_at(chess.square_mirror(square))
+        else:
+            colour = board.color_at(chess.square_mirror(63-square))
+        if colour is not None:
+            colour_count += 2*((colour == test_turn)-0.5)
+    if colour_count == 0:
+        if len(detected_moved) > 0:
+            # then it must have been a castling move
+            if bottom == "w":
+                real_square = chess.square_mirror(detected_moved[0])
+            else:
+                real_square = chess.square_mirror(63-detected_moved[0])
+            if chess.square_rank(real_square) == 0: # first rank, must be white castles, so black move
+                return test_turn == chess.BLACK
+            elif chess.square_rank(real_square) == 7: # 8th rank, black castles, white to move
+                return test_turn == chess.WHITE
+            else:
+                # there was an error, expected to be castle move but wasn't
+                return None
+        # no detected moves, there was error, return None
+        return None
+    elif colour_count < 0:
+        return True # then current turn is correct
+    else:
+        return False # current turn is incorrect
+
 def check_fen_last_move_bottom(fen, board_img, proposed_bottom):
     detected_moved = detect_last_move_from_img(board_img)
     if len(detected_moved) == 0:
@@ -238,11 +288,9 @@ def check_fen_last_move_bottom(fen, board_img, proposed_bottom):
         if proposed_bottom == "w":
             colour = test_board.color_at(chess.square_mirror(square))
         else:
-            colour = test.board.color_at(chess.square_mirror(63-square))
+            colour = test_board.color_at(chess.square_mirror(63-square))
         if colour is not None:
             colour_count += 2*((colour == test_turn)-0.5)
-    print(colour_count)
-    print(detected_moved)
     if colour_count == 0:
         # there was error, return False
         return False
@@ -252,24 +300,27 @@ def check_fen_last_move_bottom(fen, board_img, proposed_bottom):
     else:
         return False
 
+def find_initial_side():
+    # check bottom left square for a white rook
+    a1_img = SCREEN_CAPTURE.capture((int(START_X),int(START_Y + 7*STEP), PIECE_STEP, PIECE_STEP))
+    a1_img = np.expand_dims(remove_background_colours(a1_img[:,:,:3]),0).astype(np.uint8)
+    template = w_rook
+    return (template_match_f(a1_img, template) > 0.7).item()
+
 def get_fen_from_image(board_image, bottom:str='w', turn:bool=None):
+    # Note this automatically sets castling rights to None, i.e. no castling
+    # castling rights needs to be dealt with separately
     # if image is not black and white, process first:
     if board_image.ndim == 3:
-        start = time.time()
         image = remove_background_colours(board_image).astype(np.uint8)
-        end = time.time()
-        print("removed background in {}".format(end-start))
     else:
         image = board_image.copy()
         
     board_width, board_height = image.shape[:2]
-    tile_width = board_width/8
-    tile_height = board_height/8
     
-    images = [image[x*103:x*103+100, y*103:y*103+100] for x in range(8) for y in range(8)]
+    images = [image[x*STEP:x*STEP+PIECE_STEP, y*STEP:y*STEP+PIECE_STEP] for x in range(8) for y in range(8)]
     images = np.stack(images, axis=0)
 
-    start= time.time()
     valid_squares, argmaxes = multitemplate_multimatch(images, PIECE_TEMPLATES)
     
     board = chess.Board(fen=None)
@@ -281,8 +332,6 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None):
             output_square = chess.square_mirror(63-square)
         board.set_piece_at(output_square, chess.Piece.from_symbol(key))
     
-    end = time.time()
-    print("function evaluated in {}".format(end-start))
     if turn is not None:
         board.turn = turn
     return board.fen()
