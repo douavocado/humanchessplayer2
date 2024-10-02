@@ -100,8 +100,8 @@ class Engine:
         if self.analytics_updated == False:
             self.log += "WARNING: _decide_resign() function has been called with outdated analytics. Please call .calculate_analytics() first to get accurate output. \n"
         
-        own_time = self.input_info["self_clock_times"][-1]
-        opp_time = self.input_info["opp_clock_times"][-1]
+        own_time = max(self.input_info["self_clock_times"][-1],1)
+        opp_time = max(self.input_info["opp_clock_times"][-1],1)
         starting_time = self.input_info["self_initial_time"]
         
         # does not resign in the first 15 moves
@@ -134,7 +134,7 @@ class Engine:
         """
         
         # TODO: for now just return true with high probability if in time trouble
-        own_time = self.input_info["self_clock_times"][-1]
+        own_time = max(self.input_info["self_clock_times"][-1],1)
         if own_time < 10:
             if np.random.random() < (10-own_time)/25:
                 return False
@@ -170,8 +170,8 @@ class Engine:
         move_eval_dic = {entry["pv"][0].uci(): entry["score"].pov(board.turn).score(mate_score=2500) for entry in sampled_moves}
         # if we are winning by a big margin such that we have mate in less than 10 moves, and we have sufficient time, than with large probability we play the
         # zeroing moves. This helps us out in closing games
-        own_time = self.input_info["self_clock_times"][-1]
-        opp_time = self.input_info["opp_clock_times"][-1]
+        own_time = max(self.input_info["self_clock_times"][-1],1)
+        opp_time = max(self.input_info["opp_clock_times"][-1],1)
         top_engine_move = max(move_eval_dic.keys(), key= lambda x: move_eval_dic[x])
         if opp_time > own_time and max(move_eval_dic.values()) >= 2490 and self.mood == "hurry": #mate in less than 10 and we are under time pressure
             if np.random.random() < 0.8:                
@@ -209,7 +209,7 @@ class Engine:
         
         if log:
             self.log += "Evaluated the moves square distance to move: {} \n".format(move_distance_dic)
-        own_time = self.input_info["self_clock_times"][-1]
+        own_time = max(self.input_info["self_clock_times"][-1],1)
         move_appealing_dic = {move_uci : 10 + move_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] for move_uci in move_eval_dic.keys()}
         if log:
             self.log += "Combining both the dictionary preferences, we have their move preferences: {} \n".format(move_appealing_dic)
@@ -268,7 +268,7 @@ class Engine:
         lower_threshold_prob = sum(move_dic.values())/len(move_dic)
         
         # If king danger high, then moves that defend our king are more attractive
-        protect_king_sf = 2.3
+        protect_king_sf = 2.8
         # Capturing enpris pieces are more appealing, the more the piece is enpris the more appealing
         capture_en_pris_sf = 1.5
         # Squares that pinned pieces attack that break the pin are more desirable
@@ -616,6 +616,8 @@ class Engine:
             
             if eff_mob > 5 and game_phase == "midgame":
                 no_moves = max(self.playing_level-1,1)
+            elif game_phase == "endgame":
+                no_moves = no_moves = max(8, self.playing_level+3)
             else:
                 no_moves = max(self.playing_level-2, 1)
         else:
@@ -635,7 +637,7 @@ class Engine:
         elif self.mood == "cautious":
             no_moves = no_moves + 1
         elif self.mood == "tilted":
-            no_moves = max(no_moves - 1, 1)
+            no_moves = max(no_moves - 2, 1)
         
         self.log += "Calculated number of root moves in current position: {} \n".format(no_moves)
         return no_moves
@@ -866,10 +868,10 @@ class Engine:
         start = time.time()
         ponder_results = self._ponder_moves(board, [move_uci], no_root_moves, prev_board=prev_board, log=False)
         end = time.time()
-        self.log += "Ponder position fen {} with move {} at depth {} took {} seconds to calculate. \n".format(board.fen(), board.san(chess.Move.from_uci(move_uci)), depth, end-start)
+        # self.log += "Ponder position fen {} with move {} at depth {} took {} seconds to calculate. \n".format(board.fen(), board.san(chess.Move.from_uci(move_uci)), depth, end-start)
         if limit is not None:
             re_evaluations_left, time_left, depth_considered, total_depth, comparison_eval = limit
-            self.log += "We have {} time left to calculate {} variations. \n".format(time_left - (end-start), re_evaluations_left)
+            # self.log += "We have {} time left to calculate {} variations. \n".format(time_left - (end-start), re_evaluations_left)
             if depth > 1:
                 # then we have time constraint
                 # we shall adaptively
@@ -886,9 +888,9 @@ class Engine:
                 new_board.push_uci(move_uci)
                 consider_move = ponder_results[move_uci][0]
                 if consider_move is not None:
-                    # we are running out of time, OR if the line doesn't seem that promising compared to comparison eval
+                    # we are running out of time, OR if the line does/doesn't seem that promising compared to comparison eval
                     if ponder_results[move_uci][1] > comparison_eval + 100:
-                        # proceed as usual
+                        # proceed as usual, because line is quite promising
                         return self._recursive_ponder(new_board, consider_move, no_root_moves, depth-1, prev_board=board.copy(), limit=[new_re_evaluations_left, new_time_left, depth_considered + 1, total_depth, comparison_eval])
                     elif forecast_evaluations_left < new_re_evaluations_left - 1:
                         # then proceed onto next jump 1 depth less
@@ -1257,8 +1259,8 @@ class Engine:
         # with standard deviation initial_time/30
         self_initial_time = self.input_info["self_initial_time"]
         opp_initial_time = self.input_info["opp_initial_time"]
-        own_time = self.input_info["self_clock_times"][-1]
-        opp_time = self.input_info["opp_clock_times"][-1]
+        own_time = max(self.input_info["self_clock_times"][-1],1)
+        opp_time = max(self.input_info["opp_clock_times"][-1],1)
         self_low_time_threshold = self_initial_time*0.1 + 15*0.7 + self_initial_time*np.random.randn()/30
         opp_low_time_threshold = opp_initial_time*0.1 + 15*0.7 + opp_initial_time*np.random.randn()/30
         
@@ -1595,7 +1597,7 @@ class Engine:
         # If we are not in a hurry, look for takeback premoves
         # Sometimes if the time control is bullet, and we are in the opening, we
         # may also premove with some probability
-        own_time = self.input_info["self_clock_times"][-1]        
+        own_time = max(self.input_info["self_clock_times"][-1],1)
         after_board = self.current_board.copy()
         after_board.push_uci(return_dic["move_made"])
         if after_board.outcome() is None:

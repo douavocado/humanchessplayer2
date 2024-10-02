@@ -17,7 +17,6 @@ import os
 import pyautogui
 import random
 import chess
-import configparser
 import ctypes
 import subprocess
 import time
@@ -25,8 +24,10 @@ import datetime
 import cv2
 import numpy as np
 
+from humancursor import SystemCursor
+
 from engine import Engine
-from common.constants import QUICKNESS
+from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY
 from common.utils import patch_fens
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
@@ -45,18 +46,50 @@ def is_capslock_on():
     elif subprocess.check_output('xset q | grep LED', shell=True)[65] == 49 :
         return True
 
-config = configparser.ConfigParser()
-config.read('config.ini')
-
-# STEP = float((config['DEFAULT']['step']))
-# START_X = int(config['DEFAULT']['start_x']) + STEP/2
-# START_Y = int(config['DEFAULT']['start_y']) + STEP/2
-
-DIFFICULTY = int(config["DEFAULT"]["difficulty"])
-
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
 SCRAPE_EVERY = 0.5 # the time gap between scraping
 MOVE_DELAY = 0.25 # the amount of time we take per move minus the time the engine calc time from other aspects (time scrape, position updates, moving pieces etc.)
+DRAG_MOVE_DELAY = 0.4 # the amount of time to allow for move to snap onto the board before taking a screenshot
+
+CURSOR = SystemCursor() # mouse control object which simulates human-like movement with mouse
+
+def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
+    """ Make human drag and drop move with human mouse speed and randomness in mind.
+        
+        Returns True if move was made successfully, else if mouse slip was made return False.
+    """
+    # 1 in 100 moves, we simulate a potential mouse slip
+    successful = True
+    if np.random.random() < 0.01:
+        tolerance = tolerance * 2
+        offset_x = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
+        offset_y = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
+        if np.abs(offset_x) > STEP/2 or np.abs(offset_y) > STEP/2:
+            successful = False
+    else:
+        offset_x = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
+        offset_y = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
+    
+    new_from_x = from_x + tolerance * (np.random.random() - 0.5)
+    new_from_y = from_y + tolerance * (np.random.random() - 0.5)
+    new_to_x = to_x + offset_x
+    new_to_y = to_y + offset_y
+    
+    current_x, current_y = pyautogui.position()
+    from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
+    duration_from = MOUSE_QUICKNESS/5000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
+    to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
+    duration_to = MOUSE_QUICKNESS/5000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
+    
+    CURSOR.drag_and_drop([new_from_x, new_from_y], [new_to_x, new_to_y], duration=[duration_from, duration_to])
+    
+    return successful
+
+def click_mouse(x, y, tolerance=0, clicks=1):
+    new_x = x + tolerance * (np.random.random() - 0.5)
+    new_y = y + tolerance * (np.random.random() - 0.5)
+    
+    CURSOR.click_on([new_x, new_y], clicks=clicks)
 
 
 def scrape_move_change(side):
@@ -391,6 +424,8 @@ class LichessClient:
     
     def set_game(self, starting_time):
         ''' Once client has found game, sets up game parameters. '''
+        # resetting hover square
+        self.hover_square = None
         # getting game information, including the side the player is playing and the initial time
         board_img = capture_board()
         
@@ -613,7 +648,7 @@ class LichessClient:
             # In the meantime check for updates via screenshot method. The amount of time we
             # shall spend doing this will be enough so we can scrape again after
             tries = 0
-            tries_cap = 40 # some positive number to start with
+            tries_cap = 20 # some positive number to start with
             while tries < tries_cap:
                 # start_time = time.time()
                 if self.game_info["playing_side"] == chess.WHITE:
@@ -669,6 +704,75 @@ class LichessClient:
                 # one_loop_time = end_time-start_time
                 # tries_cap = SCRAPE_EVERY // one_loop_time
                 tries += 1
+            
+            # hover mouse
+            if self.hover_square is None:
+                if np.random.random() < 0.9:
+                    self.hover()
+                else:
+                    self.wander
+            elif np.random.random() < 0.06:
+                self.hover()
+            elif np.random.random() < 0.04:
+                self.wander()
+                
+    def wander(self, max_duration=0.1):
+        """ Move the mouse randomly to a position on the board close to our side. """
+        # Check if there is human interference
+        if is_capslock_on():
+            self.log += "Tried to hover, but failed as caps lock is on. \n "
+            return False
+        
+        chosen_x = np.clip(START_X + 4*STEP + 2*STEP*np.random.randn(), START_X, START_X + 8*STEP)
+        chosen_y  = np.clip(START_Y + 4*STEP + 2*STEP*np.random.randn(), START_Y, START_Y + 8*STEP)
+        
+        current_x, current_y = pyautogui.position()
+        distance =np.sqrt( (chosen_x - current_x)**2 + (chosen_y - current_y)**2 )
+        duration = min(MOUSE_QUICKNESS/5000 * (0.8 + 0.4*np.random.random()) * np.sqrt(distance), max_duration)
+        CURSOR.move_to([chosen_x, chosen_y], duration=duration)
+    
+    def hover(self, duration=0.1, noise=STEP*2):
+        """ In between moves, input random mouse movements which make us hover over our current pieces,
+            particularly if they are moves we are considering from ponder_dic.        
+        """
+        # Check if there is human interference
+        if is_capslock_on():
+            self.log += "Tried to hover, but failed as caps lock is on. \n "
+            return False
+        
+        if self.hover_square is None:
+            # set new hover square
+            last_known_board = chess.Board(self.dynamic_info["fens"][-1])
+            relevant_move_objs = [chess.Move.from_uci(x) for x in self.ponder_dic.values() if last_known_board.color_at(chess.Move.from_uci(x).from_square) == self.game_info["playing_side"]]
+            if len(relevant_move_objs) == 0:
+                # then choose random own piece to hover
+                own_piece_squares = list(chess.SquareSet(last_known_board.occupied_co[self.game_info["playing_side"]]))
+                random_square = random.choice(own_piece_squares)
+            else:
+                # choose last ponder move relevant
+                random_square = relevant_move_objs[-1].from_square
+            self.hover_square = random_square
+        else:
+            random_square = self.hover_square
+        
+        if self.game_info["playing_side"] == chess.WHITE:
+            # a1 square is bottom left
+            rank_fr = chess.square_rank(random_square)
+            file_fr = chess.square_file(random_square)
+            to_x = START_X + file_fr* STEP + STEP/2 + noise * (np.random.random()-0.5)
+            to_y = START_Y + (7-rank_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5)
+            
+        else:
+            # a1 square is top right
+            rank_fr = chess.square_rank(random_square)
+            file_fr = chess.square_file(random_square)
+            to_x = START_X + (7-file_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5)
+            to_y = START_Y + rank_fr*STEP + STEP/2 + noise * (np.random.random()-0.5)
+        
+        CURSOR.move_to([to_x, to_y], duration=duration)
+        
+        
+        return True
     
     def make_move(self, move_uci:str, premove:str=None):
         """ Executes mouse clicks for the moves. 
@@ -681,22 +785,35 @@ class LichessClient:
             return False
         
         # First, reset previous clicks by right-clicking the centre of the board
-        centre_X, centre_Y = START_X + 3.5*STEP, START_Y + 3.5*STEP
-        pyautogui.click(centre_X, centre_Y, button='right')
+        # centre_X, centre_Y = START_X + 3.5*STEP, START_Y + 3.5*STEP
+        # pyautogui.click(centre_X, centre_Y, button='right')
         
         # Now make the move
         from_x, from_y, to_x, to_y = self.find_clicks(move_uci)
-        pyautogui.click(from_x, from_y, button='left')
-        pyautogui.click(to_x, to_y, button='left')
-        
-        self.log += "Made clicks for the move {} \n".format(move_uci)
+        # pyautogui.click(from_x, from_y, button='left')
+        # pyautogui.click(to_x, to_y, button='left')
+        # compute randomised offset from centre of the square
+        successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
+        if successful:
+            self.log += "Made clicks for the move {} \n".format(move_uci)
+        else:
+            self.log += "Tried to make clicks for move {}, but made mouse slip \n".format(move_uci)
+            return False
         # If there is a premove
         if premove is not None:
             from_x, from_y, to_x, to_y = self.find_clicks(premove)
-            pyautogui.click(from_x, from_y, button='left')
-            pyautogui.click(to_x, to_y, button='left')
-            self.log += "Made clicks for the premove {} \n".format(premove)
+            
+            successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.7*STEP)
+            if successful:
+                self.log += "Made clicks for the premove {} \n".format(premove)
+            else:
+                self.log += "Tried to make clicks for premove {}, but made mouse slip. \n".format(premove)
         
+        # reset hover square
+        self.hover_square = None
+        
+        # wait a bit for board to update and snap move into place
+        time.sleep(DRAG_MOVE_DELAY)
         return True
     
     def resign(self):
@@ -705,9 +822,11 @@ class LichessClient:
             self.log += "Tried resign the game but failed as caps lock is on. \n "
             return False
         resign_button_x, resign_button_y =  START_X + 10.5*STEP, START_Y + 4.8*STEP
-        pyautogui.click(resign_button_x, resign_button_y, button='left')
-        time.sleep(0.2)
-        pyautogui.click(resign_button_x, resign_button_y, button='left')
+        # pyautogui.click(resign_button_x, resign_button_y, button='left')
+        # time.sleep(0.2)
+        # pyautogui.click(resign_button_x, resign_button_y, button='left')
+        
+        click_mouse(resign_button_x, resign_button_y, tolerance = 10, clicks=2)
         
         return True
     
@@ -717,12 +836,15 @@ class LichessClient:
             self.log += "Tried to start new game with time control {} but failed as caps lock is on. \n ".format(time_control)
             return False
         
-        play_button_x, play_button_y = START_X - 2*STEP, START_Y - 0.4*STEP
-        pyautogui.click(play_button_x, play_button_y, button='left')
-        time.sleep(1)
+        play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
+        # pyautogui.click(play_button_x, play_button_y, button='left')
+        click_mouse(play_button_x, play_button_y, tolerance = 10, clicks=1)
+        time.sleep(1.5)
         if time_control == "1+0":
-            to_x, to_y = START_X + 1.5*STEP, START_Y + 0.5*STEP
-            pyautogui.click(to_x, to_y, button='left')
+            to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
+            
+            click_mouse(to_x, to_y, tolerance = 20, clicks=1)
+            # pyautogui.click(to_x, to_y, button='left')
         
         return True
 

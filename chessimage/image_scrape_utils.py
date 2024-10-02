@@ -29,41 +29,42 @@ def remove_background_colours(img, thresh = 1.04):
 
 SCREEN_CAPTURE = screenshot.Screenshot()
 
-BOTTOM_CLOCK_X = 1406
-BOTTOM_CLOCK_Y = 762
-BOTTOM_CLOCK_Y_START = 790
-BOTTOM_CLOCK_Y_START_2 = 775
-BOTTOM_CLOCK_Y_END = 831
-BOTTOM_CLOCK_Y_END_2 = 767
-BOTTOM_CLOCK_Y_END_3 = 795
-TOP_CLOCK_X = 1406
-TOP_CLOCK_Y = 443
-TOP_CLOCK_Y_START = 413
-TOP_CLOCK_Y_START_2 = 426
-TOP_CLOCK_Y_END = 372
-TOP_CLOCK_Y_END_2 = 440
+BOTTOM_CLOCK_X = 1420 # 1397
+BOTTOM_CLOCK_Y = 742 #720
+BOTTOM_CLOCK_Y_START = 756 #734
+BOTTOM_CLOCK_Y_START_2 =  770 #748
+BOTTOM_CLOCK_Y_END = 811 # 789 # resigned or timeout
+BOTTOM_CLOCK_Y_END_2 = 747 # 725 # aborted
+BOTTOM_CLOCK_Y_END_3 = 776 # 754
+TOP_CLOCK_X = 1420
+TOP_CLOCK_Y = 424 # 401
+TOP_CLOCK_Y_START = 396 # 373
+TOP_CLOCK_Y_START_2 = 410 # 387
+TOP_CLOCK_Y_END = 355 # 332 # resigned or timeout
+TOP_CLOCK_Y_END_2 = 420 # 397 # aborted
 CLOCK_WIDTH = 147
 CLOCK_HEIGHT = 44
 W_NOTATION_X = 1458
 W_NOTATION_Y = 591
 W_NOTATION_WIDTH, W_NOTATION_HEIGHT = 166, 104
-START_X = 554
-START_Y = 213
-STEP = 103
+START_X = 542 # 550
+START_Y = 179 # 179
+STEP = 106 # 101
+PIECE_STEP = 106 # 100
 
-w_rook = remove_background_colours(cv2.imread('chessimage/w_rook.png',)).astype(np.uint8)
-w_knight= remove_background_colours(cv2.imread('chessimage/w_knight.png', )).astype(np.uint8)
-w_bishop = remove_background_colours(cv2.imread('chessimage/w_bishop.png')).astype(np.uint8)
-w_king= remove_background_colours(cv2.imread('chessimage/w_king.png',)).astype(np.uint8)
-w_queen = remove_background_colours(cv2.imread('chessimage/w_queen.png', )).astype(np.uint8)
-w_pawn= remove_background_colours(cv2.imread('chessimage/w_pawn.png', )).astype(np.uint8)
+w_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_bishop = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_bishop.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_king= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_king.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_queen = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_queen.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+w_pawn= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_pawn.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 
-b_rook = remove_background_colours(cv2.imread('chessimage/b_rook.png',)).astype(np.uint8)
-b_knight= remove_background_colours(cv2.imread('chessimage/b_knight.png',)).astype(np.uint8)
-b_bishop = remove_background_colours(cv2.imread('chessimage/b_bishop.png',)).astype(np.uint8)
-b_king= remove_background_colours(cv2.imread('chessimage/b_king.png')).astype(np.uint8)
-b_queen = remove_background_colours(cv2.imread('chessimage/b_queen.png',)).astype(np.uint8)
-b_pawn= remove_background_colours(cv2.imread('chessimage/b_pawn.png')).astype(np.uint8)
+b_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_bishop = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_bishop.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_king= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_king.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_queen = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_queen.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+b_pawn= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_pawn.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 
 ALL_PIECES = {'R': w_rook, 'N': w_knight, 'B': w_bishop, 'K': w_king, 'Q': w_queen, 'P': w_pawn,
               'r': b_rook, 'n': b_knight, 'b': b_bishop, 'k': b_king, 'q': b_queen, 'p': b_pawn,}
@@ -104,7 +105,7 @@ def multitemplate_multimatch(imgs, templates):
     scores = nums/denoms
 
     # for ever square give its argmax prob over threshold
-    threshold = 0.7
+    threshold = 0.5
     arg_maxes = scores.argmax(axis=0) # shape N
     maxes = scores.max(axis=0)
     valid_squares = np.where(maxes > threshold)[0]
@@ -301,7 +302,7 @@ def check_fen_last_move_bottom(fen, board_img, proposed_bottom):
 
 def find_initial_side():
     # check bottom left square for a white rook
-    a1_img = SCREEN_CAPTURE.capture((int(START_X),int(START_Y + 7*STEP), 100, 100))
+    a1_img = SCREEN_CAPTURE.capture((int(START_X),int(START_Y + 7*STEP), PIECE_STEP, PIECE_STEP))
     a1_img = np.expand_dims(remove_background_colours(a1_img[:,:,:3]),0).astype(np.uint8)
     template = w_rook
     return (template_match_f(a1_img, template) > 0.7).item()
@@ -317,7 +318,7 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None):
         
     board_width, board_height = image.shape[:2]
     
-    images = [image[x*103:x*103+100, y*103:y*103+100] for x in range(8) for y in range(8)]
+    images = [image[x*STEP:x*STEP+PIECE_STEP, y*STEP:y*STEP+PIECE_STEP] for x in range(8) for y in range(8)]
     images = np.stack(images, axis=0)
 
     valid_squares, argmaxes = multitemplate_multimatch(images, PIECE_TEMPLATES)
