@@ -47,7 +47,7 @@ CLOCK_HEIGHT = 44
 W_NOTATION_X = 1458
 W_NOTATION_Y = 591
 W_NOTATION_WIDTH, W_NOTATION_HEIGHT = 166, 104
-START_X = 542 # 550
+START_X = 543 # 550
 START_Y = 179 # 179
 STEP = 106 # 101
 PIECE_STEP = 106 # 100
@@ -257,17 +257,22 @@ def check_turn_from_last_moved(fen, board_img, bottom):
             colour_count += 2*((colour == test_turn)-0.5)
     if colour_count == 0:
         if len(detected_moved) > 0:
-            # then it must have been a castling move
-            if bottom == "w":
-                real_square = chess.square_mirror(detected_moved[0])
+            if len(detected_moved) % 2 == 0:
+                # then it must have been a castling move
+                if bottom == "w":
+                    real_square = chess.square_mirror(detected_moved[0])
+                else:
+                    real_square = chess.square_mirror(63-detected_moved[0])
+                if chess.square_rank(real_square) == 0: # first rank, must be white castles, so black move
+                    return test_turn == chess.BLACK
+                elif chess.square_rank(real_square) == 7: # 8th rank, black castles, white to move
+                    return test_turn == chess.WHITE
+                else:
+                    # there was an error, expected to be castle move but wasn't
+                    return None
             else:
-                real_square = chess.square_mirror(63-detected_moved[0])
-            if chess.square_rank(real_square) == 0: # first rank, must be white castles, so black move
-                return test_turn == chess.BLACK
-            elif chess.square_rank(real_square) == 7: # 8th rank, black castles, white to move
-                return test_turn == chess.WHITE
-            else:
-                # there was an error, expected to be castle move but wasn't
+                # then it must have been a move followed by an immediate premove with the same piece.
+                # in which case it may be impossible to work out whos turn it is.
                 return None
         # no detected moves, there was error, return None
         return None

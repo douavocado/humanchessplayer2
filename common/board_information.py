@@ -8,7 +8,7 @@ import chess
 import numpy as np
 import math
 
-from .constants import PATH_TO_STOCKFISH
+from common.constants import PATH_TO_STOCKFISH
 
 STOCKFISH = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH) # replace this line with the correct binary/executable
 PIECE_VALS = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3.5, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 1000}
@@ -339,12 +339,10 @@ def king_danger(board, side, phase):
     
     return king_danger
 
-def is_weird_move(board, phase, move, obvious_move, king_dang):
+def is_weird_move(board, phase, move_uci, king_dang):
     ''' Given a chess.Move object, and the phase of the game, return whether
         a move looks 'weird' or computer like. Mainly concerns rook and queen moves. '''
-    # if move is by far the obvious move it is not weird
-    if move.uci() == obvious_move:
-        return False
+    move = chess.Move.from_uci(move_uci)
     # if the move is a rook move on the base rank, punish rook moves which
     # 'squash' each other
     
@@ -377,7 +375,7 @@ def is_weird_move(board, phase, move, obvious_move, king_dang):
         if is_locked_file(board, chess.square_file(square_to)) == True:
             return True
         
-    # if the move is a gueen move onto the back rank in the opening
+    # if the move is a gueen move onto the back rank in the opening or midgame
     elif board.piece_type_at(square_from) == chess.QUEEN and phase != 'endgame':
         if chess.square_rank(square_to) == 0 and side == chess.WHITE:
             return True
@@ -643,6 +641,7 @@ def get_lucas_analytics(board, analysis=None):
     
     if analysis is None:
         analysis = STOCKFISH.analyse(board, chess.engine.Limit(time=0.02), multipv=18)
+    
     evals = [entry['score'].pov(board.turn).score(mate_score=2500) for entry in analysis]
     xeval = max(evals) # evaluation of position (in centipawns)
     xgmo = len([x for x in evals if x + 100 >= xeval]) # number of good moves in position

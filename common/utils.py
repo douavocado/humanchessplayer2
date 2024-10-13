@@ -5,8 +5,75 @@ Created on Tue Sep 10 13:11:33 2024
 @author: xusem
 """
 import chess
+import chess.engine
 import time
 
+from common.board_information import calculate_threatened_levels, get_threatened_board, PIECE_VALS #, STOCKFISH
+
+def extend_mate_score(score, mate_score=2500, extension=100):
+    """ Given we are close to mating opponent, extend mate score to be such that
+        each move closer to mate is not 1 eval difference but rather extension amount
+        in difference.
+        
+        Returns altered score.
+    """
+    if score >= mate_score - 15:
+        # can see mate in 15 or fewer
+        return score + (score+15 -mate_score)*extension
+    else:
+        return score
+
+def check_safe_premove(board:chess.Board, premove_uci: str):
+    """ Given a position and a generated premove_uci, decide whether the move is deemed
+        'safe'. That is opponent cannot/unlikely to play a move which leads to a significant
+        advantage after our move. We shall only calculate opponent moves which do not
+        immediately give away material (do not capture not enpris piece, move to enpris
+        square).
+        
+        Returns True if premove is safe, else returns False
+    """
+    move_obj = chess.Move.from_uci(premove_uci)
+    # check turn is correct
+    if board.turn == board.color_at(move_obj.from_square):
+        raise Exception("Premove uci {} not valid for board turn with fen {}".format(premove_uci, board.fen()))
+    
+    # check premove is valid move
+    if board.color_at(move_obj.from_square) is None:
+        raise Exception("Premove uci {} is not valid for board with fen{}".format(premove_uci, board.fen()))
+    
+    # takeback premoves are always safe
+    if board.color_at(move_obj.to_square) == (not board.turn):
+        return True
+    
+    # calculate current threatened levels
+    current_threatened_board = get_threatened_board(board, colour=not board.turn, piece_types=[1,2,3,4,5])
+    current_threatened_levels = sum(current_threatened_board)
+    
+    # curr_analysis_obj = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=10)
+    # current_eval = curr_analysis_obj[0]["score"].pov(not board.turn).score(mate_score=2500)
+    # consider_moves = [entry["pv"][0] for entry in curr_analysis_obj]
+    for opp_move_obj in board.legal_moves:
+        # not move that is not enpris.
+        to_material = board.piece_type_at(opp_move_obj.to_square)
+        if to_material is None:
+            to_mat = 0
+        else:
+            to_mat = PIECE_VALS[to_material]
+        
+        dummy_board= board.copy()
+        dummy_board.push(opp_move_obj)
+        if calculate_threatened_levels(opp_move_obj.to_square, dummy_board) - to_mat > 0.6:
+            continue
+        else:
+            # see if eval much worse
+            dummy_board.push(move_obj)
+            new_threatened_board = get_threatened_board(dummy_board, colour=not board.turn, piece_types=[1,2,3,4,5])
+            new_threatened_levels = sum(new_threatened_board)
+            if new_threatened_levels > current_threatened_levels + 0.6:
+                return False
+    return True
+        
+    
 def patch_fens(fen_before, fen_after, depth_lim:int=3):
     """ If get_move_made function is not able to find legal move to link the two fens
         we try to find in between fens to link the two fens.
@@ -65,8 +132,7 @@ def flip_uci(move_uci):
 
 if __name__ == "__main__":
     before = chess.Board("r1bqrnk1/pp3pb1/6pp/8/1P1N4/P5P1/1B1QP1BP/1R2R1K1 w - - 2 20")
-    after = chess.Board("r1b1rnk1/pp3pb1/1q4pp/8/1P1N4/P5P1/1B1QP1BP/3R1RK1 w - - 6 22")
     start = time.time()
-    print(patch_fens(before.fen(), after.fen(), depth_lim=4))
+    print(check_safe_premove(before, "d8b6"))
     end = time.time()
     print(end-start)

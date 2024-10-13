@@ -12,7 +12,6 @@ Created on Thu Sep  5 15:51:15 2024
 
 @author: xusem
 """
-
 import os
 import pyautogui
 import random
@@ -23,6 +22,7 @@ import time
 import datetime
 import cv2
 import numpy as np
+from multiprocessing import Process, Event, Manager
 
 from humancursor import SystemCursor
 
@@ -49,7 +49,7 @@ def is_capslock_on():
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
 SCRAPE_EVERY = 0.5 # the time gap between scraping
 MOVE_DELAY = 0.25 # the amount of time we take per move minus the time the engine calc time from other aspects (time scrape, position updates, moving pieces etc.)
-DRAG_MOVE_DELAY = 0.4 # the amount of time to allow for move to snap onto the board before taking a screenshot
+DRAG_MOVE_DELAY = 0.04 # the amount of time to allow for move to snap onto the board before taking a screenshot
 
 CURSOR = SystemCursor() # mouse control object which simulates human-like movement with mouse
 
@@ -60,7 +60,7 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     """
     # 1 in 100 moves, we simulate a potential mouse slip
     successful = True
-    if np.random.random() < 0.01:
+    if np.random.random() < 0.03:
         tolerance = tolerance * 2
         offset_x = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
         offset_y = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
@@ -77,19 +77,57 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     
     current_x, current_y = pyautogui.position()
     from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
-    duration_from = MOUSE_QUICKNESS/5000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
+    duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance)**0.3
     to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    duration_to = MOUSE_QUICKNESS/5000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
+    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance)**0.3
     
     CURSOR.drag_and_drop([new_from_x, new_from_y], [new_to_x, new_to_y], duration=[duration_from, duration_to])
     
     return successful
 
-def click_mouse(x, y, tolerance=0, clicks=1):
+def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
+    """ Exactly the same as drag mouse, but sometimes we mix it up by clicking two squares
+        rather than click and drag for variation. Tends to be a little faster than drag
+        and drop.
+        
+        Returns True if move was made successfully, else False if mouse slip was made.    
+    """
+    # 1 in 100 moves, we simulate a potential mouse slip
+    successful = True
+    if np.random.random() < 0.03:
+        tolerance = tolerance * 2
+        offset_x = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
+        offset_y = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
+        if np.abs(offset_x) > STEP/2 or np.abs(offset_y) > STEP/2:
+            successful = False
+    else:
+        offset_x = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
+        offset_y = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
+    
+    new_from_x = from_x + tolerance * (np.random.random() - 0.5)
+    new_from_y = from_y + tolerance * (np.random.random() - 0.5)
+    new_to_x = to_x + offset_x
+    new_to_y = to_y + offset_y
+    
+    current_x, current_y = pyautogui.position()
+    from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
+    duration_from = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
+    to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
+    duration_to = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
+    
+    CURSOR.move_to([new_from_x, new_from_y], duration=duration_from, steady=True)
+    pyautogui.click(button="left")
+    CURSOR.move_to([new_to_x, new_to_y], duration=duration_to, steady=True)
+    pyautogui.click(button="left")
+    
+    return successful
+
+def click_mouse(x, y, tolerance=0, clicks=1, duration=0.5):
     new_x = x + tolerance * (np.random.random() - 0.5)
     new_y = y + tolerance * (np.random.random() - 0.5)
     
-    CURSOR.click_on([new_x, new_y], clicks=clicks)
+    CURSOR.move_to([new_x, new_y], duration=duration, steady=True)
+    pyautogui.click(button="left", clicks=clicks)
 
 
 def scrape_move_change(side):
@@ -168,21 +206,39 @@ class GameFinder:
     def __init__(self, shadow_mode=False, log=True):
         self.client = LichessClient()
     
-    def run(self):
-        while True:
-            new_game_starting_time = new_game_found()
-            if new_game_starting_time is not None:
-                # then the user is in a game
-                print ('Found user game!')
-                sound_file = "new_game_found.mp3"
-                os.system("mpg123 -q " + sound_file)
-                self.client.set_game(new_game_starting_time)
-                self.client.run_game()
-                # new game
-                time.sleep(5)
-                self.client.new_game()
-            else:
-                time.sleep(1)
+    def run(self, games=None):
+        if games is None:
+            while True:
+                new_game_starting_time = new_game_found()
+                if new_game_starting_time is not None:
+                    # then the user is in a game
+                    print ('Found user game!')
+                    sound_file = "new_game_found.mp3"
+                    os.system("mpg123 -q " + sound_file)
+                    self.client.set_game(new_game_starting_time)
+                    self.client.run_game()
+                    # new game
+                    time.sleep(5)
+                    self.client.new_game()
+                else:
+                    time.sleep(1)
+        else:
+            games_played = 0
+            while games_played < games:
+                new_game_starting_time = new_game_found()
+                if new_game_starting_time is not None:
+                    # then the user is in a game
+                    print ('Found user game!')
+                    sound_file = "new_game_found.mp3"
+                    os.system("mpg123 -q " + sound_file)
+                    self.client.set_game(new_game_starting_time)
+                    self.client.run_game()
+                    # new game
+                    time.sleep(5)
+                    games_played += 1
+                    self.client.new_game()
+                else:
+                    time.sleep(1)
 
 class LichessClient:
     ''' Main class which interacts with Lichess. Plays and recieves moves. Called
@@ -521,11 +577,46 @@ class LichessClient:
         # check via clock position
         return game_over_found()
     
+    def ponder_position(self, result_dic):
+        """ Given the position is not our turn, get our engine to ponder the position.
+        
+            Returns a ponder dic
+        """
+        # first assert the position we want to ponder is not our turn
+        ponder_board = chess.Board(self.dynamic_info["fens"][-1])
+        if ponder_board.turn == self.game_info["playing_side"]:
+            self.log += "Tried to ponder position fen {}, but not our turn, skipping. \n".format(ponder_board.fen())
+            return
+        elif len(self.dynamic_info["fens"]) < 4:
+            # do not ponder if we don't have too much previous information
+            self.log += "Tried to ponder, but do not have long enough move history. Skipping \n"
+            return
+        
+        # Now ponder position
+        prev_ponder_board = chess.Board(self.dynamic_info["fens"][-2])
+        time_allowed = 1.0
+        ponder_width = 1
+        search_width = DIFFICULTY
+        print("about to ponder")
+        ponder_dic = self.engine.ponder(ponder_board, time_allowed, search_width, prev_board=prev_ponder_board, ponder_width=ponder_width)
+        print("finised pondering")
+        result_dic["ponder_dic"] = ponder_dic
+        
+        return
+        
+        
+    
     def run_game(self):
         """ The main lopp for the client while playing the game. """
+        manager = Manager()
         while True:
             self._write_log()
-            result = self.await_move()
+            # now await move, at the same time ponder and move mouse
+            
+            result_dic = manager.dict()
+            self.await_move(result_dic)
+            
+            result = result_dic["await_move"]
             self._write_log()
             if result == False:
                 # Then game has ended
@@ -561,6 +652,10 @@ class LichessClient:
                     if successful == True:
                         # We made clicks for the move successfully
                         self.log += "Made pondered moves successfully. \n"
+                    else:
+                        # We try one more time, in case it was mouse slip
+                        self.log += "Did not make pondered move successfully, trying once more. \n"
+                        successful = self.make_move(response_uci)
                     continue
             self._write_log()
             
@@ -623,8 +718,11 @@ class LichessClient:
                 # We made clicks for the move successfully
                 self.log += "Made moves and/or premoves successfully. \n"
                 self._write_log()
+            else:
+                self.log += "Didn't make move successfully, trying one more time. \n"
+                successful = self.make_move(move_made_uci, premove=premove)
     
-    def await_move(self):
+    def await_move(self, result_dic):
         ''' The main update step for the lichess client. We do not scrape any information
             at all, because this can be detected and banned quite quickly.
             
@@ -634,7 +732,8 @@ class LichessClient:
         while True:
             # First check if game has ended
             if self._check_game_end():
-                return False
+                result_dic["await_move"] = False
+                return # False
             # Check if manual mode is on
             if is_capslock_on():
                 continue
@@ -643,7 +742,8 @@ class LichessClient:
             
             # See if it is our turn
             if self.check_our_turn() == True:
-                return True
+                result_dic["await_move"] = True
+                return # True
             
             # In the meantime check for updates via screenshot method. The amount of time we
             # shall spend doing this will be enough so we can scrape again after
@@ -691,11 +791,13 @@ class LichessClient:
                     if move1 in last_board.legal_moves:
                         # then we have truly found a move update
                         self._update_dynamic_info_from_screenshot(move1)
-                        return True
+                        result_dic["await_move"] = True
+                        return # True
                     elif move2 in last_board.legal_moves:
                         # then we have truly found a move update
                         self._update_dynamic_info_from_screenshot(move2)
-                        return True
+                        result_dic["await_move"] = True
+                        return # True
                 
                 # end_time = time.time()
                 
@@ -706,15 +808,16 @@ class LichessClient:
                 tries += 1
             
             # hover mouse
-            if self.hover_square is None:
-                if np.random.random() < 0.9:
-                    self.hover()
-                else:
-                    self.wander
-            elif np.random.random() < 0.06:
-                self.hover()
-            elif np.random.random() < 0.04:
-                self.wander()
+            if self.dynamic_info["self_clock_times"][-1] > 15:
+                if self.hover_square is None:
+                    if np.random.random() < 0.9:
+                        self.hover(duration=np.random.random()/10)
+                    else:
+                        self.wander()
+                elif np.random.random() < 0.06:
+                    self.hover(duration=np.random.random()/10)
+                elif np.random.random() < 0.04:
+                    self.wander()
                 
     def wander(self, max_duration=0.1):
         """ Move the mouse randomly to a position on the board close to our side. """
@@ -759,17 +862,17 @@ class LichessClient:
             # a1 square is bottom left
             rank_fr = chess.square_rank(random_square)
             file_fr = chess.square_file(random_square)
-            to_x = START_X + file_fr* STEP + STEP/2 + noise * (np.random.random()-0.5)
-            to_y = START_Y + (7-rank_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5)
+            to_x = np.clip(START_X + file_fr* STEP + STEP/2 + noise * (np.random.random()-0.5), START_X, START_X+8*STEP)
+            to_y = np.clip(START_Y + (7-rank_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5), START_Y, START_Y + 8*STEP)
             
         else:
             # a1 square is top right
             rank_fr = chess.square_rank(random_square)
             file_fr = chess.square_file(random_square)
-            to_x = START_X + (7-file_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5)
-            to_y = START_Y + rank_fr*STEP + STEP/2 + noise * (np.random.random()-0.5)
+            to_x = np.clip(START_X + (7-file_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5), START_X, START_X + 8*STEP)
+            to_y = np.clip(START_Y + rank_fr*STEP + STEP/2 + noise * (np.random.random()-0.5), START_Y, START_Y + 8*STEP)
         
-        CURSOR.move_to([to_x, to_y], duration=duration)
+        CURSOR.move_to([to_x, to_y], duration=duration,steady=True)
         
         
         return True
@@ -793,7 +896,14 @@ class LichessClient:
         # pyautogui.click(from_x, from_y, button='left')
         # pyautogui.click(to_x, to_y, button='left')
         # compute randomised offset from centre of the square
-        successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
+        # sometimes we drag and drop, other times we click two squares
+        if np.random.random() < 1.1:
+            successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
+            dragged = True
+        else:
+            successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
+            dragged = False
+            
         if successful:
             self.log += "Made clicks for the move {} \n".format(move_uci)
         else:
@@ -801,9 +911,16 @@ class LichessClient:
             return False
         # If there is a premove
         if premove is not None:
+            if dragged == True:
+                # wait a bit for previous move to lock in
+                time.sleep(DRAG_MOVE_DELAY/2)
+                dragged = False
             from_x, from_y, to_x, to_y = self.find_clicks(premove)
-            
-            successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.7*STEP)
+            if np.random.random() < 1.1:
+                successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
+                dragged = True
+            else:
+                successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
             if successful:
                 self.log += "Made clicks for the premove {} \n".format(premove)
             else:
@@ -812,8 +929,9 @@ class LichessClient:
         # reset hover square
         self.hover_square = None
         
-        # wait a bit for board to update and snap move into place
-        time.sleep(DRAG_MOVE_DELAY)
+        if dragged == True:
+            # wait a bit for board to update and snap move into place
+            time.sleep(DRAG_MOVE_DELAY)
         return True
     
     def resign(self):
@@ -826,7 +944,7 @@ class LichessClient:
         # time.sleep(0.2)
         # pyautogui.click(resign_button_x, resign_button_y, button='left')
         
-        click_mouse(resign_button_x, resign_button_y, tolerance = 10, clicks=2)
+        click_mouse(resign_button_x, resign_button_y, tolerance = 10, clicks=2, duration=np.random.uniform(0.3,0.7))
         
         return True
     
@@ -838,12 +956,12 @@ class LichessClient:
         
         play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
         # pyautogui.click(play_button_x, play_button_y, button='left')
-        click_mouse(play_button_x, play_button_y, tolerance = 10, clicks=1)
+        click_mouse(play_button_x, play_button_y, tolerance = 10, clicks=1, duration=np.random.uniform(0.3,0.7))
         time.sleep(1.5)
         if time_control == "1+0":
             to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
             
-            click_mouse(to_x, to_y, tolerance = 20, clicks=1)
+            click_mouse(to_x, to_y, tolerance = 20, clicks=1, duration=np.random.uniform(0.3,0.7))
             # pyautogui.click(to_x, to_y, button='left')
         
         return True

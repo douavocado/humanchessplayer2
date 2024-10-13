@@ -31,4 +31,4 @@ except:
     pass
 
 finder = GameFinder(shadow_mode=args.shadow, log= not args.nolog)
-finder.run()
+finder.run(games=10)
