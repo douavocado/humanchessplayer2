@@ -5,6 +5,7 @@ Created on Tue Sep 10 13:33:26 2024
 @author: xusem
 """
 PATH_TO_STOCKFISH = "Engines/stockfish-ubuntu-x86-64-avx2"
+PATH_TO_PONDER_STOCKFISH = "Engines/stockfish16-ubuntu"
 
 MOVE_FROM_WEIGHTS_OP_PTH = 'models/model_weights/piece_selector_opening_weights.pth'
 MOVE_FROM_WEIGHTS_MID_PTH = 'models/model_weights/piece_selector_midgame_weights.pth'
@@ -13,9 +14,9 @@ MOVE_TO_WEIGHTS_MID_PTH = 'models/model_weights/piece_to_weights_midgame.pth'
 MOVE_TO_WEIGHTS_END_PTH = 'models/model_weights/piece_to_weights_endgame.pth'
 MOVE_TO_WEIGHTS_OP_PTH = 'models/model_weights/piece_to_weights_opening.pth'
 
-QUICKNESS = 1.65 # adjust depending on computer fastness. The bigger the number the slower the moves made
+QUICKNESS = 1.85 # adjust depending on computer fastness. The bigger the number the slower the moves made
 DIFFICULTY = 5 # engine difficulty
-MOUSE_QUICKNESS = 5 # number between 0 and 10. Bigger the number the slower we are with mouse movements
+MOUSE_QUICKNESS = 1 # number between 0 and 10. Bigger the number the slower we are with mouse movements
 
 # BENCHMARKS
 """ 
