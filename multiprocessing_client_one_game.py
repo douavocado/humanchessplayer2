@@ -5,7 +5,7 @@ Created on Fri Oct  4 15:43:23 2024
 
 @author: james
 """
-
+import Xlib.threaded
 import os
 import pyautogui
 import random
@@ -28,6 +28,7 @@ from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STE
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved)
 
 import threading
+from multiprocessing import Process
 
 # global variables
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
@@ -91,13 +92,13 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     new_to_x = to_x + offset_x
     new_to_y = to_y + offset_y
     
-    # current_x, current_y = pyautogui.position()
-    # from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
-    # duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance)**0.3
-    # to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    # duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance)**0.3
-    duration_from =0.01
-    duration_to = 0.01    
+    current_x, current_y = pyautogui.position()
+    from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
+    duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance)**0.3
+    to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
+    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance)**0.3
+    # duration_from =0.01
+    # duration_to = 0.01    
     CURSOR.drag_and_drop([new_from_x, new_from_y], [new_to_x, new_to_y], duration=[duration_from, duration_to])
 
     return successful
@@ -126,15 +127,15 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     new_to_x = to_x + offset_x
     new_to_y = to_y + offset_y
     
-    # current_x, current_y = pyautogui.position()
-    # from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
-    # duration_from = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
-    # to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    # duration_to = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
+    current_x, current_y = pyautogui.position()
+    from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
+    duration_from = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
+    to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
+    duration_to = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
     
-    CURSOR.move_to([new_from_x, new_from_y], duration=0.005, steady=True)
+    CURSOR.move_to([new_from_x, new_from_y], duration=duration_from, steady=True)
     pyautogui.click(button="left")
-    CURSOR.move_to([new_to_x, new_to_y], duration=0.005, steady=True)
+    CURSOR.move_to([new_to_x, new_to_y], duration=duration_to, steady=True)
     pyautogui.click(button="left")
     
     return successful
@@ -651,15 +652,15 @@ def await_move(result_dic):
         if DYNAMIC_INFO["self_clock_times"][-1] > 15:
             if HOVER_SQUARE is None:
                 if np.random.random() < 0.9:
-                    hover(duration=np.random.random()/10)
+                    hover(duration=np.random.random()/5)
                 else:
                     wander()
             elif np.random.random() < 0.06:
-                hover(duration=np.random.random()/10)
+                hover(duration=np.random.random()/5)
             elif np.random.random() < 0.04:
                 wander()
             
-def wander(max_duration=0.1):
+def wander(max_duration=0.15):
     """ Move the mouse randomly to a position on the board close to our side. """
     global LOG
     # Check if there is human interference
@@ -667,15 +668,22 @@ def wander(max_duration=0.1):
         LOG += "Tried to hover, but failed as caps lock is on. \n "
         return False
     
-    chosen_x = np.clip(START_X + 4*STEP + 2*STEP*np.random.randn(), START_X, START_X + 8*STEP)
-    chosen_y  = np.clip(START_Y + 4*STEP + 2*STEP*np.random.randn(), START_Y, START_Y + 8*STEP)
-    
     current_x, current_y = pyautogui.position()
+    centre_x = START_X + 4*STEP
+    centre_y = START_Y + 4*STEP
+    
+    m_x = 0.8*current_x + 0.2*centre_x
+    m_y = 0.8*current_y + 0.2*centre_y
+    
+    chosen_x = np.clip(m_x + STEP*np.random.randn(), START_X, START_X + 8*STEP)
+    chosen_y  = np.clip(m_y + STEP*np.random.randn(), START_Y, START_Y + 8*STEP)
+    
+    
     distance =np.sqrt( (chosen_x - current_x)**2 + (chosen_y - current_y)**2 )
     duration = max(min(MOUSE_QUICKNESS/5000 * (0.8 + 0.4*np.random.random()) * np.sqrt(distance), max_duration), 0.01)
     CURSOR.move_to([chosen_x, chosen_y], duration=duration)
 
-def hover_own_turn(is_hovering_dic, duration=0.01, noise=STEP*2):
+def hover_own_turn(is_hovering_dic, duration=0.15, noise=STEP*2):
     """ When it is our own turn, input random mouse movements which make us hover over our current pieces,
         particularly if they are moves we are considering from ponder_dic.   Perhaps 
         even pick up pieces before changing mind.
@@ -685,11 +693,14 @@ def hover_own_turn(is_hovering_dic, duration=0.01, noise=STEP*2):
     global PONDER_DIC, HOVER_SQUARE, LOG, DYNAMIC_INFO
     while True:
         is_hovering_dic["is_hover"] = False
-        stat_time = np.random.uniform(0.2, 0.6)
+        stat_time = np.random.uniform(0.1, 0.2)
         time.sleep(stat_time)
         #print(is_hovering_dic)
         if is_hovering_dic["can_hover"] == False or is_capslock_on():
             # then doing some other operation
+            continue
+        elif DYNAMIC_INFO['self_clock_times'][-1] <= 15:
+            # don't hover if we have too little time.
             continue
         else:
             is_hovering_dic["is_hover"] = True # blocking other mouse movements
@@ -748,7 +759,10 @@ def hover_own_turn(is_hovering_dic, duration=0.01, noise=STEP*2):
                     
                     to_x = np.clip(from_x + noise*np.random.randn(), START_X, START_X + 8*STEP)
                     to_y = np.clip(from_y + noise*np.random.randn(), START_Y, START_Y + 8*STEP)
-                    
+                    if abs(to_y - from_y) < 5:
+                    	to_y += 5
+                    if abs(to_x - from_x) < 5:
+                    	to_x += 5
                     CURSOR.fake_drag([from_x, from_y], [to_x, to_y], duration=duration,steady=True)
             else:
                 #we wander
@@ -992,8 +1006,8 @@ def run_game():
     global DYNAMIC_INFO, PONDER_DIC, GAME_INFO, ENGINE, LOG
     result_dic = {}
     own_hover_dic = {"can_hover": False, "is_hover": False}
-    ponder_proc = threading.Thread(target=ponder_position, args=(result_dic,))
-    own_hover_proc = threading.Thread(target=hover_own_turn, args=(own_hover_dic,))
+    ponder_proc = Process(target=ponder_position, args=(result_dic,))
+    own_hover_proc = Process(target=hover_own_turn, args=(own_hover_dic,))
     ponder_proc.start()
     own_hover_proc.start()
     while True:
@@ -1017,6 +1031,14 @@ def run_game():
             # Then game has ended
             write_log()
             result_dic["ponder_end"] = True
+            
+            ponder_proc.kill()
+            own_hover_proc.kill()
+            ponder_proc.join()
+            own_hover_proc.join()
+            print("Ponder process alive:", ponder_proc.is_alive())
+            print("Hover process alive:", own_hover_proc.is_alive())
+            
             return
         
         # check if manual mode on
@@ -1121,6 +1143,13 @@ def run_game():
             # then game has finished
             write_log()
             result_dic["ponder_end"] = True
+            
+            ponder_proc.kill()
+            own_hover_proc.kill()
+            ponder_proc.join()
+            own_hover_proc.join()
+            print("Ponder process is alive:", ponder_proc.is_alive())
+            print("Hover process is alive:", own_hover_proc.is_alive())
             return
         input_dic = DYNAMIC_INFO.copy()
         input_dic["side"] = GAME_INFO["playing_side"]

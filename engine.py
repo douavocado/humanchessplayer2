@@ -1257,11 +1257,11 @@ class Engine:
             game_phase = phase_of_game(self.current_board)
             # in the opening and endgame we spend less time on average than the mid game
             if game_phase == "opening":
-                base_time *= 0.4
+                base_time *= 0.5
             elif game_phase == "midgame":
                 base_time *= 1.2
             else:
-                base_time *=0.6
+                base_time *=0.5
             
             self.log += "Base time after game phase analysis: {} \n".format(base_time)
             
@@ -1287,44 +1287,44 @@ class Engine:
             if self.mood == "confident":
                 # low variation, solid move times.                
                 if np.random.random() < 0.4: # then we have a quick low variation move
-                    time_taken = base_time * (1.0+ np.clip(0.1*np.random.randn(), -0.3, 0.3))
-                elif np.random.random() < 0.7: # medium low variation move
-                    time_taken = base_time * (1.3+ np.clip(0.2*np.random.randn(), -0.4, 0.7))
+                    time_taken = base_time * (0.8+ np.clip(0.1*np.random.randn(), -0.3, 0.3))
+                elif np.random.random() < 0.8: # medium low variation move
+                    time_taken = base_time * (1.4+ np.clip(0.2*np.random.randn(), -0.4, 0.7))
                 else:
                     # slightly longer think, larger variation
-                    time_taken = base_time * (3.5 + np.clip(0.7*np.random.randn(), -1.7, 2.0))
+                    time_taken = base_time * (3.9 + np.clip(0.7*np.random.randn(), -1.7, 2.0))
             elif self.mood == "cocky":
                 # medium variation, quick move times
                 if np.random.random() < 0.9: # then we have a quick low variation move
-                    time_taken = base_time * (0.9 + np.clip(0.3*np.random.randn(), -0.2, 0.7))
+                    time_taken = base_time * (0.7 + np.clip(0.3*np.random.randn(), -0.2, 0.7))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (3.3 + np.clip(0.4*np.random.randn(), -0.8, 0.8))
+                    time_taken = base_time * (3.7 + np.clip(0.4*np.random.randn(), -0.8, 0.8))
             elif self.mood == "cautious":
                 # medium variation, slow moves
                 if np.random.random() < 0.6: # then we have a quick low variation move
-                    time_taken = base_time * (1.3+ np.clip(0.2*np.random.randn(), -0.3, 0.5))
-                elif np.random.random() < 0.6: # medium low variation move
-                    time_taken = base_time * (2.1+ np.clip(0.25*np.random.randn(), -0.4, 0.7))
+                    time_taken = base_time * (1.6+ np.clip(0.2*np.random.randn(), -0.3, 0.5))
+                elif np.random.random() < 0.7: # medium low variation move
+                    time_taken = base_time * (2.5+ np.clip(0.25*np.random.randn(), -0.4, 0.7))
                 else:
                     # slightly longer think, large variation
-                    time_taken = base_time * (6.5 + np.clip(1.4*np.random.randn(), -3.9, 4.5))
+                    time_taken = base_time * (6.9 + np.clip(1.4*np.random.randn(), -3.9, 4.5))
             elif self.mood == "tilted":
                 # if we have just made the blunder, pause for long time to reflect on it
                 # otherwise low variation, quick move times
                 if self.just_blundered == True:
-                    time_taken = base_time * (4.5 + np.clip(0.7*np.random.randn(), -1.5, 1.5))
+                    time_taken = base_time * (5.2 + np.clip(0.7*np.random.randn(), -1.5, 1.5))
                 else:
-                    time_taken = base_time * (0.8 + np.clip(0.08*np.random.randn(), -0.2, 0.2))
+                    time_taken = base_time * (0.6 + np.clip(0.08*np.random.randn(), -0.2, 0.2))
             elif self.mood == "hurry":
                 # medium variation, quick move times
-                if np.random.random() < 0.4:
-                    time_taken = base_time * (0.8 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
-                elif np.random.random() < 0.7:
-                    time_taken = base_time * (1.1 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
+                if np.random.random() < 0.5:
+                    time_taken = base_time * (0.6 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
+                elif np.random.random() < 0.8:
+                    time_taken = base_time * (1.3 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (1.7 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
+                    time_taken = base_time * (2.4 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
                 
                 # if we are in hurry mode (i.e. we are in low time), then our time taken
                 # depends on how much time we have left
@@ -1332,12 +1332,12 @@ class Engine:
             elif self.mood == "flagging":
                 # large variation, quick move times
                 if np.random.random() < 0.5:
-                    time_taken = base_time * (1.2 + np.clip(0.2*np.random.randn(), -0.3, 0.6))
-                elif np.random.random() < 0.7:
-                    time_taken = base_time * (1.6 + np.clip(0.3*np.random.randn(), -0.5, 0.8))
+                    time_taken = base_time * (1.0 + np.clip(0.2*np.random.randn(), -0.3, 0.6))
+                elif np.random.random() < 0.8:
+                    time_taken = base_time * (1.9 + np.clip(0.3*np.random.randn(), -0.5, 0.8))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (3.1 + np.clip(0.4*np.random.randn(), -0.8, 1.0))
+                    time_taken = base_time * (4.6 + np.clip(0.4*np.random.randn(), -0.8, 1.0))
             
             self.log += "Decided time taken after mood analysis: {} \n".format(time_taken)
         
