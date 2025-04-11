@@ -305,7 +305,11 @@ class Engine:
             
             Returns an altered move_dic. 
         """
-        start = time.time()        
+        start = time.time()
+        game_phase = phase_of_game(board) # useful for function
+        self_king_danger_lvl = king_danger(board, board.turn, game_phase)
+        opp_king_danger_lvl = king_danger(board, not board.turn, game_phase)
+        
         # Moves which protect/block/any way that make our pieces less en pris are appealing
         # Factor is given by factor = np.exp(-lvl_diff/10)        
         # Moves which make opponent pieces more en pris (attacks/threatens) are appealing
@@ -326,7 +330,11 @@ class Engine:
         # Squares that pinned pieces attack that break the pin are more desirable
         break_pin_sf = 3.0
         # Captures are just generally more appealing. The bigger the capture the more appealing
-        capture_sf = 1.5
+        # if opponent king is in danger, boost even more
+        if opp_king_danger_lvl > 500:
+            capture_sf = 2
+        else:
+            capture_sf = 1.5
         # Capturable pieces are more appealling to move
         capturable_sf = 1.3
         
@@ -337,6 +345,10 @@ class Engine:
                         "tilted": 3.3,
                         "hurry": 3.0,
                         "flagging": 2.9}
+        # if opponent king is in danger, checks are even more appealing
+        if opp_king_danger_lvl - self_king_danger_lvl > 500:
+            check_sf_dic = {k: v*1.3 for k, v in check_sf_dic.items()}
+            
         # Takebacks are more appealing
         takeback_sf = 2.5
         # Newly threatened en-pris pieces are more appealling to move
@@ -374,9 +386,7 @@ class Engine:
         
         
 ###############################################################################
-        game_phase = phase_of_game(board) # useful for function
-        self_king_danger_lvl = king_danger(board, board.turn, game_phase)
-        opp_king_danger_lvl = king_danger(board, not board.turn, game_phase)
+        
         
         # Moves which protect/block/any way that make our pieces less en pris are appealing        
         # Likewise moves that make our pieces more en pris are less appealing
@@ -387,6 +397,7 @@ class Engine:
         # For time computation sake, we ignore the threatened levels of pawns
         curr_threatened_board = get_threatened_board(board, colour=board.turn, piece_types=[1,2,3,4,5])
         self_curr_threatened_levels = sum(curr_threatened_board)
+        
         # if out of the our threatened pieces there was only one thing that was threatened, then
         # exaggerate the levels.
         if sum(np.array(curr_threatened_board) > 0.5) == 1:
@@ -405,23 +416,32 @@ class Engine:
             # as if there was no such piece. This prevents scenarios where we attack
             # opposition pieces of higher value at the cost of sacrificing our original
             # attacking piece.
-            if new_threatened_board[move_obj.to_square] > 0.6:
+            # if our move was a capture, we must take that into account that we gained some material
+            piece_type = board.piece_type_at(move_obj.to_square)
+            if piece_type is not None:
+                to_value = PIECE_VALS[piece_type]
+            else:
+                to_value = 0
+                
+            if new_threatened_board[move_obj.to_square] - to_value  > 0.6:
                 dummy_board.remove_piece_at(move_obj.to_square)
+            
             
             opp_new_threatened_levels = sum(get_threatened_board(dummy_board, colour=(not board.turn), piece_types=[1,2,3,4,5]))
             self_lvl_diff = self_new_threatened_levels - self_curr_threatened_levels
+            
             opp_lvl_diff = opp_new_threatened_levels - opp_curr_threatened_levels
+            
             # psychologically, protecting pieces is more favorable than attacking pieces
             # therefore we weight being in a safer position more heavily than being in a 
             # more pressuring situation
             # however this happens only if our move is not a capture.
             
             
-            lvl_diff = opp_lvl_diff - self_lvl_diff*1.5*solo_factor
-            # if our move was a capture, we must take that into account that we gained some material
-            piece_type = board.piece_type_at(move_obj.to_square)
+            lvl_diff = opp_lvl_diff - self_lvl_diff*1.25*solo_factor
+            
             if piece_type is not None: # if we captured something
-                lvl_diff += PIECE_VALS[piece_type] * 1.5 *solo_factor         
+                lvl_diff += to_value
             factor = np.exp(lvl_diff/2)     
             
             # Some moves of the strengthening moves are weird and unlikely due to the
@@ -431,7 +451,6 @@ class Engine:
             if lvl_diff > 0.9:
                 move_dic[move_uci] = max(move_dic[move_uci], lower_threshold_prob)
             move_dic[move_uci] *= factor
-            
             if lvl_diff > 0.9:
                 strenghening_moves.append(board.san(chess.Move.from_uci(move_uci)))
             elif lvl_diff < -0.9:
@@ -447,6 +466,7 @@ class Engine:
             self.log += "Found moves that are weakening and make our pieces more enpris/opp pieces less enpris: {} \n".format(weakening_moves)
             self.log += "Found moves that protect our pieces more or apply more pressure to opponent: {} \n".format(strenghening_moves)
             self.log += "Found weird moves: {} \n".format(weird_moves)
+            
         
         # Squares that pinned pieces attack that break the pin are more desirable to move to
         adv_pinned_moves = []
@@ -455,13 +475,13 @@ class Engine:
             no_pinned_atks = is_attacked_by_pinned(board, to_square, not board.turn)
             if no_pinned_atks > 0:
                 # it is a capturing move
-                if move_dic[move_uci] > lower_threshold_prob:
+                if move_dic[move_uci] < lower_threshold_prob:
                     move_dic[move_uci] = lower_threshold_prob
                 move_dic[move_uci] *= (break_pin_sf**no_pinned_atks)
                 adv_pinned_moves.append(board.san(chess.Move.from_uci(move_uci)))
         if log:
             self.log += "Found moves that take advantage of pinned pieces: {} \n".format(adv_pinned_moves)
-        
+            
         # If king danger high, then moves that defend our king are more attractive
         before_king_danger = king_danger(board, board.turn, game_phase)
         # if king is not in danger, pass
@@ -476,20 +496,19 @@ class Engine:
                 new_king_danger = king_danger(dummy_board, board.turn, game_phase)
                 if new_king_danger <= 0:
                     # found move
-                    if move_dic[move_uci] > lower_threshold_prob:
+                    if move_dic[move_uci] < lower_threshold_prob:
                         move_dic[move_uci] = lower_threshold_prob
                     move_dic[move_uci] *= protect_king_sf*(before_king_danger/50)**(1/4)
                     protect_king_moves.append(board.san(chess.Move.from_uci(move_uci)))
                 elif before_king_danger/new_king_danger > 1.5:
                     # found move
-                    if move_dic[move_uci] > lower_threshold_prob:
+                    if move_dic[move_uci] < lower_threshold_prob:
                         move_dic[move_uci] = lower_threshold_prob
                     denom = max(new_king_danger, 50)
                     move_dic[move_uci] *= protect_king_sf*(before_king_danger/denom)**(1/4)
                     protect_king_moves.append(board.san(chess.Move.from_uci(move_uci)))
             if log:
-                self.log += "Found moves that take protect our vulnerable king: {} \n".format(protect_king_moves)
-            
+                self.log += "Found moves that protect our vulnerable king: {} \n".format(protect_king_moves)
         # Capturing moves are more appealing
         capturing_moves = []
         for move_uci in move_dic.keys():
@@ -508,11 +527,16 @@ class Engine:
                 # it is a capturing move
                 move_obj = chess.Move.from_uci(move_uci)
                 threatened_lvls = calculate_threatened_levels(move_obj.to_square, board)
-                if threatened_lvls > 0.6:  # captured piece is enpris
+                # not only is the captured piece enpris, but we are capturing it with the correct piece
+                piece_type = board.piece_type_at(move_obj.to_square)
+                to_value = PIECE_VALS[piece_type]
+                dummy_board = board.copy()
+                dummy_board.push(move_obj)
+                if threatened_lvls > 0.6 and calculate_threatened_levels(move_obj.to_square, dummy_board) - to_value < 0:  # captured piece is enpris
                     move_dic[move_uci] *= capture_en_pris_sf * (threatened_lvls**0.25)
                     capturing_enpris_moves.append(board.san(move_obj))
         if log:
-            self.log += "Found capturing enpris moves from position: {} \n".format(capturing_moves)
+            self.log += "Found capturing enpris moves from position: {} \n".format(capturing_enpris_moves)
         
         # Capturable pieces are more appealling to move
         capturable_moves = []
@@ -569,6 +593,7 @@ class Engine:
                         # also depends on the value of what is newly being attacked
                         move_dic[move_uci] *= new_threatened_sf_dic[self.mood] * (1 + difference_in_threatened)**0.2
                         new_threatened_moves.append(board.san(chess.Move.from_uci(move_uci)))
+                        break
             if log:
                 self.log += "Found moves that respond to newly threatened pieces: {} \n".format(new_threatened_moves)
             
@@ -672,12 +697,21 @@ class Engine:
             self.log += "Move_dic alterations performed in {} seconds. \n".format(end-start)
         return move_dic
        
-    def _decide_breadth(self):
-        """ Given our current board information, decide how many of our human moves
+    def _decide_breadth(self, total_time=None):
+        """ Given our current board information and amount of time, decide how many of our human moves
             to consider and pass onto the engine.
             
             Returns integer
         """
+        base_no = self.playing_level
+        if total_time is not None:
+            if total_time > 1.5:
+                base_no += 1
+            elif total_time > 2.5:
+                base_no += 2
+            elif total_time > 5:
+                base_no += 3
+            
         game_phase = phase_of_game(self.current_board)
         king_dang = king_danger(self.current_board, self.input_info["side"], game_phase)
         eff_mob = self.lucas_analytics["eff_mob"]
@@ -685,23 +719,25 @@ class Engine:
             # Either the best move is obvious (e.g. a takeback, mate in one) or
             # there is a tactic involved. Decrease search width to mimic human
             # behaviour in tactics under pressure
-            
-            if eff_mob > 5 and game_phase == "midgame":
-                no_moves = max(self.playing_level-1,1)
+            if king_dang > 500: 
+                # king is in danger, need to pay attention
+                no_moves = base_no+10
+            elif eff_mob > 5 and game_phase == "midgame":
+                no_moves = max(base_no-1,1)
             elif game_phase == "endgame":
-                no_moves = no_moves = max(8, self.playing_level+3)
+                no_moves = no_moves = max(10, base_no+4)
             else:
-                no_moves = max(self.playing_level-2, 1)
+                no_moves = max(base_no, 1)
         else:
             # There are plenty of good moves, search wide so close the game out effectively
             if game_phase == 'endgame' and king_dang < 500:
-                no_moves = max(7, self.playing_level+2)
+                no_moves = max(9, base_no+5)
             elif king_dang > 500: 
                 # king is in danger, need to pay attention
-                no_moves = self.playing_level+2
+                no_moves = base_no+10
             else:
                 # not in the endgame, lots of good moves
-                no_moves = max(self.playing_level-1,1)
+                no_moves = max(base_no-1,1)
         
         # Now for mood dependent logic
         if self.mood in ["cocky", "hurry"]:
@@ -767,7 +803,7 @@ class Engine:
         altered_move_dic = self._alter_move_probabilties(un_altered_move_dic, self.current_board, prev_board=prev_board, prev_prev_board=prev_prev_board)
         
         # Now decide how many of these top moves we shall consider for calculation
-        no_root_moves = self._decide_breadth()
+        no_root_moves = self._decide_breadth(target_time)
         self.log += "Decided search breath for current position: {}. \n".format(no_root_moves)
         # We now piece together the top moves from human search and our stockfish_analysis
         human_move_ucis = list(altered_move_dic.keys())
@@ -798,8 +834,8 @@ class Engine:
         # this re-evaluation will depend on our target time, the time we set at
         # the beginning of the move to try and make our move by.
         # if target time is too much, then shorten it
-        if target_time > no_root_moves * 6 * human_calc_time:
-            target_time = no_root_moves * 6 * human_calc_time
+        if target_time > no_root_moves * 6 * max(human_calc_time, BUFFER):
+            target_time = no_root_moves * 6 * max(human_calc_time, BUFFER)
             self.log += "Shortening human target time to {} \n".format(target_time)
             
         re_evaluations = int(max(target_time//max(human_calc_time +0.02, BUFFER) - 1, 0))
@@ -836,18 +872,24 @@ class Engine:
         # Also the more we considered a move, the more bias we have towards it
         # furthermore if we only used computer evaluation (i.e. depth = 0), then we have extra
         # negative penalty
+        # We add extra parameter to control for the noise level at different stages of the game
+        noise_dic = {"opening": 0.8,
+                     "midgame": 1.2,
+                     "endgame": 0.3,}
+        
         depth_penalty = 20
         zero_depth_penalty = 50
         
         # Furthermore, humans won't delay capturing pieces if they're free and enpris. So like
         # we gave capturing moves higher spotting chance, we shall also encourage capturing moves here too
         eval_only_dic = {}
+        noise_phase = noise_dic[game_phase]
         for move_uci in new_human_move_evals.keys():
             eval_, depth_considered = new_human_move_evals[move_uci]            
             base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20            
             noise_sd = 4*base_noise_sd/(target_time*(depth_considered+4))
             
-            noise = np.random.randn()*noise_sd - depth_penalty*(2- depth_considered)
+            noise = np.random.randn()*noise_sd*noise_phase - depth_penalty*(2- depth_considered)
             if depth_considered == 0:
                 noise -= zero_depth_penalty       
             
@@ -1049,6 +1091,7 @@ class Engine:
             
             This function should be called the first thing before making any calculations.
         """
+        
         self.log += "Received and updating info_dic: \n"
         self.log += str(info_dic) + "\n"        
         self.input_info.update(info_dic)
@@ -1082,6 +1125,7 @@ class Engine:
         if auto_update_analytics == True:
             self.calculate_analytics()
         
+        
     def calculate_analytics(self):
         """ Before any move making or human analysis is performed, statistics must be computed for
             the infomation dict self.input_info. This function must be called after every
@@ -1097,7 +1141,9 @@ class Engine:
         self.log += "Performing initial quick analysis perhaps used later by stockfish. \n"
         start = time.time()
         no_lines = len(list(self.current_board.legal_moves))
+        
         analysis = STOCKFISH.analyse(self.current_board, limit=chess.engine.Limit(time=0.05), multipv=no_lines)
+        
         if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
             analysis = [analysis]
         self.stockfish_analysis = analysis
@@ -1220,7 +1266,7 @@ class Engine:
             target_time = ratio*total_time
         else:
             # maximum amount of human time capped, use rest for ponder
-            target_time = 2.5*0.6
+            target_time = total_time*0.6
             
         self.log += "Decided target time for human evaluation to be: {} \n".format(target_time)
         return max(target_time,0.1)
@@ -1234,7 +1280,7 @@ class Engine:
         """
         self.log += "Deciding time taken to make the move from receiving input. \n"
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = max(QUICKNESS*self_initial_time/(85 + self_initial_time*0.25),0.1)
+        base_time = max(QUICKNESS*self_initial_time/(80 + self_initial_time**0.8),0.1)
         self.log += "Initial base time without calculations: {} \n".format(base_time)
         # we move faster depending on whether we are proportionally behind on time
         # or move slower if we are ahead
@@ -1257,11 +1303,14 @@ class Engine:
             game_phase = phase_of_game(self.current_board)
             # in the opening and endgame we spend less time on average than the mid game
             if game_phase == "opening":
-                base_time *= 0.5
+                base_time *= 0.3
             elif game_phase == "midgame":
-                base_time *= 1.2
+                if self_initial_time > 60:
+                    base_time *= 1.7
+                else:
+                    base_time *= 1.4
             else:
-                base_time *=0.5
+                base_time *=0.7
             
             self.log += "Base time after game phase analysis: {} \n".format(base_time)
             
@@ -1283,6 +1332,9 @@ class Engine:
                 self.log += "Opponent has just blundered, acting startled with longer think time. \n"
                 base_time *= 2
             
+            # based on the time control, we have a higher end multiplier
+            high_range_multiplier = self_initial_time**0.35/(60**0.35)
+            
             # Now sort according to moods
             if self.mood == "confident":
                 # low variation, solid move times.                
@@ -1292,14 +1344,14 @@ class Engine:
                     time_taken = base_time * (1.4+ np.clip(0.2*np.random.randn(), -0.4, 0.7))
                 else:
                     # slightly longer think, larger variation
-                    time_taken = base_time * (3.9 + np.clip(0.7*np.random.randn(), -1.7, 2.0))
+                    time_taken = base_time * (3.2 + np.clip(0.7*np.random.randn(), -1.7, 2.0)) * high_range_multiplier
             elif self.mood == "cocky":
                 # medium variation, quick move times
                 if np.random.random() < 0.9: # then we have a quick low variation move
                     time_taken = base_time * (0.7 + np.clip(0.3*np.random.randn(), -0.2, 0.7))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (3.7 + np.clip(0.4*np.random.randn(), -0.8, 0.8))
+                    time_taken = base_time * (3.1 + np.clip(0.4*np.random.randn(), -0.8, 0.8)) * high_range_multiplier
             elif self.mood == "cautious":
                 # medium variation, slow moves
                 if np.random.random() < 0.6: # then we have a quick low variation move
@@ -1308,12 +1360,12 @@ class Engine:
                     time_taken = base_time * (2.5+ np.clip(0.25*np.random.randn(), -0.4, 0.7))
                 else:
                     # slightly longer think, large variation
-                    time_taken = base_time * (6.9 + np.clip(1.4*np.random.randn(), -3.9, 4.5))
+                    time_taken = base_time * (5.9 + np.clip(1.4*np.random.randn(), -3.9, 4.5)) * high_range_multiplier
             elif self.mood == "tilted":
                 # if we have just made the blunder, pause for long time to reflect on it
                 # otherwise low variation, quick move times
                 if self.just_blundered == True:
-                    time_taken = base_time * (5.2 + np.clip(0.7*np.random.randn(), -1.5, 1.5))
+                    time_taken = base_time * (4.2 + np.clip(0.7*np.random.randn(), -1.5, 1.5)) * high_range_multiplier
                 else:
                     time_taken = base_time * (0.6 + np.clip(0.08*np.random.randn(), -0.2, 0.2))
             elif self.mood == "hurry":
@@ -1324,7 +1376,7 @@ class Engine:
                     time_taken = base_time * (1.3 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (2.4 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
+                    time_taken = base_time * (2.0 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
                 
                 # if we are in hurry mode (i.e. we are in low time), then our time taken
                 # depends on how much time we have left
@@ -1337,21 +1389,25 @@ class Engine:
                     time_taken = base_time * (1.9 + np.clip(0.3*np.random.randn(), -0.5, 0.8))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (4.6 + np.clip(0.4*np.random.randn(), -0.8, 1.0))
+                    time_taken = base_time * (3.6 + np.clip(0.4*np.random.randn(), -0.8, 1.0)) * high_range_multiplier
             
             self.log += "Decided time taken after mood analysis: {} \n".format(time_taken)
         
         # we also use reflective moving, which is to play faster when opponent has been playing
         # fast over the last few moves (as we feel the pressure to keep up with the pace)
-        # and slower when opponents are moving slower
+        # we do not move slower if opponents has beserked, because our mood function should take care of that
         if len(self.input_info["opp_clock_times"]) >= 4:
             recent_time = (self.input_info["opp_clock_times"][-4] - self.input_info["opp_clock_times"][-1])/3 # opponents average move time in last 3 moves
             non_recent_time = (self.input_info["opp_clock_times"][0] - self.input_info["opp_clock_times"][-1])/(len(self.input_info["opp_clock_times"])-1)
             target_time_spent = 0.2*non_recent_time + 0.8*recent_time
+            # normalise for what the opponent total time is (in the case where our starting time was different)
+            # eg beserks
+            berserk_ratio = max(self.input_info["opp_initial_time"] / self.input_info["self_initial_time"],1)
+            target_time_spent /= berserk_ratio
             
             # sometimes we don't use this
-            if np.random.random() < 0.8:
-                time_taken = 0.3*target_time_spent + time_taken * 0.7
+            if np.random.random() < 0.4:
+                time_taken = 0.6*target_time_spent + time_taken * 0.4
                 self.log += "Decided time taken after opponent speed consideration: {} \n".format(time_taken)
         
         time_taken = max(time_taken, 0.1)
@@ -1645,8 +1701,11 @@ class Engine:
         else:
             # ponder width has been preset
             ponder_depth = round(variations_allowed / (ponder_width * search_width))
+        
         if use_ponder:
+            
             analysis_object = PONDER_STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.05), multipv=ponder_width)
+            
         else:
             analysis_object = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.02), multipv=ponder_width)
         if isinstance(analysis_object, dict):
@@ -1661,6 +1720,12 @@ class Engine:
         opp_moves_considered = [entry["pv"][0].uci() for entry in analysis_object]
         san_opp_moves_considered = [board.san(chess.Move.from_uci(x)) for x in opp_moves_considered]
         self.log += "Considering with ponder depth {}, moves in this position: {} \n".format(ponder_depth, san_opp_moves_considered)
+        
+        # For noise dictionary. We implement different levels of noise depending on the stage of the game
+        noise_dic = {"opening": 0.8,
+                     "midgame": 1.2,
+                     "endgame": 0.3,}
+        
         
         # Now execute or recursive function to find response dictionary        
         return_dic = {}
@@ -1684,6 +1749,7 @@ class Engine:
                 
             re_evaluate_dic = self._re_evaluate(dummy_board, top_human_moves, search_width, depth=ponder_depth, prev_board = board.copy(), limit=[ponder_depth*search_width, time_allowed/2], use_ponder=use_ponder)
             # adding noise
+            noise_phase = noise_dic[game_phase]
             for move_uci in re_evaluate_dic.keys():
                 eval_, depth_considered = re_evaluate_dic[move_uci]
                 if eval_ is  None:
@@ -1709,7 +1775,8 @@ class Engine:
                     re_evaluate_dic[move_uci][0] = new_eval - 100 # penalty
                 base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20                             
                 noise_sd = 4*base_noise_sd/(time_allowed*(depth_considered+4))
-                noise = np.random.randn()*noise_sd                
+                
+                noise = np.random.randn()*noise_sd*noise_phase        
                 re_evaluate_dic[move_uci][0] += noise                
                 # encourage capture moves, depending on how enpris the piece is
                 move_obj = chess.Move.from_uci(move_uci)
@@ -1874,11 +1941,12 @@ class Engine:
         time_spent = move_end - move_start
         
         time_per_position = 0.1 # max time spent per ponder position
-        search_width = self._decide_breadth() # this is slightly incorrect, but close enough
-        if return_dic["time_take"] - time_spent > time_per_position*search_width * 1.15:
+        time_left = return_dic["time_take"] - time_spent
+        search_width = self._decide_breadth(time_left) # this is slightly incorrect, but close enough
+        if time_left > time_per_position*search_width * 1.15:
             self.log += "Have enough time to ponder for he next position. Time taken so far: {} \n".format(time_spent)
             ponder_start = time.time()
-            ponder_dic = self.ponder(after_board, (return_dic["time_take"] - time_spent)/1.15, search_width, time_per_position=time_per_position, prev_board=self.current_board.copy())
+            ponder_dic = self.ponder(after_board, time_left/1.15, search_width, time_per_position=time_per_position, prev_board=self.current_board.copy())
             ponder_end = time.time()
             self.log += "Took {} seconds for pondering. \n".format(ponder_end - ponder_start)
         else:
@@ -1898,9 +1966,9 @@ class Engine:
         return return_dic
 
 if __name__ == "__main__":
-    engine = Engine(playing_level=5)
+    engine = Engine(playing_level=6)
     # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
-    input_dic ={'fens': ['2rq1k1r/1b1n1ppp/p1n1p3/1pb1P1N1/8/2NB2QP/PPP3P1/R1B2R1K b - - 6 15', '2rq1k1r/1b3ppp/p1n1p3/1pb1n1N1/8/2NB2QP/PPP3P1/R1B2R1K w - - 0 16', '2rq1k1r/1b3ppp/p1n1N3/1pb1n3/8/2NB2QP/PPP3P1/R1B2R1K b - - 0 16', '2rq3r/1b2kppp/p1n1N3/1pb1n3/8/2NB2QP/PPP3P1/R1B2R1K w - - 1 17', '2rq3r/1b2kppp/p1n5/1pN1n3/8/2NB2QP/PPP3P1/R1B2R1K b - - 0 17', '2r4r/1b2kppp/p1nq4/1pN1n3/8/2NB2QP/PPP3P1/R1B2R1K w - - 1 18', '2r4r/1N2kppp/p1nq4/1p2n3/8/2NB2QP/PPP3P1/R1B2R1K b - - 0 18', '2r4r/1N2kppp/p1n5/1p2n3/3q4/2NB2QP/PPP3P1/R1B2R1K w - - 1 19'], 'self_clock_times': [45, 45, 43, 41, 38, 36, 35, 32], 'opp_clock_times': [52, 51, 45, 36, 35, 33, 29, 25], 'last_moves': ['d7e5', 'g5e6', 'f8e7', 'e6c5', 'd8d6', 'c5b7', 'd6d4'], 'side': True, 'self_initial_time': 60, 'opp_initial_time': 60}
+    input_dic ={'fens': ['2q1r1k1/Rp1n1pb1/1Pp3pp/2P5/2pP4/2N5/5PPP/2BQ2K1 w - - 0 26', '2q1r1k1/Rp1n1pb1/1Pp3pp/2P5/2pP4/2N5/3B1PPP/3Q2K1 b - - 1 26', '2q1r1k1/Rp1n1p2/1Pp3pp/2P5/2pb4/2N5/3B1PPP/3Q2K1 w - - 0 27', '2q1r1k1/Rp1n1p2/1Pp3pp/2P5/2pb4/8/3BNPPP/3Q2K1 b - - 1 27', '2q1r1k1/Rp1n1p2/1Pp3pp/2b5/2p5/8/3BNPPP/3Q2K1 w - - 0 28', '2q1r1k1/Rp1n1p2/1Pp3pB/2b5/2p5/8/4NPPP/3Q2K1 b - - 0 28', '2q1r1k1/Rp1n1p2/1bp3pB/8/2p5/8/4NPPP/3Q2K1 w - - 0 29', '2q1r1k1/Rp1n1p2/1bp3pB/8/2p5/8/4NPPP/Q5K1 b - - 1 29'], 'self_clock_times': [39, 37, 36, 34, 34, 32, 31, 29], 'opp_clock_times': [46, 42, 42, 41, 39, 37, 36, 35], 'last_moves': ['c1d2', 'g7d4', 'c3e2', 'd4c5', 'd2h6', 'c5b6', 'd1a1'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
     start = time.time()
     engine.update_info(input_dic)
     print(engine.make_move(log=False))
