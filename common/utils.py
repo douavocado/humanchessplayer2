@@ -39,11 +39,7 @@ def check_safe_premove(board:chess.Board, premove_uci: str):
     
     # check premove is valid move
     if board.color_at(move_obj.from_square) is None:
-        raise Exception("Premove uci {} is not valid for board with fen{}".format(premove_uci, board.fen()))
-    
-    # takeback premoves are always safe
-    if board.color_at(move_obj.to_square) == (not board.turn):
-        return True
+        raise Exception("Premove uci {} is not valid for board with fen {}".format(premove_uci, board.fen()))
     
     # calculate current threatened levels
     current_threatened_board = get_threatened_board(board, colour=not board.turn, piece_types=[1,2,3,4,5])

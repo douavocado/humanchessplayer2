@@ -14,9 +14,9 @@ MOVE_TO_WEIGHTS_MID_PTH = 'models/model_weights/piece_to_weights_midgame.pth'
 MOVE_TO_WEIGHTS_END_PTH = 'models/model_weights/piece_to_weights_endgame.pth'
 MOVE_TO_WEIGHTS_OP_PTH = 'models/model_weights/piece_to_weights_opening.pth'
 
-QUICKNESS = 1.8 # adjust depending on computer fastness. The bigger the number the slower the moves made
-DIFFICULTY = 4 # engine difficulty
-MOUSE_QUICKNESS = 20 # number between 0 and 10. Bigger the number the slower we are with mouse movements
+QUICKNESS = 2.0 # adjust depending on computer fastness. The bigger the number the slower the moves made
+DIFFICULTY = 3 # engine difficulty
+MOUSE_QUICKNESS = 3 # number between 0 and 10. Bigger the number the slower we are with mouse movements
 
 # BENCHMARKS
 """ 
