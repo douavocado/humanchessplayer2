@@ -6,6 +6,7 @@ import chess.polyglot
 import numpy as np
 import os
 import time
+import sys
 
 from engine import Engine
 
@@ -37,7 +38,11 @@ class TestEngineTimePondering(unittest.TestCase):
         self.patcher5.start()
         
         # Create a test engine instance
-        self.engine = Engine(playing_level=6, log_file=os.path.join(os.getcwd(), 'test_log.txt'))
+        self.log_file = os.path.join(os.getcwd(), 'test_log.txt')
+        self.engine = Engine(playing_level=6, log_file=self.log_file)
+        
+        # Flag to track test failure
+        self.test_failed = False
         
         # Set up basic input info for testing
         self.basic_input_info = {
@@ -80,8 +85,36 @@ class TestEngineTimePondering(unittest.TestCase):
             "activity": 15,
         }
 
+    def run(self, result=None):
+        """Override the run method to track test failures and output logs immediately."""
+        self.test_failed = False
+        test_method_name = getattr(self, '_testMethodName', None)
+        test_method = getattr(self, test_method_name, None)
+        
+        # Call the original run method
+        super(TestEngineTimePondering, self).run(result)
+        
+        # Check if the test failed
+        if result and test_method_name in [failure[0]._testMethodName for failure in result.failures + result.errors]:
+            self.test_failed = True
+            # Output engine logs immediately
+            if os.path.exists(self.log_file):
+                print(f"\nTest {test_method_name} failed. Engine log contents:")
+                print("-" * 50)
+                with open(self.log_file, 'r') as f:
+                    print(f.read())
+                print("-" * 50)
+
     def tearDown(self):
         """Clean up after each test method."""
+        # Print log if test failed
+        if self.test_failed and os.path.exists(self.log_file):
+            print("\nTest failed. Engine log contents:")
+            print("-" * 50)
+            with open(self.log_file, 'r') as f:
+                print(f.read())
+            print("-" * 50)
+        
         # Stop the patchers
         self.patcher1.stop()
         self.patcher2.stop()
@@ -90,8 +123,8 @@ class TestEngineTimePondering(unittest.TestCase):
         self.patcher5.stop()
         
         # Remove test log file if it exists
-        if os.path.exists('test_log.txt'):
-            os.remove('test_log.txt')
+        if os.path.exists(self.log_file):
+            os.remove(self.log_file)
 
     def test_set_target_time(self):
         """Test the _set_target_time method."""
@@ -162,6 +195,10 @@ class TestEngineTimePondering(unittest.TestCase):
             'pv': [chess.Move.from_uci('e7e5')],
             'score': chess.engine.PovScore(chess.engine.Cp(-50), chess.BLACK)
         }
+        
+        # Mock the get_move_dic method to return a tuple of (score, move_dic)
+        mock_move_dic = {'e7e5': 0.8, 'e7e6': 0.2}
+        self.mock_move_scorer.get_move_dic.return_value = (0.5, mock_move_dic)
         
         # Mock extend_mate_score to return the score unchanged
         with patch('engine.extend_mate_score', side_effect=lambda x: x):
