@@ -195,3 +195,13 @@ class Premover:
         except ValueError:
              self.logger.add_log(f"ERROR: Invalid UCI {candidate_premove} during safety check.\n")
              return None
+    
+def cleanup():
+     if STOCKFISH:
+         try:
+             STOCKFISH.quit()
+         except: # Ignore errors during cleanup
+             pass
+
+import atexit
+atexit.register(cleanup)

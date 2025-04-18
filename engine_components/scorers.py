@@ -40,3 +40,6 @@ class Scorers:
         if self.stockfish_scorer is None:
              self.logger.add_log("WARNING: Stockfish scorer was not initialized.\n")
         return self.stockfish_scorer
+
+    def close_engines(self):
+        self.stockfish_scorer.close_engine()

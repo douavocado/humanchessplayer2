@@ -44,28 +44,31 @@ class Ponderer:
         else:
             return STOCKFISH
 
-    def _ponder_moves_internal(self, board: chess.Board, move_ucis: list, search_width: int, prev_board: chess.Board = None, use_ponder_engine: bool = False) -> dict:
+    def _ponder_moves_internal(self, board: chess.Board, move_ucis: list, search_width: int, prev_board: chess.Board = None, use_ponder_engine: bool = False, log: bool = True) -> dict:
         """
         Internal helper for pondering. Evaluates opponent responses to given moves.
         Returns a dictionary {move_uci: [response_uci, eval_after_response]}
         """
-        self.logger.add_log(f"Internally pondering moves {move_ucis} for FEN {board.fen()}\n")
+        if log:
+            self.logger.add_log(f"Internally pondering moves {move_ucis} for FEN {board.fen()}\n")
         return_dic = {}
         engine = self._get_engine(use_ponder_engine)
         side = self.state_manager.get_side() # Our side
 
         if engine is None or side is None:
-             self.logger.add_log("ERROR: Cannot ponder moves, engine or side not available.\n")
-             return {uci: [None, 0] for uci in move_ucis} # Return default failure state
+            if log:
+                self.logger.add_log("ERROR: Cannot ponder moves, engine or side not available.\n")
+            return {uci: [None, 0] for uci in move_ucis} # Return default failure state
 
         for move_uci in move_ucis:
             try:
                 dummy_board = board.copy()
                 move_obj = chess.Move.from_uci(move_uci)
                 if move_obj not in dummy_board.legal_moves:
-                     self.logger.add_log(f"WARNING: Skipping illegal move {move_uci} during internal ponder.\n")
-                     return_dic[move_uci] = [None, 0] # Indicate failure for this move
-                     continue
+                    if log:
+                        self.logger.add_log(f"WARNING: Skipping illegal move {move_uci} during internal ponder.\n")
+                    return_dic[move_uci] = [None, 0] # Indicate failure for this move
+                    continue
 
                 dummy_board.push(move_obj)
 
@@ -76,28 +79,37 @@ class Ponderer:
                     eval_ = 0
                     if winner == side: eval_ = 2500
                     elif winner == (not side): eval_ = -2500
-                    self.logger.add_log(f"Game ends after {move_uci}. Outcome: {outcome.termination}, Winner: {winner}, Eval: {eval_}\n")
+                    if log:
+                        self.logger.add_log(f"Game ends after {move_uci}. Outcome: {outcome.termination}, Winner: {winner}, Eval: {eval_}\n")
                     return_dic[move_uci] = [None, eval_]
                     continue
 
                 # Get opponent's likely responses using human logic (opponent's perspective)
                 game_phase = phase_of_game(dummy_board)
                 # Note: Human probs are calculated from the perspective of the current turn (opponent)
-                un_altered_move_dic = self.human_move_logic.get_human_probabilities(dummy_board, game_phase)
+                un_altered_move_dic = self.human_move_logic.get_human_probabilities(dummy_board, game_phase, log=False)
 
                 if not un_altered_move_dic or len(un_altered_move_dic) <= 2:
-                    self.logger.add_log("Too few human moves found for opponent response, using legal moves.\n")
+                    if log:
+                        self.logger.add_log("Too few human moves found for opponent response, using legal moves.\n")
                     root_moves = list(dummy_board.legal_moves)
                 else:
                     # Alter probabilities from opponent's perspective
-                    altered_move_dic = self.human_move_logic.alter_move_probabilties(un_altered_move_dic, dummy_board) # Pass current board (opponent's turn)
+                    altered_move_dic = self.human_move_logic.alter_move_probabilties(
+                        un_altered_move_dic, 
+                        dummy_board, 
+                        log=False,
+                        prev_board=board.copy(),  # Pass the previous board explicitly
+                        prev_prev_board=prev_board if prev_board else None    # We often don't have prev_prev_board in pondering, pass None
+                    )
                     human_move_ucis = list(altered_move_dic.keys())
                     root_moves = [chess.Move.from_uci(x) for x in human_move_ucis[:search_width]]
 
                 if not root_moves:
-                     self.logger.add_log(f"WARNING: No legal moves for opponent after {move_uci}. Setting eval to 0.\n")
-                     return_dic[move_uci] = [None, 0] # Should be draw/stalemate?
-                     continue
+                    if log:
+                        self.logger.add_log(f"WARNING: No legal moves for opponent after {move_uci}. Setting eval to 0.\n")
+                    return_dic[move_uci] = [None, 0] # Should be draw/stalemate?
+                    continue
 
 
                 # Analyze opponent's best response from the filtered set
@@ -110,7 +122,8 @@ class Ponderer:
                     eval_after_response = extend_mate_score(single_analysis['score'].pov(side).score(mate_score=2500))
                     return_dic[move_uci] = [response_uci, eval_after_response]
                 else:
-                    self.logger.add_log(f"ERROR: No PV found in analysis for opponent response after {move_uci}. Analysis: {single_analysis}. Using random response.\n")
+                    if log:
+                        self.logger.add_log(f"ERROR: No PV found in analysis for opponent response after {move_uci}. Analysis: {single_analysis}. Using random response.\n")
                     response_uci = random.choice(root_moves).uci()
                     # Use current eval as fallback (less accurate)
                     current_analysis = self.analyzer.get_stockfish_analysis()
@@ -120,10 +133,12 @@ class Ponderer:
                     return_dic[move_uci] = [response_uci, eval_fallback]
 
             except (ValueError, chess.engine.EngineError, Exception) as e:
-                 self.logger.add_log(f"ERROR during internal ponder for move {move_uci}: {e}\n")
-                 return_dic[move_uci] = [None, 0] # Indicate failure
+                if log:
+                    self.logger.add_log(f"ERROR during internal ponder for move {move_uci}: {e}\n")
+                return_dic[move_uci] = [None, 0] # Indicate failure
 
-        self.logger.add_log(f"Internal ponder results: {return_dic}\n")
+        if log:
+            self.logger.add_log(f"Internal ponder results: {return_dic}\n")
         return return_dic
 
 
@@ -142,7 +157,7 @@ class Ponderer:
         if side is None: return [0, 0] # Cannot evaluate without side
 
         # Base case: Ponder the immediate response
-        ponder_results = self._ponder_moves_internal(board, [move_uci], no_root_moves, prev_board=prev_board, use_ponder_engine=use_ponder_engine)
+        ponder_results = self._ponder_moves_internal(board, [move_uci], no_root_moves, prev_board=prev_board, use_ponder_engine=use_ponder_engine, log=False)
         response_uci, current_eval = ponder_results.get(move_uci, [None, 0])
         end_time = time.time()
         time_taken = end_time - start_time
@@ -416,12 +431,18 @@ class Ponderer:
                 game_phase = phase_of_game(dummy_board_after_opp)
 
                 # Get our likely responses using human logic
-                top_human_move_dic = self.human_move_logic.get_human_probabilities(dummy_board_after_opp, game_phase)
+                top_human_move_dic = self.human_move_logic.get_human_probabilities(dummy_board_after_opp, game_phase, log=False)
 
                 if not top_human_move_dic or len(top_human_move_dic) <= 2:
                     our_candidate_moves = [m.uci() for m in dummy_board_after_opp.legal_moves]
                 else:
-                    altered_move_dic = self.human_move_logic.alter_move_probabilties(top_human_move_dic, dummy_board_after_opp)
+                    altered_move_dic = self.human_move_logic.alter_move_probabilties(
+                        top_human_move_dic, 
+                        dummy_board_after_opp, 
+                        log=False,
+                        prev_board=board.copy(),  # The board before the opponent's move
+                        prev_prev_board=prev_board if prev_board else None  # The board before that if available
+                    )
                     our_candidate_moves = list(altered_move_dic.keys())[:search_width] # Top N altered moves
 
                 if not our_candidate_moves: continue # No moves for us to make

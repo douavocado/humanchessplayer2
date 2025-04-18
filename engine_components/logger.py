@@ -26,3 +26,7 @@ class Logger:
         except IOError as e:
             print(f"Error writing to log file {self.log_file}: {e}")
             # Optionally, handle the error differently, e.g., retry or log to console
+
+    def flush(self):
+        """Writes any remaining messages in the buffer to the log file."""
+        self.write_log()
