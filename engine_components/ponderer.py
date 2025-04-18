@@ -165,7 +165,7 @@ class Ponderer:
 
 
         if depth <= 1 or response_uci is None:
-            depth_considered = limit[2] if limit else 1
+            depth_considered = limit[2] if limit else None
             # self.logger.add_log(f"Base case reached (depth={depth}, response={response_uci}). Final Eval: {current_eval}, Depth Considered: {depth_considered}\n")
             return [current_eval, depth_considered]
 
@@ -187,8 +187,7 @@ class Ponderer:
             new_evaluations_left = evaluations_left - 1 # Decrement evals needed
 
             next_board = board.copy()
-            next_board.push_uci(move_uci)
-            next_board.push_uci(response_uci) # Board state after opponent's response
+            next_board.push_uci(move_uci) # Board state after our move
 
             # --- Adaptive Depth Control ---
             next_depth = depth - 1 # Default next depth
