@@ -582,9 +582,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    engine = Engine(playing_level=3)
+    engine = Engine(playing_level=4)
     # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
-    input_dic ={'fens': ['2q1r1k1/Rp1n1pb1/1Pp3pp/2P5/2pP4/2N5/5PPP/2BQ2K1 w - - 0 26', '2q1r1k1/Rp1n1pb1/1Pp3pp/2P5/2pP4/2N5/3B1PPP/3Q2K1 b - - 1 26', '2q1r1k1/Rp1n1p2/1Pp3pp/2P5/2pb4/2N5/3B1PPP/3Q2K1 w - - 0 27', '2q1r1k1/Rp1n1p2/1Pp3pp/2P5/2pb4/8/3BNPPP/3Q2K1 b - - 1 27', '2q1r1k1/Rp1n1p2/1Pp3pp/2b5/2p5/8/3BNPPP/3Q2K1 w - - 0 28', '2q1r1k1/Rp1n1p2/1Pp3pB/2b5/2p5/8/4NPPP/3Q2K1 b - - 0 28', '2q1r1k1/Rp1n1p2/1bp3pB/8/2p5/8/4NPPP/3Q2K1 w - - 0 29', '2q1r1k1/Rp1n1p2/1bp3pB/8/2p5/8/4NPPP/Q5K1 b - - 1 29'], 'self_clock_times': [39, 37, 36, 34, 34, 32, 31, 29], 'opp_clock_times': [46, 42, 42, 41, 39, 37, 36, 35], 'last_moves': ['c1d2', 'g7d4', 'c3e2', 'd4c5', 'd2h6', 'c5b6', 'd1a1'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
+    input_dic ={'fens': ['r1b2rk1/p2n1p2/1p2pp1p/P7/2BPPq2/2P2N2/2Q2PPP/R3K2R w KQ - 0 18', 'r1b2rk1/p2n1p2/Pp2pp1p/8/2BPPq2/2P2N2/2Q2PPP/R3K2R b KQ - 0 18', 'rnb2rk1/p4p2/Pp2pp1p/8/2BPPq2/2P2N2/2Q2PPP/R3K2R w KQ - 1 19', 'rnb2rk1/p4p2/Pp2pp1p/8/2BPPq2/2P2N2/2Q2PPP/R4RK1 b - - 2 19', 'rnb2rk1/p1q2p2/Pp2pp1p/8/2BPP3/2P2N2/2Q2PPP/R4RK1 w - - 3 20', 'rnb2rk1/p1q2p2/Pp2pp1p/8/3PP3/2PB1N2/2Q2PPP/R4RK1 b - - 4 20', 'r1b2rk1/p1qn1p2/Pp2pp1p/8/3PP3/2PB1N2/2Q2PPP/R4RK1 w - - 5 21', 'r1b2rk1/p1qn1p2/Pp2pp1p/8/2PPP3/3B1N2/2Q2PPP/R4RK1 b - - 0 21'], 'self_clock_times': [40, 39, 38, 37, 36, 35, 34, 33], 'opp_clock_times': [50, 49, 48, 47, 45, 44, 42, 40], 'last_moves': ['a5a6', 'd7b8', 'e1g1', 'f4c7', 'c4d3', 'b8d7', 'c3c4'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
     start = time.time()
     engine.update_info(input_dic)
     print(engine.make_move(log=False))
