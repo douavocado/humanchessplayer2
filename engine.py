@@ -217,7 +217,7 @@ class Engine:
             re_evaluations_dic = self.ponderer.re_evaluate_moves(
                 current_board, re_evaluate_moves, no_root_moves,
                 depth=depth, prev_board=self.state_manager.get_prev_board(),
-                limit=[depth * no_root_moves, time_allowed]
+                limit=[depth * no_root_moves, time_allowed], log=True
             )
             
             # Update evaluations with re-evaluated results

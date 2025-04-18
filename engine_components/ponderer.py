@@ -232,7 +232,7 @@ class Ponderer:
             return self._recursive_ponder(next_board, response_uci, no_root_moves, depth - 1, prev_board=board.copy(), use_ponder_engine=use_ponder_engine)
 
 
-    def re_evaluate_moves(self, board: chess.Board, moves_to_re_evaluate: list, no_root_moves: int, depth: int = 1, prev_board: chess.Board = None, limit: list = None, use_ponder_engine: bool = False) -> dict:
+    def re_evaluate_moves(self, board: chess.Board, moves_to_re_evaluate: list, no_root_moves: int, depth: int = 1, prev_board: chess.Board = None, limit: list = None, use_ponder_engine: bool = False, log: bool = True) -> dict:
         """
         Re-evaluates a list of candidate moves using recursive pondering.
 
@@ -242,8 +242,9 @@ class Ponderer:
         Returns:
             Dictionary {move_uci: [evaluation, depth_considered]}
         """
-        self.logger.add_log(f"Re-evaluating moves: {moves_to_re_evaluate} with depth {depth}, RootMovesWidth={no_root_moves}\n")
-        if limit: self.logger.add_log(f"Limits: Evals={limit[0]}, Time={limit[1]:.3f}s\n")
+        if log:
+            self.logger.add_log(f"Re-evaluating moves: {moves_to_re_evaluate} with depth {depth}, RootMovesWidth={no_root_moves}\n")
+            if limit: self.logger.add_log(f"Limits: Evals={limit[0]}, Time={limit[1]:.3f}s\n")
 
         random.shuffle(moves_to_re_evaluate) # Avoid bias from move order
         return_dic = {}
@@ -257,7 +258,8 @@ class Ponderer:
 
             for move_uci in moves_to_re_evaluate:
                 if time_left <= 0.07 or evaluations_left <= 0:
-                    self.logger.add_log(f"Stopping re-evaluation early for {move_uci}: Time Left={time_left:.3f}s, Evals Left={evaluations_left}\n")
+                    if log:
+                        self.logger.add_log(f"Stopping re-evaluation early for {move_uci}: Time Left={time_left:.3f}s, Evals Left={evaluations_left}\n")
                     return_dic[move_uci] = [None, 0] # Indicate not evaluated
                     continue
 
@@ -280,12 +282,13 @@ class Ponderer:
         else: # No limits
             for move_uci in moves_to_re_evaluate:
                 eval_result, _ = self._recursive_ponder(
-                    board, move_uci, no_root_moves, depth, prev_board=prev_board, use_ponder_engine=use_ponder_engine
+                    board, move_uci, no_root_moves, depth, prev_board=prev_board, use_ponder_engine=use_ponder_engine, log=log
                 )
                 # Depth considered is just the requested depth when no limits
                 return_dic[move_uci] = [eval_result, depth]
 
-        self.logger.add_log(f"Re-evaluation results: {return_dic}\n")
+        if log:
+            self.logger.add_log(f"Re-evaluation results: {return_dic}\n")
         return return_dic
 
 
@@ -452,7 +455,7 @@ class Ponderer:
                 re_evaluate_dic = self.re_evaluate_moves(
                     dummy_board_after_opp, our_candidate_moves, search_width,
                     depth=ponder_depth, prev_board=board.copy(), # Pass board before opp move
-                    limit=re_eval_limit, use_ponder_engine=use_ponder_engine
+                    limit=re_eval_limit, use_ponder_engine=use_ponder_engine, log=False
                 )
 
                 # Apply noise and select best response based on noisy eval
