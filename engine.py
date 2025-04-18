@@ -8,6 +8,10 @@ import os
 import datetime
 import chess
 import random
+import atexit
+import threading
+import signal
+import sys
 
 # Import all the components
 from engine_components.logger import Logger
@@ -26,6 +30,9 @@ from engine_components.ponderer import Ponderer
 from engine_components.premover import Premover
 
 from common.board_information import phase_of_game
+
+# Flag to track if cleanup has been performed
+_cleanup_performed = False
 
 class Engine:
     """
@@ -70,6 +77,9 @@ class Engine:
         self.logger.add_log(f"Engine initialized with playing level {playing_level}\n")
         self.logger.add_log(f"Opening book path: {opening_book_path}\n")
         self.logger.write_log()
+        
+        # Register cleanup with atexit to ensure resources are released even if __del__ isn't called
+        atexit.register(self.cleanup)
 
     def _write_log(self):
         """Writes down thinking into a log file for debugging."""
@@ -444,15 +454,148 @@ class Engine:
         self.logger.add_log(f"Returning move result: {return_dic}\n")
         return return_dic
     
-    def __del__(self):
-        """Clean up resources when the engine is destroyed."""
+    def cleanup(self):
+        """
+        Comprehensive cleanup of all resources.
+        This method ensures all components release their resources properly.
+        """
+        global _cleanup_performed
+        
+        # Prevent multiple cleanups
+        if _cleanup_performed:
+            return
+            
+        _cleanup_performed = True
+        
+        self.logger.add_log("Performing comprehensive cleanup of all engine resources...\n")
+        
+        # 1. Find and terminate any non-daemon threads
         try:
-            # Close any open resources
-            if hasattr(self, 'ponderer'):
-                self.ponderer.close_ponder_engine()
-            if hasattr(self, 'analyzer'):
-                self.analyzer.close_engine()
-            if hasattr(self, 'opening_book_handler'):
-                self.opening_book_handler.close_book()
+            self.logger.add_log("Checking for active threads to terminate...\n")
+            for thread in threading.enumerate():
+                if thread != threading.current_thread() and not thread.daemon:
+                    self.logger.add_log(f"Found active thread: {thread.name}\n")
+                    # For threads that support it, try to signal termination
+                    if hasattr(thread, 'terminate'):
+                        thread.terminate()
+                    elif hasattr(thread, 'stop'):
+                        thread.stop()
+                    # Don't try to join threads here as it might block
         except Exception as e:
-            print(f"Error during Engine cleanup: {e}")
+            self.logger.add_log(f"Error while terminating threads: {e}\n")
+        
+        # 2. Clean up Stockfish and other external processes - very important to do this first
+        # 2a. Ponderer (closes dedicated Stockfish instance)
+        if hasattr(self, 'ponderer'):
+            try:
+                self.logger.add_log("Cleaning up ponderer resources...\n")
+                self.ponderer.close_ponder_engine()
+            except Exception as e:
+                self.logger.add_log(f"Error during ponderer cleanup: {e}\n")
+        
+        # 2b. Analyzer (closes main Stockfish instance)
+        if hasattr(self, 'analyzer'):
+            try:
+                self.logger.add_log("Cleaning up analyzer resources...\n")
+                self.analyzer.close_engine()
+            except Exception as e:
+                self.logger.add_log(f"Error during analyzer cleanup: {e}\n")
+                
+        # 2c. Scorers (may have Stockfish or other engines)
+        if hasattr(self, 'scorers'):
+            try:
+                self.logger.add_log("Cleaning up scorer resources...\n")
+                self.scorers.close_engines()
+            except Exception as e:
+                self.logger.add_log(f"Error during scorers cleanup: {e}\n")
+        
+        # 3. Opening book handler (file resources)
+        if hasattr(self, 'opening_book_handler'):
+            try:
+                self.logger.add_log("Cleaning up opening book resources...\n")
+                self.opening_book_handler.close_book()
+            except Exception as e:
+                self.logger.add_log(f"Error during opening book cleanup: {e}\n")
+        
+        # 4. Any other components that might need cleanup
+        # Add more component cleanup here if needed
+        
+        # 5. Final log write
+        try:
+            self.logger.add_log("Engine cleanup completed.\n")
+            self.logger.write_log()
+        except Exception as e:
+            # If logger fails, print to console as last resort
+            print(f"Error writing final log during cleanup: {e}")
+    
+    def __del__(self):
+        """
+        Clean up resources when the engine is destroyed.
+        Calls the comprehensive cleanup method.
+        """
+        try:
+            self.cleanup()
+        except Exception as e:
+            # If cleanup fails during __del__, try to at least log it
+            try:
+                self.logger.add_log(f"Error during Engine __del__ cleanup: {e}\n")
+                self.logger.write_log()
+            except:
+                # Last resort if logger also fails
+                print(f"Fatal error during Engine cleanup: {e}")
+
+
+
+
+
+if __name__ == "__main__":
+    import time
+    import numpy as np
+    # Set random seeds for reproducibility
+    random_seed = 42
+    random.seed(random_seed)
+    np.random.seed(random_seed)
+    try:
+        import torch
+        torch.manual_seed(random_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(random_seed)
+            torch.cuda.manual_seed_all(random_seed)
+    except ImportError:
+        pass  # torch not available
+    # Add signal handlers for graceful termination
+    def signal_handler(sig, frame):
+        print("\nCleaning up resources before exit...")
+        # Force exit after a timeout to prevent hanging
+        def force_exit():
+            print("Forced exit due to timeout during cleanup")
+            os._exit(1)
+        
+        # Set timeout to force exit if cleanup takes too long
+        timer = threading.Timer(5.0, force_exit)
+        timer.daemon = True
+        timer.start()
+        
+        sys.exit(0)
+
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    engine = Engine(playing_level=3)
+    # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
+    input_dic ={'fens': ['2q1r1k1/Rp1n1pb1/1Pp3pp/2P5/2pP4/2N5/5PPP/2BQ2K1 w - - 0 26', '2q1r1k1/Rp1n1pb1/1Pp3pp/2P5/2pP4/2N5/3B1PPP/3Q2K1 b - - 1 26', '2q1r1k1/Rp1n1p2/1Pp3pp/2P5/2pb4/2N5/3B1PPP/3Q2K1 w - - 0 27', '2q1r1k1/Rp1n1p2/1Pp3pp/2P5/2pb4/8/3BNPPP/3Q2K1 b - - 1 27', '2q1r1k1/Rp1n1p2/1Pp3pp/2b5/2p5/8/3BNPPP/3Q2K1 w - - 0 28', '2q1r1k1/Rp1n1p2/1Pp3pB/2b5/2p5/8/4NPPP/3Q2K1 b - - 0 28', '2q1r1k1/Rp1n1p2/1bp3pB/8/2p5/8/4NPPP/3Q2K1 w - - 0 29', '2q1r1k1/Rp1n1p2/1bp3pB/8/2p5/8/4NPPP/Q5K1 b - - 1 29'], 'self_clock_times': [39, 37, 36, 34, 34, 32, 31, 29], 'opp_clock_times': [46, 42, 42, 41, 39, 37, 36, 35], 'last_moves': ['c1d2', 'g7d4', 'c3e2', 'd4c5', 'd2h6', 'c5b6', 'd1a1'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
+    start = time.time()
+    engine.update_info(input_dic)
+    print(engine.make_move(log=False))
+    end = time.time()
+    print("finished in {} seconds".format(end-start))
+    print("Engine log contents:")
+    print(engine.logger.log_buffer)
+    
+    # Explicitly clean up engine resources and exit
+    engine.cleanup()
+    del engine
+    
+    # Force exit to ensure no hanging threads
+    os._exit(0)
