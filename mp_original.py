@@ -1190,7 +1190,7 @@ def run_game():
         ENGINE.update_info(input_dic)
         
         # Once we send the information to the engine, first check if 
-        if ENGINE._decide_resign() == True:
+        if ENGINE.decide_resign() == True:
             LOG += "Engine has decided to resign. Executing resign interaction. \n"
             time.sleep(2+3*random.random())
             successful = resign()
