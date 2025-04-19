@@ -15,13 +15,13 @@ import numpy as np
 import datetime
 
 # Import components from the mp_components package
-from mp_components import constants
-from mp_components import state
-from mp_components import utils
-from mp_components import vision
-from mp_components import mouse
-from mp_components import engine_adapter
-from mp_components import threading_manager  # Import the new threading manager
+from refactored_mp.mp_components import constants
+from refactored_mp.mp_components import state
+from refactored_mp.mp_components import utils
+from refactored_mp.mp_components import vision
+from refactored_mp.mp_components import mouse
+from refactored_mp.mp_components import engine_adapter
+from refactored_mp.mp_components import threading_manager  # Import the new threading manager
 
 # --- Game Setup ---
 
