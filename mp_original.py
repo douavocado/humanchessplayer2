@@ -25,7 +25,8 @@ from common.utils import patch_fens, check_safe_premove
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
                                            capture_bottom_clock, get_fen_from_image, check_fen_last_move_bottom,
-                                           read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved)
+                                           read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
+                                           capture_result, compare_result_images)
 
 # import threading
 # from multiprocessing import Process, Manager
@@ -577,7 +578,7 @@ def check_our_turn():
     
     return board.turn == playing_side
 
-def check_game_end():
+def check_game_end(arena=False):
     """ Check whether the game has ended from the last scrape dic. """
     # check via last board info
     if len(DYNAMIC_INFO["fens"]) > 0:
@@ -586,9 +587,18 @@ def check_game_end():
             return True
     
     # check via clock position
-    return game_over_found()
+    # return game_over_found()
+    # check via result image
+    result_img = capture_result(arena=arena)
+    if compare_result_images(result_img, cv2.imread("chessimage/blackwin_result.png")) > 0.7:
+        return True
+    elif compare_result_images(result_img, cv2.imread("chessimage/whitewin_result.png")) > 0.7:
+        return True
+    elif compare_result_images(result_img, cv2.imread("chessimage/draw_result.png")) > 0.7:
+        return True
+    return False
 
-def await_move():
+def await_move(arena=False):
     ''' The main update step for the lichess client. We do not scrape any information
         at all, because this can be detected and banned quite quickly.
         
@@ -598,7 +608,7 @@ def await_move():
     global GAME_INFO, DYNAMIC_INFO, HOVER_SQUARE
     while True:
         # First check if game has ended
-        if check_game_end():
+        if check_game_end(arena=arena):
             return  False# False
         # Check if manual mode is on
         if is_capslock_on():
@@ -1036,7 +1046,7 @@ def ponder_position():
             write_log()
         
 
-def run_game():
+def run_game(arena=False):
     """ The main lopp for the client while playing the game. """
     global DYNAMIC_INFO, PONDER_DIC, GAME_INFO, ENGINE, LOG
     # ponder_proc = Process(target=ponder_position)
@@ -1044,7 +1054,7 @@ def run_game():
     while True:
         write_log()
             
-        result = await_move()
+        result = await_move(arena=arena)
         
         
         write_log()

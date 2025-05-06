@@ -18,7 +18,8 @@ from models.models import MoveScorer, StockFishSelector
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH, 
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
-                              QUICKNESS, PATH_TO_PONDER_STOCKFISH
+                              QUICKNESS, PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
+                              MOVE_TO_WEIGHTS_TACTICS_PTH
                               )
 
 from common.board_information import (
@@ -61,6 +62,7 @@ class Engine:
             "opening": MoveScorer(MOVE_FROM_WEIGHTS_OP_PTH, MOVE_TO_WEIGHTS_OP_PTH),
             "midgame": MoveScorer(MOVE_FROM_WEIGHTS_MID_PTH, MOVE_TO_WEIGHTS_MID_PTH),
             "endgame": MoveScorer(MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_END_PTH),
+            "tactics": MoveScorer(MOVE_FROM_WEIGHTS_TACTICS_PTH, MOVE_TO_WEIGHTS_TACTICS_PTH),
             }
         self.stockfish_scorer = StockFishSelector(PATH_TO_STOCKFISH)
         self.stockfish_analysis = None

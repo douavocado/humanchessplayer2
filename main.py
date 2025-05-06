@@ -41,7 +41,7 @@ if args.arena == True:
                 # beserk mode
                 berserk()
                 time.sleep(0.5)
-            run_game()
+            run_game(arena=True)
             print("Finished tournament game.")
             # go back to lobby. This can be done by clicking where the resign button is once
             time.sleep(random.randint(1,3))
@@ -59,7 +59,7 @@ else:
         res = await_new_game()
         if res is not None:
             set_game(res)
-            run_game()
+            run_game(arena=False)
             print("Finished game {}".format(i+1))
             if i < games-1:
                 new_game(tc_str)
