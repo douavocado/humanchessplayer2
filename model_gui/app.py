@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import the MoveScorer from models
 from models.models import MoveScorer
 from visualizer import get_move_arrows
+from alter_move_prob import alter_move_probabilties
 
 class ChessGUI:
     def __init__(self, root):
@@ -29,6 +30,12 @@ class ChessGUI:
         # Available weight types
         self.weight_types = ["opening", "midgame", "endgame", "tactics"]
         self.current_weight_type = tk.StringVar(value="midgame")
+        
+        # Mood settings for altering move probabilities
+        self.moods = ["confident", "cocky", "cautious", "tilted", "hurry", "flagging"]
+        self.current_mood = tk.StringVar(value="confident")
+        self.alter_probs = tk.BooleanVar(value=False)
+        self.alter_log = ""
         
         # Initialize MoveScorer (will be set in setup_gui)
         self.move_scorer = None
@@ -145,6 +152,22 @@ class ChessGUI:
         weight_combo.pack(side="left", padx=(0, 10))
         weight_combo.bind("<<ComboboxSelected>>", self.on_weight_changed)
         
+        # Alter probability controls
+        alter_frame = ttk.Frame(top_frame)
+        alter_frame.pack(fill="x", pady=(10, 0))
+        
+        # Tickbox for enabling altered probabilities
+        self.alter_check = ttk.Checkbutton(alter_frame, text="Alter Move Probabilities", 
+                                         variable=self.alter_probs, command=self.on_alter_changed)
+        self.alter_check.pack(side="left", padx=(0, 10))
+        
+        # Mood selection dropdown
+        ttk.Label(alter_frame, text="Mood:").pack(side="left", padx=(0, 5))
+        mood_combo = ttk.Combobox(alter_frame, textvariable=self.current_mood, 
+                                 values=self.moods, width=10, state="readonly")
+        mood_combo.pack(side="left")
+        mood_combo.bind("<<ComboboxSelected>>", self.on_mood_changed)
+        
         # Main content frame
         content_frame = ttk.Frame(self.root, padding="10")
         content_frame.pack(fill="both", expand=True)
@@ -197,6 +220,19 @@ class ChessGUI:
         
         # Bind event to highlight the move on the board when selected
         self.moves_tree.bind("<<TreeviewSelect>>", self.on_move_selected)
+        
+        # Log frame for displaying alteration log
+        log_frame = ttk.LabelFrame(content_frame, text="Probability Alteration Log")
+        log_frame.pack(side="right", fill="both", expand=True, padx=(5, 0))
+        
+        # Text widget for displaying the log
+        self.log_text = tk.Text(log_frame, wrap=tk.WORD, height=10, state=tk.DISABLED)
+        self.log_text.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        
+        # Add scrollbar for log
+        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+        log_scrollbar.pack(side="right", fill="y")
         
         # Game moves panel
         game_moves_frame = ttk.LabelFrame(content_frame, text="Game Moves")
@@ -589,8 +625,12 @@ class ChessGUI:
             for item in self.moves_tree.get_children():
                 self.moves_tree.delete(item)
             
-            # Reset move probabilities
+            # Reset move probabilities and log
             self.current_move_probs = {}
+            self.alter_log = ""
+            
+            # Clear log display
+            self.update_log_display("")
             
             # Store original board for display
             original_board = board.copy()
@@ -604,6 +644,80 @@ class ChessGUI:
             
             # Get moves and probabilities
             _, move_probs = self.move_scorer.get_move_dic(board, san=True, top=20)
+            
+            # Apply alteration if enabled
+            if self.alter_probs.get():
+                # We need UCI moves for alteration
+                uci_probs = {}
+                for move_san, prob in move_probs.items():
+                    try:
+                        move = board.parse_san(move_san)
+                        uci_probs[move.uci()] = prob
+                    except ValueError:
+                        continue
+                
+                # Get previous positions if available
+                prev_board = None
+                prev_prev_board = None
+                
+                # If we're in a game, we might be able to get previous positions
+                if self.current_node_idx > 0 and self.game_nodes:
+                    curr_node = self.game_nodes[self.current_node_idx]
+                    # prev_board is the board 1 ply ago (opponent's move)
+                    if curr_node.parent:
+                        prev_board = curr_node.parent.board()
+                        # prev_board = prev_board.mirror()
+                    # prev_prev_board is the board 2 plies ago (our previous move)
+                    if prev_board and curr_node.parent.parent:
+                        prev_prev_board = curr_node.parent.parent.board()
+                        # prev_prev_board = prev_prev_board.mirror()
+                        
+                # If we mirrored the current board (black to move in original position),
+                # we need to mirror the previous boards too
+                if mirrored and prev_board:
+                    prev_board = prev_board.mirror()
+                    print(f"Mirrored prev_board: {prev_board.fen()}")
+                
+                if mirrored and prev_prev_board:
+                    prev_prev_board = prev_prev_board.mirror()
+                    print(f"Mirrored prev_prev_board: {prev_prev_board.fen()}")
+                
+                print(f"Current board: {board.fen()}")
+                if prev_board:
+                    print(f"Previous board: {prev_board.fen()}")
+                if prev_prev_board:
+                    print(f"Previous previous board: {prev_prev_board.fen()}")
+                
+                # Print original move probabilities for debugging
+                print("Original UCI probabilities:")
+                sorted_uci_probs = sorted(uci_probs.items(), key=lambda x: x[1], reverse=True)
+                for move_uci, prob in sorted_uci_probs[:5]:  # Print top 5 moves
+                    print(f"{move_uci}: {prob:.4f}")
+                
+                # Alter the move probabilities
+                mood = self.current_mood.get()
+                altered_probs, self.alter_log = alter_move_probabilties(
+                    uci_probs, board, prev_board, prev_prev_board, mood
+                )
+                
+                # Print altered move probabilities for debugging
+                print("Altered UCI probabilities:")
+                sorted_altered_probs = sorted(altered_probs.items(), key=lambda x: x[1], reverse=True)
+                for move_uci, prob in sorted_altered_probs[:5]:  # Print top 5 moves
+                    print(f"{move_uci}: {prob:.4f}")
+                
+                # Convert back to SAN
+                move_probs = {}
+                for move_uci, prob in altered_probs.items():
+                    try:
+                        move = chess.Move.from_uci(move_uci)
+                        if move in board.legal_moves:
+                            move_probs[board.san(move)] = prob
+                    except ValueError:
+                        continue
+                
+                # Update log display
+                self.update_log_display(self.alter_log)
             
             # If we mirrored the board, we need to convert the moves back to the original board perspective
             if mirrored:
@@ -647,6 +761,8 @@ class ChessGUI:
         except Exception as e:
             self.status_var.set(f"Analysis error: {str(e)}")
             print(f"Analysis error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             # Always reset analyzing flag when done
             self.is_analyzing = False
@@ -702,6 +818,28 @@ class ChessGUI:
     def on_submit_fen(self):
         fen = self.fen_var.get()
         self.update_board(fen)
+    
+    def on_mood_changed(self, event):
+        """Handle mood selection change"""
+        # Only need to re-analyze if alter probabilities is turned on
+        if self.alter_probs.get() and self.current_board:
+            self.analyse_position(self.current_board)
+    
+    def on_alter_changed(self):
+        """Handle toggling of altering probabilities"""
+        if self.current_board:
+            self.analyse_position(self.current_board)
+    
+    def update_log_display(self, log_text):
+        """Update the log display with provided text"""
+        # Enable the text widget for editing
+        self.log_text.config(state=tk.NORMAL)
+        # Clear current content
+        self.log_text.delete(1.0, tk.END)
+        # Insert new log text
+        self.log_text.insert(tk.END, log_text)
+        # Disable editing again
+        self.log_text.config(state=tk.DISABLED)
 
 def main():
     root = tk.Tk()
