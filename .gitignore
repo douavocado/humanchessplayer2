@@ -4,6 +4,17 @@ Error_files/**
 models/data/**
 models/model_weights/**
 models/model_results.txt
+model_research/plots/**
+model_research/reports/**
+model_research/results/**
+Engines/**
+train_PGNs/**
+__pycache__/
+**/__pycache__/
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+visualisations/**
+visualisations_piece_to/**
 
 *.pyc
 *.pyo
