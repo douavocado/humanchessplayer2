@@ -1,6 +1,9 @@
 Engine_logs/**
 Client_logs/**
 Error_files/**
+models/data/**
+models/model_weights/**
+models/model_results.txt
 
 *.pyc
 *.pyo

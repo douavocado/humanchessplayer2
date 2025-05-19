@@ -178,8 +178,6 @@ class StockFishSelector:
                 
         return top_move_dic
 
-    def close_engine(self):
-        self.engine.quit()
 
 if __name__ == "__main__":
     board = chess.Board("3q1rk1/pr2bpp1/1p2pn1B/n3N3/8/2NP4/PPQ1PP1P/R3K1R1 b Q - 0 17")

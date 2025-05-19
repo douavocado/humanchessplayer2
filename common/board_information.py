@@ -5,12 +5,14 @@ Created on Sat Sep  2 19:10:11 2023
 @author: xusem
 """
 import chess
+import chess.engine
 import numpy as np
 import math
+import sys
+import os
 
 from common.constants import PATH_TO_STOCKFISH
 
-STOCKFISH = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH) # replace this line with the correct binary/executable
 PIECE_VALS = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3.5, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 1000}
 
 # value of each piece, used in engine.check_obvious for takebacks
@@ -570,7 +572,7 @@ def is_offer_exchange(board:chess.Board, move_uci: str):
     else:
         return False
 
-def check_best_takeback_exists(prev_board:chess.Board, last_move_uci:str):
+def check_best_takeback_exists(prev_board:chess.Board, last_move_uci:str, engine: chess.engine.SimpleEngine = None):
     """ Given a board and the last move played, check whether the current turn side
         has a takeback, and whether the takeback is (significantly) the best move. 
         
@@ -579,8 +581,15 @@ def check_best_takeback_exists(prev_board:chess.Board, last_move_uci:str):
     """
     board = prev_board.copy()
     board.push_uci(last_move_uci)
+
     if board.outcome() is None:
-        stockfish_analysis = STOCKFISH.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=2)
+        if engine is None:
+            stockfish = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
+            stockfish_analysis = stockfish.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=2)
+            stockfish.close()
+        else:
+            stockfish_analysis = engine.analyse(board, limit=chess.engine.Limit(time=0.01), multipv=2)
+        
         if isinstance(stockfish_analysis, dict):
             stockfish_analysis = [stockfish_analysis]
             cp_diff = 2500
@@ -640,7 +649,9 @@ def get_lucas_analytics(board, analysis=None):
     xmat = xpow + sum([len(board.pieces(x, not board.turn))*mat_dic[x] for x in range(1,7)]) # sum of all material on board
     
     if analysis is None:
-        analysis = STOCKFISH.analyse(board, chess.engine.Limit(time=0.02), multipv=18)
+        stockfish = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
+        analysis = stockfish.analyse(board, chess.engine.Limit(time=0.02), multipv=18)
+        stockfish.close()
     
     evals = [entry['score'].pov(board.turn).score(mate_score=2500) for entry in analysis]
     xeval = max(evals) # evaluation of position (in centipawns)
@@ -710,11 +721,48 @@ def phase_of_game(board):
         # otherwise, it is the opening
         return 'opening'
 
+def is_under_mate_threat(board: chess.Board, side: bool, engine: chess.engine.SimpleEngine = None):
+    ''' Given a board and a side, return True if the side is under mate threat, if the opposition had the turn. If the current board is not opposition turn, make it the opposition turn. '''
+    # create stockfish instance
+    if engine is None:
+        engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
+    
+    dummy_board = board.copy()
+    # We want to check if the opponent can force mate against 'side'
+    # So we set the turn to the opponent (not side)
+    dummy_board.turn = not side
+    # create new board instance with switched turn (manually correcting side is not good enough)
+    dummy_board = chess.Board(dummy_board.fen())
+    # before passing the board to stockfish, first check if the dummy board is a legal position
+    if board.is_check():
+        return True
+    # use engine to check if the side can be forced into checkmate
+    if engine is None:
+        stockfish = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
+        # Analyze from the perspective of the side whose turn it is in dummy_board (not side)
+        analysis = stockfish.analyse(dummy_board, chess.engine.Limit(time=0.01, depth=8), multipv=1)
+        stockfish.close()
+    else:
+        analysis = engine.analyse(dummy_board, chess.engine.Limit(time=0.01, depth=8), multipv=1)
+    
+    if isinstance(analysis, dict):
+        analysis = [analysis]
+    if len(analysis) == 0:
+        return False
+    
+    # We need to get the score from the perspective of the player whose turn it is
+    # in the dummy board, which is the opponent of 'side'
+    mate_score = analysis[0]['score'].pov(dummy_board.turn).mate()
+    if mate_score is not None and mate_score > 0:
+        # If opponent has a positive mate score, then 'side' is under mate threat
+        return True
+    else:
+        return False
+   
 
-
-if __name__ == '__main__':
-    b = chess.Board('8/1ppk1p2/p2bP3/6Q1/7p/2qB4/P4PPP/4R1K1 b - - 0 26')
+if __name__ == '__main__':    
+    b = chess.Board('rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 1 2')
     # a = get_threatened_board(b, chess.WHITE)
     #print(is_attacked_by_pinned(b, chess.E7, chess.BLACK))
-    print(calculate_threatened_levels(chess.D3, b))
+    print(is_under_mate_threat(b, chess.BLACK))
 

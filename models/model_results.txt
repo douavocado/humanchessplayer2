@@ -4,3 +4,8 @@ opening piece_to: Accuracy: 84.6%, Avg loss: 0.414347
 opening piece selector: Accuracy: 52.7%, Avg loss: 1.371883
 midgame piece selector: Accuracy: 44.2%, Avg loss: 1.641367 
 endgame piece selector: Accuracy: 60.0%, Avg loss: 1.087521 
+
+tactics piece selector: Accuracy: 72.5%, Avg loss: 0.812884
+tactics piece_to: Accuracy: 88.8%, Avg loss: 0.377968
+defensive piece selector: Accuracy: 41.1%, Avg loss: 1.702091
+defensive piece_to: Accuracy: 57.2%, Avg loss: 1.185765 

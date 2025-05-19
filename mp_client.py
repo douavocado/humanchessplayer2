@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Fri Oct  4 15:43:23 2024
+Created on Fri Dec 27 14:38:03 2024
 
 @author: james
 """
@@ -25,42 +25,49 @@ from common.utils import patch_fens, check_safe_premove
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
                                            capture_bottom_clock, get_fen_from_image, check_fen_last_move_bottom,
-                                           read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
-                                           capture_result, compare_result_images)
+                                           read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved)
 
 # import threading
-# from multiprocessing import Process, Manager
+from multiprocessing import Process, Manager, Value
 
-# global variables
+# global variables, DO NOT CHANGE THROUGHOUT GAME
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
 SCRAPE_EVERY = 0.5 # the time gap between scraping
 MOVE_DELAY = 0.25 # the amount of time we take per move minus the time the engine calc time from other aspects (time scrape, position updates, moving pieces etc.)
 DRAG_MOVE_DELAY = 0.07 # the amount of time to allow for move to snap onto the board before taking a screenshot
 CLICK_MOVE_DELAY = 0.03
 
+ENGINE = Engine(playing_level=DIFFICULTY)
+
 CURSOR = CustomCursor() # mouse control object which simulates human-like movement with mouse
 
 LOG_FILE = os.path.join(os.getcwd(),"Client_logs",str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt')
-LOG = ""
+
+# global variables that CHANGE THROUGHOUT GAME. Need to describe them with mp vars
+
+manager = Manager()
+
+LOG = Value(ctypes.c_wchar_p, "")
      
-ENGINE = Engine(playing_level=DIFFICULTY)
 
 # TODO: incorporate settings for increment games and beserk games
-GAME_INFO = {"playing_side": None,
+GAME_INFO = manager.dict({"playing_side": None,
                   "self_initial_time": None,
-                  "opp_initial_time": None,} # these statistics don't change within a game
+                  "opp_initial_time": None,})
 
-CASTLING_RIGHTS_FEN = "KQkq"
+CASTLING_RIGHTS_FEN = Value(ctypes.c_wchar_p, "KQkq")
 
-DYNAMIC_INFO = {"fens":[],
+DYNAMIC_INFO = manager.dict({"fens":[],
                      "self_clock_times":[],
                      "opp_clock_times":[],
-                     "last_moves": []}
+                     "last_moves": []})
 
+PONDER_DIC = manager.dict()
 
-PONDER_DIC = {}
-
-HOVER_SQUARE = None
+HOVER_SQUARE = Value("i", 1000) # number that represents no square
+PLAY_MOVE = Value(ctypes.c_wchar_p, "") # move that we should play. "" means no move
+PREMOVE = Value(ctypes.c_wchar_p, "") # premove that we should play. "" means no premove
+RESIGNS = Value("i", 0)
 
 
 
@@ -98,9 +105,9 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
     duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance)**0.3
     to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance)**0.5
-    # duration_from =0.001
-    # duration_to = 0.001    
+    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance)**0.3
+    # duration_from =0.01
+    # duration_to = 0.01    
     CURSOR.drag_and_drop([new_from_x, new_from_y], [new_to_x, new_to_y], duration=[duration_from, duration_to])
 
     return successful
@@ -131,12 +138,9 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     
     current_x, current_y = pyautogui.position()
     from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
-    duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
+    duration_from = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
     to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
-    
-    # duration_from = 0.001
-    # duration_to = 0.001
+    duration_to = MOUSE_QUICKNESS/15000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
     
     CURSOR.move_to([new_from_x, new_from_y], duration=duration_from, steady=True)
     pyautogui.click(button="left")
@@ -151,7 +155,6 @@ def click_mouse(x, y, tolerance=0, clicks=1, duration=0.5):
     
     CURSOR.move_to([new_x, new_y], duration=duration, steady=True)
     pyautogui.click(button="left", clicks=clicks)
-
 
 def scrape_move_change(side):
     im = SCREEN_CAPTURE.capture((int(START_X),int(START_Y), int(8*STEP), int(8*STEP)))
@@ -238,10 +241,16 @@ def await_new_game(timeout=60):
 
 def set_game(starting_time):
     ''' Once client has found game, sets up game parameters. '''
-    global HOVER_SQUARE, GAME_INFO, LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO, PONDER_DIC
+    global HOVER_SQUARE, GAME_INFO, LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO, PONDER_DIC, RESIGNS, PLAY_MOVE, PREMOVE
+    # resetting resigns
+    RESIGNS.value = 0
+    
+    # resetting moves and premove
+    PLAY_MOVE.value = ""
+    PREMOVE.value = ""
     
     # resetting hover square
-    HOVER_SQUARE = None
+    HOVER_SQUARE.value = 1000
     # getting game information, including the side the player is playing and the initial time
     board_img = capture_board()
     
@@ -270,25 +279,25 @@ def set_game(starting_time):
     
     # check turn is in fact our turn
     if check_fen_last_move_bottom(starting_fen, board_img, bottom) == False:
-        LOG += "ERROR: Checking bottom unsuccessful, error. Trying again by switching the turn of starting fen. \n"
+        LOG.value += "ERROR: Checking bottom unsuccessful, error. Trying again by switching the turn of starting fen. \n"
         dummy_board = chess.Board(starting_fen)
         dummy_board.turn = chess.BLACK
         new_fen = dummy_board.fen()
         if check_fen_last_move_bottom(new_fen, board_img, bottom) == True:
-            LOG += "Corrected by switching turn. \n"
+            LOG.value += "Corrected by switching turn. \n"
             starting_fen = new_fen
         else:
             error_filename = os.path.join("Error_files", "board_img_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')                
-            LOG += "ERROR: Not corrected. Continuingly anyway. Saving board image to {}. \n".format(error_filename)
+            LOG.value += "ERROR: Not corrected. Continuingly anyway. Saving board image to {}. \n".format(error_filename)
             cv2.imwrite(error_filename, board_img)
         
     else:
-        LOG += "Checking bottom successfully matched. \n"
+        LOG.value += "Checking bottom successfully matched. \n"
     
     # setting up castling rights
-    CASTLING_RIGHTS_FEN = "KQkq"
+    CASTLING_RIGHTS_FEN.value = "KQkq"
     dummy_board = chess.Board(starting_fen)
-    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN)
+    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN.value)
     starting_fen = dummy_board.fen()
     
     
@@ -308,32 +317,33 @@ def set_game(starting_time):
         if res is not None:                
             DYNAMIC_INFO["last_moves"]= res[0]
         else:
-            LOG += "ERROR: Couldn't find linking move between first fen and starting board fen {}. \n".format(starting_fen)
+            LOG.value += "ERROR: Couldn't find linking move between first fen and starting board fen {}. \n".format(starting_fen)
             DYNAMIC_INFO["last_moves"] = []
     else:
         DYNAMIC_INFO["last_moves"] = []
     
-    LOG += "Finished setting up game. \n"
-    LOG += "Game information updated to: {} \n".format(GAME_INFO)
+    LOG.value += "Finished setting up game. \n"
+    LOG.value += "Game information updated to: {} \n".format(GAME_INFO)
     # reset ponder positions
-    PONDER_DIC = {}
+    for key in PONDER_DIC:
+        del PONDER_DIC[key]
 
 def write_log():
     """ Writes down thinking into a log file for debugging. """
     global LOG, LOG_FILE
     with open(LOG_FILE,'a') as log:
-        log.write(LOG)
+        log.write(LOG.value)
         log.close()
-    LOG = ""
+    LOG.value = ""
 
 def update_castling_rights(new_moves: list):
     """ Given moves or new moves found, update castling rights based on these moves. """
     global LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO
-    LOG += "Updating castling rights from new move ucis {} with current castling rights {}. \n".format(new_moves, CASTLING_RIGHTS_FEN)
-    for letters in [CASTLING_RIGHTS_FEN[i:i+2] for i in range(0, len(CASTLING_RIGHTS_FEN), 2)]:
+    LOG.value += "Updating castling rights from new move ucis {} with current castling rights {}. \n".format(new_moves, CASTLING_RIGHTS_FEN.value)
+    for letters in [CASTLING_RIGHTS_FEN.value[i:i+2] for i in range(0, len(CASTLING_RIGHTS_FEN.value), 2)]:
         # make sure we have enough positions to evaluate whether the new_moves involved king moves or not
         if len(DYNAMIC_INFO["fens"]) < len(new_moves):
-            LOG += "ERROR: Not enough fens (length {}) to update castling rights. Ignoring. \n".format(len(DYNAMIC_INFO["fens"]))
+            LOG.value += "ERROR: Not enough fens (length {}) to update castling rights. Ignoring. \n".format(len(DYNAMIC_INFO["fens"]))
             break
         else:
             from_i = None
@@ -343,27 +353,30 @@ def update_castling_rights(new_moves: list):
                     colour = chess.Board(DYNAMIC_INFO["fens"][(i-len(new_moves)-1)]).color_at(move_obj.from_square)
                     if colour == chess.WHITE and letters == "KQ":
                         # white king moved and had castling rights
-                        CASTLING_RIGHTS_FEN = CASTLING_RIGHTS_FEN.replace("KQ", "")
-                        LOG += "Removed white castling rights based on move {} \n".format(move_obj.uci())
+                        CASTLING_RIGHTS_FEN.value = CASTLING_RIGHTS_FEN.value.replace("KQ", "")
+                        LOG.value += "Removed white castling rights based on move {} \n".format(move_obj.uci())
                     elif colour == chess.BLACK and letters == "kq":
-                        CASTLING_RIGHTS_FEN = CASTLING_RIGHTS_FEN.replace("kq", "")
-                        LOG += "Removed black castling rights based on move {} \n".format(move_obj.uci())
+                        CASTLING_RIGHTS_FEN.value = CASTLING_RIGHTS_FEN.value.replace("kq", "")
+                        LOG.value += "Removed black castling rights based on move {} \n".format(move_obj.uci())
                     from_i = i
                     break
             if from_i is not None:
                 # correct fens
                 for i in range(from_i - len(new_moves), 0):
                     dummy_board = chess.Board(DYNAMIC_INFO["fens"][i])
-                    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN)
+                    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN.value)
                     DYNAMIC_INFO["fens"][i] = dummy_board.fen()
-                LOG += "Corrected castling rights of last {} fens: {} \n".format(len(new_moves)-from_i, DYNAMIC_INFO["fens"][from_i - len(new_moves):])
+                LOG.value += "Corrected castling rights of last {} fens: {} \n".format(len(new_moves)-from_i, DYNAMIC_INFO["fens"][from_i - len(new_moves):])
                     
-
 def update_dynamic_info_from_screenshot(move_obj: chess.Move):
     """ The second way we can update the dynamic information, from screenshots
         and change detection. 
     """
-    global DYNAMIC_INFO, LOG, GAME_INFO
+    global DYNAMIC_INFO, LOG, GAME_INFO, PLAY_MOVE, PREMOVE
+    # reset moves
+    PLAY_MOVE.value = ""
+    PREMOVE.value = ""
+    
     # update fen list
     last_board = chess.Board(DYNAMIC_INFO["fens"][-1])
     last_board.push(move_obj)
@@ -389,7 +402,7 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
                 opp_clock_time = read_clock(capture_top_clock(state="start2"))
             if opp_clock_time is None:
                 error_filename = os.path.join("Error_files", "top_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Could not find the opponent clock time from move change update. Saving image to {}. \n".format(error_filename)
+                LOG.value += "ERROR: Could not find the opponent clock time from move change update. Saving image to {}. \n".format(error_filename)
                 cv2.imwrite(error_filename, top_clock_img)
             else:
                 DYNAMIC_INFO["opp_clock_times"].append(opp_clock_time)
@@ -408,7 +421,7 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
                 self_clock_time = read_clock(capture_bottom_clock(state="start2"))
             if self_clock_time is None:
                 error_filename = os.path.join("Error_files", "bot_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Could not find own clock time from move change update. Saving image to {}. \n".format(error_filename)
+                LOG.value += "ERROR: Could not find own clock time from move change update. Saving image to {}. \n".format(error_filename)
                 cv2.imwrite(error_filename, bot_clock_img)
             else:
                 DYNAMIC_INFO["self_clock_times"].append(self_clock_time)
@@ -416,12 +429,13 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
         else:
             DYNAMIC_INFO["self_clock_times"].append(self_clock_time)
             DYNAMIC_INFO["self_clock_times"] = DYNAMIC_INFO["self_clock_times"][-FEN_NO_CAP:]
-    LOG += "Updated dynamic information from move-change screenshot prompt: \n"
-    LOG += "{} \n".format(DYNAMIC_INFO)
+    LOG.value += "Updated dynamic information from move-change screenshot prompt: \n"
+    LOG.value += "{} \n".format(DYNAMIC_INFO)
     
 def update_dynamic_info_from_fullimage():
     """ Scrape image information from screenshot and update info dic. """
-    global LOG, DYNAMIC_INFO, GAME_INFO
+    global LOG, DYNAMIC_INFO, GAME_INFO, PLAY_MOVE, PREMOVE
+    
     board_img = capture_board()
     top_clock_img = capture_top_clock()
     bot_clock_img = capture_bottom_clock()
@@ -432,13 +446,22 @@ def update_dynamic_info_from_fullimage():
     opp_time = read_clock(top_clock_img)
     
     fen = get_fen_from_image(board_img, bottom=bottom) # assumes white turn
-    # now check the turn
-    check_turn_res = check_turn_from_last_moved(fen, board_img, bottom)    
     
+    # only update fens if new fen        
+    dummy_board = chess.Board(fen)
+    if dummy_board.board_fen() == chess.Board(DYNAMIC_INFO["fens"][-1]).board_fen():
+        # fen has not changed from last position, do nothing and return
+        return        
+    # otherwise, reset moves
+    PLAY_MOVE.value = ""
+    PREMOVE.value = ""
+    
+    # now check the turn
+    check_turn_res = check_turn_from_last_moved(fen, board_img, bottom)
     if check_turn_res is None:
         # then there was error, save the error in error files
         error_filename = os.path.join("Error_files", "board_img_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-        LOG += "ERROR: Couldn't find turn from fen {} with bottom {}. Check {} for board_image. Trying to work out from last fen.\n".format(fen, bottom, error_filename)
+        LOG.value += "ERROR: Couldn't find turn from fen {} with bottom {}. Check {} for board_image. Trying to work out from last fen.\n".format(fen, bottom, error_filename)
         cv2.imwrite(error_filename, board_img.astype(np.uint8))
         fen_before = DYNAMIC_INFO["fens"][-1]
         last_board = chess.Board(fen_before)
@@ -455,22 +478,14 @@ def update_dynamic_info_from_fullimage():
             fen_after = dummy_board.fen()
             res = patch_fens(fen_before, fen_after)
             if res is None:
-                LOG += "ERROR: Could not find turn using any method, resorting to the same turn as last turn. \n"
+                LOG.value += "ERROR: Could not find turn using any method, resorting to the same turn as last turn. \n"
         fen = fen_after
     elif check_turn_res == False:
         # then need to switch the turn
         dummy_board = chess.Board(fen)
         dummy_board.turn = not dummy_board.turn
         fen = dummy_board.fen()
-    
-    # only update fens if new fen        
-    dummy_board = chess.Board(fen)
-    last_tracked = chess.Board(DYNAMIC_INFO["fens"][-1])
-    if dummy_board.board_fen() == last_tracked.board_fen() and dummy_board.turn == last_tracked.turn:
-        # also need the turn to be the same        
-        # fen has not changed from last position, do nothing and return
-        return 
-    
+        
     # Update board fen
     # need to do some adjustments with move numbers
     if len(DYNAMIC_INFO["fens"]) > 0:
@@ -484,7 +499,7 @@ def update_dynamic_info_from_fullimage():
         dummy_board.fullmove_number = current_move_no
     
     # set castling rights
-    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN)
+    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN.value)
     fen = dummy_board.fen()
     
     DYNAMIC_INFO["fens"].append(fen)
@@ -496,7 +511,7 @@ def update_dynamic_info_from_fullimage():
         now_fen = DYNAMIC_INFO["fens"][-1]
         res = patch_fens(prev_fen, now_fen)
         if res is not None:
-            LOG += "Able to find linking move(s) between {} and {}: {} \n".format(prev_fen, now_fen, res)
+            LOG.value += "Able to find linking move(s) between {} and {}: {} \n".format(prev_fen, now_fen, res)
             last_moves, changed_fens = res
             del DYNAMIC_INFO["fens"][-2:]
             DYNAMIC_INFO["fens"].extend(changed_fens)
@@ -504,14 +519,14 @@ def update_dynamic_info_from_fullimage():
             DYNAMIC_INFO["last_moves"].extend(last_moves)
             DYNAMIC_INFO["last_moves"] = DYNAMIC_INFO["last_moves"][-(FEN_NO_CAP-1):]
         else:
-            LOG += "ERROR: Couldn't find linking move between fens {} and {}. Defaulting to singular fen history and wiping last_move history. \n".format(prev_fen, now_fen)
+            LOG.value += "ERROR: Couldn't find linking move between fens {} and {}. Defaulting to singular fen history and wiping last_move history. \n".format(prev_fen, now_fen)
             last_moves = []
             DYNAMIC_INFO["fens"] = DYNAMIC_INFO["fens"][-1:]
             DYNAMIC_INFO["last_moves"] = []
     
-    # Now we have worked out the last move, we need to update castling rights
-    if len(last_moves) > 0:
-        update_castling_rights(last_moves)
+        # Now we have worked out the last move, we need to update castling rights
+        if len(last_moves) > 0:
+            update_castling_rights(last_moves)
     
     
     # Update clock times
@@ -525,7 +540,7 @@ def update_dynamic_info_from_fullimage():
                 opp_time = read_clock(capture_top_clock(state="start2"))
             if opp_time is None:
                 error_filename = os.path.join("Error_files", "top_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Couldn't read opponent time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
+                LOG.value += "ERROR: Couldn't read opponent time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
                 cv2.imwrite(error_filename, top_clock_img)
                 opp_time = DYNAMIC_INFO["opp_clock_times"][-1]
         DYNAMIC_INFO["opp_clock_times"].append(opp_time)
@@ -537,7 +552,7 @@ def update_dynamic_info_from_fullimage():
         curr_move_no = chess.Board(DYNAMIC_INFO["fens"][-1]).fullmove_number
         if curr_move_no < 5 and opp_time < GAME_INFO["opp_initial_time"]/2:
             # correct opp initial time
-            LOG += "Opponent detected to have BESERKED, reducting opp initial time from {} to {} \n".format(GAME_INFO["opp_initial_time"], GAME_INFO["opp_initial_time"]/2)
+            LOG.value += "Opponent detected to have BESERKED, reducting opp initial time from {} to {} \n".format(GAME_INFO["opp_initial_time"], GAME_INFO["opp_initial_time"]/2)
             print("Opponent detected to have BESERKED, reducting opp initial time from {} to {} \n".format(GAME_INFO["opp_initial_time"], GAME_INFO["opp_initial_time"]/2))
             GAME_INFO["opp_initial_time"] /= 2
     else:
@@ -549,7 +564,7 @@ def update_dynamic_info_from_fullimage():
                 our_time = read_clock(capture_bottom_clock(state="start2"))
             if our_time is None:
                 error_filename = os.path.join("Error_files", "bot_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Couldn't read our own time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
+                LOG.value += "ERROR: Couldn't read our own time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
                 cv2.imwrite(error_filename, bot_clock_img)
                 our_time = DYNAMIC_INFO["self_clock_times"][-1]                
         DYNAMIC_INFO["self_clock_times"].append(our_time)
@@ -561,24 +576,23 @@ def update_dynamic_info_from_fullimage():
         curr_move_no = chess.Board(DYNAMIC_INFO["fens"][-1]).fullmove_number
         if curr_move_no < 5 and our_time < GAME_INFO["self_initial_time"]/2:
             # correct opp initial time
-            LOG += "Detected to have BESERKED, reducting self initial time from {} to {} \n".format(GAME_INFO["self_initial_time"], GAME_INFO["self_initial_time"]/2)
+            LOG.value += "Detected to have BESERKED, reducting self initial time from {} to {} \n".format(GAME_INFO["self_initial_time"], GAME_INFO["self_initial_time"]/2)
             print("Detected to have BESERKED, reducting self initial time from {} to {} \n".format(GAME_INFO["self_initial_time"], GAME_INFO["self_initial_time"]/2))
             GAME_INFO["self_initial_time"] /= 2
     
-    LOG += "Updated dynamic information from full image scans: \n"
-    LOG += "{} \n".format(DYNAMIC_INFO)
+    LOG.value += "Updated dynamic information from full image scans: \n"
+    LOG.value += "{} \n".format(DYNAMIC_INFO)
     
-
-
 def check_our_turn():
     """ Check our dynamic information dictionary to see if it is currently our turn. """
+    global DYNAMIC_INFO, GAME_INFO
     last_fen = DYNAMIC_INFO["fens"][-1]
     playing_side = GAME_INFO["playing_side"]
     board = chess.Board(last_fen)
     
     return board.turn == playing_side
 
-def check_game_end(arena=False):
+def check_game_end():
     """ Check whether the game has ended from the last scrape dic. """
     # check via last board info
     if len(DYNAMIC_INFO["fens"]) > 0:
@@ -587,18 +601,9 @@ def check_game_end(arena=False):
             return True
     
     # check via clock position
-    # return game_over_found()
-    # check via result image
-    result_img = capture_result(arena=arena)
-    if compare_result_images(result_img, cv2.imread("chessimage/blackwin_result.png")) > 0.7:
-        return True
-    elif compare_result_images(result_img, cv2.imread("chessimage/whitewin_result.png")) > 0.7:
-        return True
-    elif compare_result_images(result_img, cv2.imread("chessimage/draw_result.png")) > 0.7:
-        return True
-    return False
+    return game_over_found()
 
-def await_move(arena=False):
+def await_move(result_dic):
     ''' The main update step for the lichess client. We do not scrape any information
         at all, because this can be detected and banned quite quickly.
         
@@ -608,8 +613,9 @@ def await_move(arena=False):
     global GAME_INFO, DYNAMIC_INFO, HOVER_SQUARE
     while True:
         # First check if game has ended
-        if check_game_end(arena=arena):
-            return  False# False
+        if check_game_end():
+            result_dic["await_move"] = False
+            return # False
         # Check if manual mode is on
         if is_capslock_on():
             continue
@@ -618,7 +624,8 @@ def await_move(arena=False):
         
         # See if it is our turn
         if check_our_turn() == True:
-            return True
+            result_dic["await_move"] = True
+            return # True
         
         # In the meantime check for updates via screenshot method. The amount of time we
         # shall spend doing this will be enough so we can scrape again after
@@ -666,11 +673,13 @@ def await_move(arena=False):
                 if move1 in last_board.legal_moves:
                     # then we have truly found a move update
                     update_dynamic_info_from_screenshot(move1)
-                    return True
+                    result_dic["await_move"] = True
+                    return # True
                 elif move2 in last_board.legal_moves:
                     # then we have truly found a move update
                     update_dynamic_info_from_screenshot(move2)
-                    return True
+                    result_dic["await_move"] = True
+                    return # True
             
             # end_time = time.time()
             
@@ -682,7 +691,7 @@ def await_move(arena=False):
         
         # hover mouse
         if DYNAMIC_INFO["self_clock_times"][-1] > 15:
-            if HOVER_SQUARE is None:
+            if HOVER_SQUARE.value == 1000:
                 if np.random.random() < 0.9:
                     hover(duration=np.random.random()/5)
                 else:
@@ -697,7 +706,7 @@ def wander(max_duration=0.15):
     global LOG
     # Check if there is human interference
     if is_capslock_on():
-        LOG += "Tried to hover, but failed as caps lock is on. \n "
+        LOG.value += "Tried to hover, but failed as caps lock is on. \n "
         return False
     
     current_x, current_y = pyautogui.position()
@@ -715,85 +724,85 @@ def wander(max_duration=0.15):
     duration = max(min(MOUSE_QUICKNESS/5000 * (0.8 + 0.4*np.random.random()) * np.sqrt(distance), max_duration), 0.01)
     CURSOR.move_to([chosen_x, chosen_y], duration=duration)
 
-# def hover_own_turn(duration=0.15, noise=STEP*2):
-#     """ When it is our own turn, input random mouse movements which make us hover over our current pieces,
-#         particularly if they are moves we are considering from ponder_dic.   Perhaps 
-#         even pick up pieces before changing mind.
-#     """
-#     global PONDER_DIC, HOVER_SQUARE, LOG, DYNAMIC_INFO
-#     while True:
-#         stat_time = np.random.uniform(0.1, 0.2)
-#         time.sleep(stat_time)
-#         #print(is_hovering_dic)
-#         if DYNAMIC_INFO['self_clock_times'][-1] <= 15:
-#             # don't hover if we have too little time.
-#             continue
-#         elif np.random.random() < 0.7: # we hover
-#             if HOVER_SQUARE is None:
-#                 # set new hover square
-#                 last_known_board = chess.Board(DYNAMIC_INFO["fens"][-1])
-#                 relevant_move_objs = [chess.Move.from_uci(x) for x in PONDER_DIC.values() if last_known_board.color_at(chess.Move.from_uci(x).from_square) == GAME_INFO["playing_side"]]
-#                 if len(relevant_move_objs) == 0:
-#                     # then choose random own piece to hover
-#                     own_piece_squares = list(chess.SquareSet(last_known_board.occupied_co[GAME_INFO["playing_side"]]))
-#                     random_square = random.choice(own_piece_squares)
-#                 else:
-#                     # choose last ponder move relevant
-#                     random_square = relevant_move_objs[-1].from_square
-#                 HOVER_SQUARE = random_square
-#             else:
-#                 random_square = HOVER_SQUARE
+def hover_own_turn(duration=0.15, noise=STEP*2):
+    """ When it is our own turn, input random mouse movements which make us hover over our current pieces,
+        particularly if they are moves we are considering from ponder_dic.   Perhaps 
+        even pick up pieces before changing mind.
+    """
+    global PONDER_DIC, HOVER_SQUARE, LOG, DYNAMIC_INFO
+    while True:
+        stat_time = np.random.uniform(0.1, 0.2)
+        time.sleep(stat_time)
+        #print(is_hovering_dic)
+        if DYNAMIC_INFO['self_clock_times'][-1] <= 15:
+            # don't hover if we have too little time.
+            continue
+        elif np.random.random() < 0.7: # we hover
+            if HOVER_SQUARE.value == 1000:
+                # set new hover square
+                last_known_board = chess.Board(DYNAMIC_INFO["fens"][-1])
+                relevant_move_objs = [chess.Move.from_uci(x) for x in PONDER_DIC.values() if last_known_board.color_at(chess.Move.from_uci(x).from_square) == GAME_INFO["playing_side"]]
+                if len(relevant_move_objs) == 0:
+                    # then choose random own piece to hover
+                    own_piece_squares = list(chess.SquareSet(last_known_board.occupied_co[GAME_INFO["playing_side"]]))
+                    random_square = random.choice(own_piece_squares)
+                else:
+                    # choose last ponder move relevant
+                    random_square = relevant_move_objs[-1].from_square
+                HOVER_SQUARE.value = random_square
+            else:
+                random_square = HOVER_SQUARE.value
             
-#             if GAME_INFO["playing_side"] == chess.WHITE:
-#                 # a1 square is bottom left
-#                 rank_fr = chess.square_rank(random_square)
-#                 file_fr = chess.square_file(random_square)
-#                 to_x = np.clip(START_X + file_fr* STEP + STEP/2 + noise * (np.random.random()-0.5), START_X, START_X+8*STEP)
-#                 to_y = np.clip(START_Y + (7-rank_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5), START_Y, START_Y + 8*STEP)
+            if GAME_INFO["playing_side"] == chess.WHITE:
+                # a1 square is bottom left
+                rank_fr = chess.square_rank(random_square)
+                file_fr = chess.square_file(random_square)
+                to_x = np.clip(START_X + file_fr* STEP + STEP/2 + noise * (np.random.random()-0.5), START_X, START_X+8*STEP)
+                to_y = np.clip(START_Y + (7-rank_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5), START_Y, START_Y + 8*STEP)
                 
-#             else:
-#                 # a1 square is top right
-#                 rank_fr = chess.square_rank(random_square)
-#                 file_fr = chess.square_file(random_square)
-#                 to_x = np.clip(START_X + (7-file_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5), START_X, START_X + 8*STEP)
-#                 to_y = np.clip(START_Y + rank_fr*STEP + STEP/2 + noise * (np.random.random()-0.5), START_Y, START_Y + 8*STEP)
+            else:
+                # a1 square is top right
+                rank_fr = chess.square_rank(random_square)
+                file_fr = chess.square_file(random_square)
+                to_x = np.clip(START_X + (7-file_fr)*STEP + STEP/2 + noise * (np.random.random()-0.5), START_X, START_X + 8*STEP)
+                to_y = np.clip(START_Y + rank_fr*STEP + STEP/2 + noise * (np.random.random()-0.5), START_Y, START_Y + 8*STEP)
             
-#             CURSOR.move_to([to_x, to_y], duration=duration,steady=True)
-#         elif np.random.random() < 0.4:
-#             # we fake drag
-#             if HOVER_SQUARE is None or DYNAMIC_INFO["self_clock_times"][-1] < 15:
-#                 # then skip
-#                 pass
-#             else:
-#                 random_square = HOVER_SQUARE
-#                 if GAME_INFO["playing_side"] == chess.WHITE:
-#                     # a1 square is bottom left
-#                     rank_fr = chess.square_rank(random_square)
-#                     file_fr = chess.square_file(random_square)
-#                     from_x = START_X + file_fr* STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
-#                     from_y = START_Y + (7-rank_fr)*STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
+            CURSOR.move_to([to_x, to_y], duration=duration,steady=True)
+        elif np.random.random() < 0.4:
+            # we fake drag
+            if HOVER_SQUARE.value == 1000 or DYNAMIC_INFO["self_clock_times"][-1] < 15:
+                # then skip
+                pass
+            else:
+                random_square = HOVER_SQUARE.value
+                if GAME_INFO["playing_side"] == chess.WHITE:
+                    # a1 square is bottom left
+                    rank_fr = chess.square_rank(random_square)
+                    file_fr = chess.square_file(random_square)
+                    from_x = START_X + file_fr* STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
+                    from_y = START_Y + (7-rank_fr)*STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
                     
-#                 else:
-#                     # a1 square is top right
-#                     rank_fr = chess.square_rank(random_square)
-#                     file_fr = chess.square_file(random_square)
-#                     from_x = START_X + (7-file_fr)*STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
-#                     from_y = START_Y + rank_fr*STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
+                else:
+                    # a1 square is top right
+                    rank_fr = chess.square_rank(random_square)
+                    file_fr = chess.square_file(random_square)
+                    from_x = START_X + (7-file_fr)*STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
+                    from_y = START_Y + rank_fr*STEP + STEP/2 + np.clip(noise * (np.random.random()-0.5)/4, STEP/2.2, STEP/2.2)
                 
-#                 to_x = np.clip(from_x + noise*np.random.randn(), START_X, START_X + 8*STEP)
-#                 to_y = np.clip(from_y + noise*np.random.randn(), START_Y, START_Y + 8*STEP)
-#                 if abs(to_y - from_y) < 5:
-#                 	to_y += 5
-#                 if abs(to_x - from_x) < 5:
-#                 	to_x += 5
-#                 CURSOR.fake_drag([from_x, from_y], [to_x, to_y], duration=duration,steady=True)
-#         else:
-#             #we wander
-#             chosen_x = np.clip(START_X + 4*STEP + 2*STEP*np.random.randn(), START_X, START_X + 8*STEP)
-#             chosen_y  = np.clip(START_Y + 4*STEP + 2*STEP*np.random.randn(), START_Y, START_Y + 8*STEP)
+                to_x = np.clip(from_x + noise*np.random.randn(), START_X, START_X + 8*STEP)
+                to_y = np.clip(from_y + noise*np.random.randn(), START_Y, START_Y + 8*STEP)
+                if abs(to_y - from_y) < 5:
+                	to_y += 5
+                if abs(to_x - from_x) < 5:
+                	to_x += 5
+                CURSOR.fake_drag([from_x, from_y], [to_x, to_y], duration=duration,steady=True)
+        else:
+            #we wander
+            chosen_x = np.clip(START_X + 4*STEP + 2*STEP*np.random.randn(), START_X, START_X + 8*STEP)
+            chosen_y  = np.clip(START_Y + 4*STEP + 2*STEP*np.random.randn(), START_Y, START_Y + 8*STEP)
             
-#             CURSOR.move_to([chosen_x, chosen_y], duration=duration)
-#         # time.sleep(DRAG_MOVE_DELAY)
+            CURSOR.move_to([chosen_x, chosen_y], duration=duration)
+        # time.sleep(DRAG_MOVE_DELAY)
 
 def hover(duration=0.1, noise=STEP*2):
     """ In between moves, input random mouse movements which make us hover over our current pieces,
@@ -802,10 +811,10 @@ def hover(duration=0.1, noise=STEP*2):
     global PONDER_DIC, HOVER_SQUARE, LOG
     # Check if there is human interference
     if is_capslock_on():
-        LOG += "Tried to hover, but failed as caps lock is on. \n "
+        LOG.value += "Tried to hover, but failed as caps lock is on. \n "
         return False
     
-    if HOVER_SQUARE is None:
+    if HOVER_SQUARE.value == 1000:
         # set new hover square
         last_known_board = chess.Board(DYNAMIC_INFO["fens"][-1])
         relevant_move_objs = [chess.Move.from_uci(x) for x in PONDER_DIC.values() if last_known_board.color_at(chess.Move.from_uci(x).from_square) == GAME_INFO["playing_side"]]
@@ -816,9 +825,9 @@ def hover(duration=0.1, noise=STEP*2):
         else:
             # choose last ponder move relevant
             random_square = relevant_move_objs[-1].from_square
-        HOVER_SQUARE = random_square
+        HOVER_SQUARE.value = random_square
     else:
-        random_square = HOVER_SQUARE
+        random_square = HOVER_SQUARE.value
     
     if GAME_INFO["playing_side"] == chess.WHITE:
         # a1 square is bottom left
@@ -847,7 +856,7 @@ def make_move(move_uci:str, premove:str=None):
     global LOG, HOVER_SQUARE
     # Check if there is human interference
     if is_capslock_on():
-        LOG += "Tried to make move {} and premove {}, but failed as caps lock is on. \n ".format(move_uci, premove)
+        LOG.value += "Tried to make move {} and premove {}, but failed as caps lock is on. \n ".format(move_uci, premove)
         return False
     
     # First, reset previous clicks by right-clicking the centre of the board
@@ -865,17 +874,17 @@ def make_move(move_uci:str, premove:str=None):
     else:
         prob = 0.8
     if np.random.random() < prob:
-        LOG += "Dragging move {} \n".format(move_uci)
+        LOG.value += "Dragging move {} \n".format(move_uci)
         successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
         dragged = True
     else:
-        LOG += "Clicking move {} \n".format(move_uci)
+        LOG.value += "Clicking move {} \n".format(move_uci)
         successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
         dragged = False
     if successful:
-        LOG += "Made clicks for the move {} \n".format(move_uci)
+        LOG.value += "Made clicks for the move {} \n".format(move_uci)
     else:
-        LOG += "Tried to make clicks for move {}, but made mouse slip \n".format(move_uci)
+        LOG.value += "Tried to make clicks for move {}, but made mouse slip \n".format(move_uci)
         return False
     # If there is a premove
     if premove is not None:
@@ -892,12 +901,12 @@ def make_move(move_uci:str, premove:str=None):
         else:
             successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
         if successful:
-            LOG += "Made clicks for the premove {} \n".format(premove)
+            LOG.value += "Made clicks for the premove {} \n".format(premove)
         else:
-            LOG += "Tried to make clicks for premove {}, but made mouse slip. \n".format(premove)
+            LOG.value += "Tried to make clicks for premove {}, but made mouse slip. \n".format(premove)
     
     # reset hover square
-    HOVER_SQUARE = None
+    HOVER_SQUARE.value = 1000
     
     if dragged == True:
         # wait a bit for board to update and snap move into place
@@ -906,37 +915,11 @@ def make_move(move_uci:str, premove:str=None):
         time.sleep(CLICK_MOVE_DELAY)
     return True
 
-def berserk():
-    """ Click beserk button in tournaments """
-    global LOG
-    # can only execute if no human interference.
-    if is_capslock_on():
-        LOG += "Tried to berserk but failed as caps lock is on. \n "
-        return False
-    button_x, button_y =  START_X + 10.5*STEP, START_Y + 5.7*STEP
-    
-    click_mouse(button_x, button_y, tolerance = 10, clicks=1, duration=np.random.uniform(0.3,0.7))
-    
-    return True
-
-def back_to_lobby():
-    """ Click button to go back to lobby after tournament game has finished. """
-    global LOG
-    # can only execute if no human interference.
-    if is_capslock_on():
-        LOG += "Tried to go back to lobby but failed as caps lock is on. \n "
-        return False
-    button_x, button_y =  START_X + 10.5*STEP, START_Y + 4.1*STEP
-    
-    click_mouse(button_x, button_y, tolerance = 10, clicks=1, duration=np.random.uniform(0.3,0.7))
-    
-    return True
-
 def resign():
     global LOG
     # can only execute if no human interference.
     if is_capslock_on():
-        LOG += "Tried resign the game but failed as caps lock is on. \n "
+        LOG.value += "Tried resign the game but failed as caps lock is on. \n "
         return False
     resign_button_x, resign_button_y =  START_X + 10.5*STEP, START_Y + 4.8*STEP
     # pyautogui.click(resign_button_x, resign_button_y, button='left')
@@ -951,7 +934,7 @@ def new_game(time_control="1+0"):
     global LOG
     # can only execute if no human interference.
     if is_capslock_on():
-        LOG += "Tried to start new game with time control {} but failed as caps lock is on. \n ".format(time_control)
+        LOG.value += "Tried to start new game with time control {} but failed as caps lock is on. \n ".format(time_control)
         return False
     
     play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
@@ -1001,6 +984,205 @@ def find_clicks(move_uci):
         click_to_y = start_y + rank_to*step + step/2
     return click_from_x, click_from_y, click_to_x, click_to_y
 
+
+
+
+def track_state():
+    """ Process which always tracks the position and clock times, and in charge 
+        of updating the dynamic_info dictionary.
+    
+    """
+    global DYNAMIC_INFO
+    
+    if GAME_INFO["playing_side"] == chess.WHITE:
+        bottom = "w"
+    else:
+        bottom = "b"
+    while True:
+        # First check if game has ended
+        if check_game_end():
+            return
+        
+        # Next try full body scan
+        update_dynamic_info_from_fullimage()
+        
+        # then look for move change updates
+        tries = 0
+        tries_cap = 5 # some positive number to start with
+        while tries < tries_cap:            
+            move_change = scrape_move_change(bottom)
+            # if there has been a move change detected,
+            # we need to check whether it truly corresponds to a move we can play
+            # on our last recorded board
+            if move_change is not None:
+                move1_uci, move2_uci = move_change
+                last_board = chess.Board(DYNAMIC_INFO["fens"][-1])
+                # for the case of castling, move change will give the two squares of king and rook rather than move squares of the king
+                move1 = chess.Move.from_uci(move1_uci)
+                if last_board.piece_type_at(move1.from_square) == chess.KING and last_board.color_at(move1.from_square) == chess.WHITE:
+                    if move1.from_square == chess.E1 and move1.to_square == chess.H1:
+                        move1 = chess.Move(chess.E1, chess.G1)
+                    elif move1.from_square == chess.E1 and move1.to_square == chess.A1:
+                        move1 = chess.Move(chess.E1, chess.C1)
+                elif last_board.piece_type_at(move1.from_square) == chess.KING and last_board.color_at(move1.from_square) == chess.BLACK:
+                    if move1.from_square == chess.E8 and move1.to_square == chess.H8:
+                        move1 = chess.Move(chess.E1, chess.G1)
+                    elif move1.from_square == chess.E8 and move1.to_square == chess.A8:
+                        move1 = chess.Move(chess.E8, chess.C8)
+                move2 = chess.Move.from_uci(move2_uci)
+                if last_board.piece_type_at(move2.from_square) == chess.KING and last_board.color_at(move2.from_square) == chess.WHITE:
+                    if move2.from_square == chess.E1 and move2.to_square == chess.H1:
+                        move2 = chess.Move(chess.E1, chess.G1)
+                    elif move2.from_square == chess.E1 and move2.to_square == chess.A1:
+                        move2 = chess.Move(chess.E1, chess.C1)
+                elif last_board.piece_type_at(move2.from_square) == chess.KING and last_board.color_at(move2.from_square) == chess.BLACK:
+                    if move2.from_square == chess.E8 and move2.to_square == chess.H8:
+                        move2 = chess.Move(chess.E1, chess.G1)
+                    elif move2.from_square == chess.E8 and move2.to_square == chess.A8:
+                        move2 = chess.Move(chess.E8, chess.C8)
+                if move1 in last_board.legal_moves:
+                    # then we have truly found a move update
+                    update_dynamic_info_from_screenshot(move1)
+                elif move2 in last_board.legal_moves:
+                    # then we have truly found a move update
+                    update_dynamic_info_from_screenshot(move2)
+            
+            tries += 1
+
+def gen_play_move():
+    """ Process that is in charge of outputting moves we play including premoves
+        This process does not make the mouse move, only stores the outputted move
+        into PLAY_MOVE and premove into PREMOVE variables.
+    """
+    global PLAY_MOVE, PREMOVE, DYNAMIC_INFO, RESIGNS
+    while True:
+        # see if it is our turn
+        if check_our_turn() == True:
+            print("our turn")
+            # check position is not over
+            print("dynamic info", DYNAMIC_INFO.copy())
+            last_board = chess.Board(DYNAMIC_INFO["fens"][-1])
+            if last_board.outcome() is not None:
+                # then game has finished
+                write_log()
+                return
+            print("start timing")
+            # start timing
+            start = time.time()
+            
+            # Then it is our move
+            # If we have sufficient time, the first thing we check if the current board 
+            # position is in our ponder dic.
+            # These are positions we have already considered in the past, and their
+            # corresponding responses.
+            own_time = DYNAMIC_INFO["self_clock_times"][-1]
+            if own_time > 10:
+                current_board_fen = chess.Board(DYNAMIC_INFO["fens"][-1]).board_fen()
+                if current_board_fen in PONDER_DIC:                    
+                    response_uci = PONDER_DIC[current_board_fen]
+                    LOG.value += "Found current position in ponder dic. Responding with corresponding move: {} \n".format(response_uci)
+                    
+                    # wait a certain amount of time that depends on the time control
+                    initial_time = GAME_INFO["self_initial_time"]
+                    base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
+                    wait_time = base_time*(0.8+0.4*random.random())
+                    LOG.value += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
+                    time.sleep(wait_time)
+                    # setting play move
+                    PLAY_MOVE.value = response_uci
+                    write_log()
+                    continue
+                elif len(DYNAMIC_INFO["fens"]) >= 2 and len(PONDER_DIC) >= 1:
+                    # even if the position is not in ponder dic, if the last
+                    # pondered move was a safe premove in the previous position,
+                    # with some probability play it if it is legal move
+                    last_pondered_move_obj = chess.Move.from_uci(list(PONDER_DIC.values())[-1])
+                    last_board = chess.Board(DYNAMIC_INFO["fens"][-2])
+                    curr_board = chess.Board(current_board_fen)
+                    if own_time < 10:
+                        # when we are super low on time, we are likely to premove even more.
+                        # even when it is not a safe pondered move, we may still do it if it legal
+                        # with some probability
+                        prob = (30 - own_time)/50
+                        # we consider last 10 pondered moves here instead
+                        candidate_moves = [chess.Move.from_uci(x) for x in list(PONDER_DIC.values())[-10:] if chess.Move.from_uci(x) in curr_board.legal_moves]
+                        for move_obj in candidate_moves:
+                            if check_safe_premove(last_board, move_obj.uci()) or np.random.random() < prob:
+                                # then we do it
+                                LOG.value += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), curr_board.fen())
+                                base_time = 0.1
+                                wait_time = base_time*(0.7+0.4*random.random())
+                                LOG.value += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
+                                time.sleep(wait_time)
+                                # setting play move
+                                PLAY_MOVE.value = response_uci
+                                break
+                    else:                    
+                        if last_pondered_move_obj in curr_board.legal_moves:                        
+                            if check_safe_premove(last_board, last_pondered_move_obj.uci()):
+                                # then with some probability play it
+                                # the lower the time control the more likely we do this
+                                initial_time = GAME_INFO["self_initial_time"]
+                                prob = np.sqrt(10/initial_time)
+                                if initial_time < 200 and np.random.random() < 1:                            
+                                    # then we do it
+                                    LOG.value += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), curr_board.fen())
+                                    base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
+                                    wait_time = base_time*(0.8+0.4*random.random())
+                                    LOG.value += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
+                                    time.sleep(wait_time)
+                                    # setting play move
+                                    PLAY_MOVE.value = response_uci
+                                    break
+                    
+            write_log()
+            print("written log")
+            
+            # form engine_input_dic
+
+            input_dic = DYNAMIC_INFO.copy()
+            input_dic["side"] = GAME_INFO["playing_side"]
+            input_dic["self_initial_time"] = GAME_INFO["self_initial_time"]
+            input_dic["opp_initial_time"] = GAME_INFO["opp_initial_time"] # TODO
+            
+            print("updating info")
+            ENGINE.update_info(input_dic)
+            print("finished updating")
+            # Once we send the information to the engine, first check if 
+            if ENGINE._decide_resign() == True:
+                RESIGNS.value = 1
+                # end
+                return
+            print("getting engine output")
+            output_dic = ENGINE.make_move()
+            print("got engine output", output_dic)
+            
+            LOG.value += "Received output_dic from engine: {} \n".format(output_dic)
+            end = time.time()
+            LOG.value += "Time taken to get move from engine: {} \n".format(end-start)
+            write_log()
+            # if there is time left over, then wait a bit
+            intended_break = output_dic["time_take"]
+            if end - start - intended_break < -1*MOVE_DELAY:
+                time.sleep(intended_break - (end-start) - MOVE_DELAY)
+                
+            move_made_uci = output_dic["move_made"]
+            premove = output_dic["premove"]
+            ponder_dic = output_dic["ponder_dic"]
+            
+            if ponder_dic is not None:
+                # update ponder_dic
+                PONDER_DIC.update(ponder_dic)
+                LOG.value += "Engine outputted ponder_dic, updating our ponder_dic. \n"
+                LOG.value += "Current ponder dic is: \n {} \n".format(PONDER_DIC.copy())
+            write_log()
+            
+            # setting move and premove
+            print("setting play move", PLAY_MOVE.value)
+            PLAY_MOVE.value = move_made_uci
+            if premove is not None:
+                PREMOVE.value = premove                
+
 def ponder_position():
     """ Given the position is not our turn, get our engine to ponder the position.
     
@@ -1025,242 +1207,47 @@ def ponder_position():
         if own_time < 10:
             time_allowed = 0.05
             ponder_width = 2
-            LOG += "Pondering position with Stockfish due to time constraint: {}. \n".format(ponder_board.fen())
+            LOG.value += "Pondering position with Stockfish due to time constraint: {}. \n".format(ponder_board.fen())
             # the number of root moves is less so our moves are not too computer like. we shall randomly sample
             no_legal_moves = len(list(ponder_board.legal_moves))
             sample_no = max(int(no_legal_moves/2),1)
             root_moves = random.sample(list(ponder_board.legal_moves), sample_no)
-            LOG += "Randomly sample moves for opponent are: {} \n".format(root_moves)
+            LOG.value += "Randomly sample moves for opponent are: {} \n".format(root_moves)
             ponder_dic = ENGINE.stockfish_ponder(ponder_board, time_allowed, ponder_width, use_ponder=True, root_moves=root_moves)
         else:
             time_allowed = GAME_INFO["self_initial_time"]/60
             ponder_width = 1
             search_width = DIFFICULTY
-            LOG += "Pondering position {}. \n".format(ponder_board.fen())
+            LOG.value += "Pondering position {}. \n".format(ponder_board.fen())
             ponder_dic = ENGINE.ponder(ponder_board, time_allowed, search_width, prev_board=prev_ponder_board, ponder_width=ponder_width, use_ponder=True)
         
         if ponder_dic is not None:
             PONDER_DIC.update(ponder_dic)
-            LOG += "Engine outputted ponder_dic during ponder time, updating our ponder_dic. \n"
-            LOG += "Current ponder dic is: \n {} \n".format(PONDER_DIC)
-            write_log()
-        
 
-def run_game(arena=False):
+def run_game():
     """ The main lopp for the client while playing the game. """
-    global DYNAMIC_INFO, PONDER_DIC, GAME_INFO, ENGINE, LOG
-    # ponder_proc = Process(target=ponder_position)
-    # ponder_proc.start()
+    global PLAY_MOVE, PREMOVE, DYNAMIC_INFO
+    ponder_proc = Process(target=ponder_position)
+    update_proc = Process(target=track_state)
+    get_move_proc = Process(target=gen_play_move)
+    #ponder_proc.start()
+    update_proc.start()
+    get_move_proc.start()
     while True:
-        write_log()
-            
-        result = await_move(arena=arena)
-        
-        
-        write_log()
-        if result == False:
-            # Then game has ended
-            write_log()
-            
-            # ponder_proc.kill()
-            # #own_hover_proc.kill()
-            # ponder_proc.join()
-            # #own_hover_proc.join()
-            # print("Ponder process alive:", ponder_proc.is_alive())
-            #print("Hover process alive:", own_hover_proc.is_alive())
-            
-            return
-        
-        # check if manual mode on
-        if is_capslock_on():
-            continue
-        
-        # start timing
-        start = time.time()
-        
-        # Then it is our move
-        # If we have sufficient time, he first thing we check if the current board 
-        # position is in our ponder dic.
-        # These are positions we have already considered in the past, and their
-        # corresponding responses.
-        own_time = DYNAMIC_INFO["self_clock_times"][-1]
-        current_board_fen = chess.Board(DYNAMIC_INFO["fens"][-1]).board_fen()
-        if own_time > 10:            
-            if current_board_fen in PONDER_DIC:                    
-                response_uci = PONDER_DIC[current_board_fen]
-                LOG += "Found current position in ponder dic. Responding with corresponding move: {} \n".format(response_uci)
-                
-                # wait a certain amount of time that depends on the time control
-                initial_time = GAME_INFO["self_initial_time"]
-                base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
-                wait_time = base_time*(0.8+0.4*random.random())
-                LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
-                time.sleep(wait_time)
-                successful = make_move(response_uci)
-                if successful == True:
-                    # We made clicks for the move successfully
-                    LOG += "Made pondered moves successfully. \n"
-                else:
-                    # We try one more time, in case it was mouse slip
-                    LOG += "Did not make pondered move successfully, trying once more. \n"
-                    successful = make_move(response_uci)
-                write_log() 
-                continue
-            elif len(DYNAMIC_INFO["fens"]) >= 2 and len(PONDER_DIC) >= 1:
-                # even if the position is not in ponder dic, if the last
-                # pondered move was a safe premove in the previous position,
-                # with some probability play it if it is legal move
-                last_pondered_move_obj = chess.Move.from_uci(list(PONDER_DIC.values())[-1])
-                last_board = chess.Board(DYNAMIC_INFO["fens"][-2])
-                curr_board = chess.Board(current_board_fen)
-                #switch the trun
-                dummy_board = curr_board.copy()
-                dummy_board.turn = GAME_INFO["playing_side"]
-                if last_pondered_move_obj in dummy_board.legal_moves:                        
-                    if check_safe_premove(last_board, last_pondered_move_obj.uci()):
-                        # then with some probability play it
-                        # the lower the time control the more likely we do this
-                        initial_time = GAME_INFO["self_initial_time"]
-                        prob = np.sqrt(10/initial_time)
-                        if initial_time < 200 and np.random.random() < prob:                            
-                            # then we do it
-                            LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), last_board.fen())
-                            base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
-                            wait_time = base_time*(0.8+0.4*random.random())
-                            LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
-                            time.sleep(wait_time)
-                            successful = make_move(last_pondered_move_obj.uci())
-                            if successful == True:
-                                # We made clicks for the move successfully
-                                LOG += "Made pondered moves successfully. \n"
-                            else:
-                                # We try one more time, in case it was mouse slip
-                                LOG += "Did not make pondered move successfully, trying once more. \n"
-                                successful = make_move(last_pondered_move_obj.uci())
-                            write_log()
-                            continue
-                
-        elif own_time < 10 and len(DYNAMIC_INFO["fens"]) >= 2 and len(PONDER_DIC) >= 1:
-            last_board = chess.Board(DYNAMIC_INFO["fens"][-2])
-            curr_board = chess.Board(current_board_fen)
-            dummy_board = curr_board.copy()
-            dummy_board.turn = GAME_INFO["playing_side"]
-            # when we are super low on time, we are likely to premove even more.
-            # even when it is not a safe pondered move, we may still do it if is legal
-            # with some probability
-            prob = (30 - own_time)/50
-            # we consider last 10 pondered moves here instead
-            candidate_moves = [chess.Move.from_uci(x) for x in list(PONDER_DIC.values())[-10:] if chess.Move.from_uci(x) in dummy_board.legal_moves]
-            for move_obj in candidate_moves:
-                if check_safe_premove(last_board, move_obj.uci()) or np.random.random() < prob:
-                    # then we do it
-                    LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(move_obj), curr_board.fen())
-                    base_time = 0.1
-                    wait_time = base_time*(0.8+0.4*random.random())
-                    LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
-                    time.sleep(wait_time)
-                    successful = make_move(move_obj.uci())
-                    if successful == True:
-                        # We made clicks for the move successfully
-                        LOG += "Made pondered moves successfully. \n"
-                    else:
-                        # We try one more time, in case it was mouse slip
-                        LOG += "Did not make pondered move successfully, trying once more. \n"
-                        successful = make_move(last_pondered_move_obj.uci())
-                    write_log()
-                    break
-                    
-                
-        write_log()
-        
-        # form engine_input_dic
-        
-        # First make sure the position is not over
-        last_board = chess.Board(DYNAMIC_INFO["fens"][-1])
-        if last_board.outcome() is not None:
-            # then game has finished
-            write_log()
-            
-            #ponder_proc.kill()
-            #own_hover_proc.kill()
-            #ponder_proc.join()
-            #own_hover_proc.join()
-            #print("Ponder process is alive:", ponder_proc.is_alive())
-            #print("Hover process is alive:", own_hover_proc.is_alive())
-            return
-        input_dic = DYNAMIC_INFO.copy()
-        input_dic["side"] = GAME_INFO["playing_side"]
-        input_dic["self_initial_time"] = GAME_INFO["self_initial_time"]
-        input_dic["opp_initial_time"] = GAME_INFO["opp_initial_time"] # TODO
-        
-        # check if manual mode on
-        if is_capslock_on():
-            continue
-        
-        ENGINE.update_info(input_dic)
-        
-        # Once we send the information to the engine, first check if 
-        if ENGINE._decide_resign() == True:
-            LOG += "Engine has decided to resign. Executing resign interaction. \n"
-            time.sleep(2+3*random.random())
-            successful = resign()
-            if successful == True:
-                return
-            else:
-                # was not able to resign, keep playing I guess
-                pass
-            
-        # check if manual mode on
-        if is_capslock_on():
-            continue
-        
-        output_dic = ENGINE.make_move()
-        
-        LOG += "Received output_dic from engine: {} \n".format(output_dic)
-        end = time.time()
-        LOG += "Time taken to get move from engine: {} \n".format(end-start)
-        write_log()
-        # if there is time left over, then wait a bit
-        intended_break = output_dic["time_take"]
-        if end - start - intended_break < -1*MOVE_DELAY:
-            time.sleep(intended_break - (end-start) - MOVE_DELAY)
-            
-        move_made_uci = output_dic["move_made"]
-        premove = output_dic["premove"]
-        ponder_dic = output_dic["ponder_dic"]
-        
-        if ponder_dic is not None:
-            # update ponder_dic
-            PONDER_DIC.update(ponder_dic)
-            LOG += "Engine outputted ponder_dic, updating our ponder_dic. \n"
-            LOG += "Current ponder dic is: \n {} \n".format(PONDER_DIC)
-        write_log()
-        
-        
-        successful = make_move(move_made_uci, premove=premove)
-        if successful == True:
-            # We made clicks for the move successfully
-            LOG += "Made moves and/or premoves successfully. \n"
-            time.sleep(0.1)
-        else:
-            LOG += "Didn't make move successfully, trying one more time. \n"
-            time.sleep(0.1)
-            successful = make_move(move_made_uci, premove=premove)
-        write_log()
+        time.sleep(1)
+        print(PLAY_MOVE.value, PREMOVE.value)
+        print("Dynamic info {}".format(DYNAMIC_INFO.copy()))
+        print("Game info {}".format(GAME_INFO.copy()))
             
             
-# if __name__ == "__main__":
-#     # while True:
-#     games = 6
-#     for i in range(games):
-#         time.sleep(0.3)
-#         res = await_new_game()
-#         if res is not None:
-#             set_game(res)
-#             run_game()
-#             print("finished game")
-#             if i < games-1:
-#                 new_game("1+0")
-#             print(i)
+if __name__ == "__main__":
+    while True:
+        time.sleep(0.3)
+        res = await_new_game()
+        if res is not None:
+            set_game(res)
+            run_game()
+            print("finished game")
+            new_game("3+0")
         
     

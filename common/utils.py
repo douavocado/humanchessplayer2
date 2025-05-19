@@ -8,7 +8,7 @@ import chess
 import chess.engine
 import time
 
-from common.board_information import calculate_threatened_levels, get_threatened_board, PIECE_VALS #, STOCKFISH
+from common.board_information import calculate_threatened_levels, get_threatened_board, PIECE_VALS
 
 def extend_mate_score(score, mate_score=2500, extension=100):
     """ Given we are close to mating opponent, extend mate score to be such that

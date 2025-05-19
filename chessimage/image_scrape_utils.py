@@ -150,6 +150,75 @@ def template_match_f(img, template):
     
     return num/denom
 
+def compare_result_images(img1, img2, max_shift=3, threshold=0.95):
+    """
+    Compare two result images and return a confidence score of their similarity,
+    accounting for slight shifts in position.
+    
+    Args:
+        img1: First image (output from capture_result)
+        img2: Second image (output from capture_result)
+        max_shift: Maximum pixel shift to check in each direction
+        threshold: Score threshold above which to stop searching (0 to 1)
+        
+    Returns:
+        float: Confidence score between 0 and 1, where 1 indicates perfect match
+    """
+    # Convert to grayscale for better comparison
+    if img1.ndim == 3:
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+    else:
+        gray1 = img1.copy()
+        
+    if img2.ndim == 3:
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    else:
+        gray2 = img2.copy()
+    
+    # Get image dimensions
+    h1, w1 = gray1.shape
+    h2, w2 = gray2.shape
+    
+    # Ensure images have same dimensions
+    min_h = min(h1, h2)
+    min_w = min(w1, w2)
+    gray1 = gray1[:min_h, :min_w]
+    gray2 = gray2[:min_h, :min_w]
+    
+    best_score = 0
+    
+    # Try zero shift first
+    result = cv2.matchTemplate(gray1, gray2, cv2.TM_CCOEFF_NORMED)
+    best_score = float(result[0][0])
+    
+    # If we already exceed threshold, return early
+    if best_score >= threshold:
+        return best_score
+    
+    # Try various small shifts to account for slight perturbations
+    shifts = [(y, x) for y in range(-max_shift, max_shift + 1) 
+              for x in range(-max_shift, max_shift + 1)
+              if not (y == 0 and x == 0)]  # Skip (0,0) as we already checked it
+    
+    for y_shift, x_shift in shifts:
+        # Apply shift to second image
+        M = np.float32([[1, 0, x_shift], [0, 1, y_shift]])
+        shifted = cv2.warpAffine(gray2, M, (min_w, min_h))
+        
+        # Calculate normalized cross-correlation coefficient
+        result = cv2.matchTemplate(gray1, shifted, cv2.TM_CCOEFF_NORMED)
+        score = float(result[0][0])
+        
+        # Update best score
+        if score > best_score:
+            best_score = score
+            
+            # If we exceed threshold, return early
+            if best_score >= threshold:
+                return best_score
+    
+    return best_score
+
 def read_clock(clock_image):
     # assumes image is black and white
     if clock_image.ndim== 3:
@@ -184,6 +253,14 @@ def detect_last_move_from_img(board_img):
         if (rgb == [143,155,59]).all() or (rgb == [205, 211, 145]).all() or (rgb == [95, 92, 60]).all() or (rgb == [147, 140, 133]).all():
             detected.append(square)
     return detected
+
+def capture_result(arena=False):
+    if arena:
+        im = SCREEN_CAPTURE.capture((1581,519,50,30)).copy()
+    else:
+        im = SCREEN_CAPTURE.capture((1581,522,50,30)).copy()
+    img= im[:,:,:3]
+    return img
 
 def capture_board(shift=False):
     if shift:
