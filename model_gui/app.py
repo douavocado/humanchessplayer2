@@ -34,7 +34,7 @@ class ChessGUI:
         self.default_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
         
         # Available weight types
-        self.weight_types = ["opening", "midgame", "endgame", "tactics", "defensive_tactics", "automatic"]
+        self.weight_types = ["opening", "midgame", "endgame", "defensive_tactics", "automatic"]
         self.current_weight_type = tk.StringVar(value="midgame")
         
         # For automatic model selection
@@ -1069,44 +1069,44 @@ class ChessGUI:
             traceback.print_exc()
             self.model_selector_clf = None
     
-    def _train_decision_tree_classifier(self):
-        """
-        Train a decision tree classifier based on analysis_results.csv.
-        This is a copy of the function from create_data.py.
-        """
-        from sklearn.tree import DecisionTreeClassifier
-        import pandas as pd
+    # def _train_decision_tree_classifier(self):
+    #     """
+    #     Train a decision tree classifier based on analysis_results.csv.
+    #     This is a copy of the function from create_data.py.
+    #     """
+    #     from sklearn.tree import DecisionTreeClassifier
+    #     import pandas as pd
         
-        try:
-            # Load the analysis results data
-            df = pd.read_csv('model_research/results/analysis_results.csv')
+    #     try:
+    #         # Load the analysis results data
+    #         df = pd.read_csv('model_research/results/analysis_results.csv')
             
-            # Prepare the features and target
-            X = df[['complexity', 'win_prob', 'efficient_mobility', 'narrowness', 
-                    'piece_activity', 'game_phase', 'self_king_danger', 'opp_king_danger']].copy()
+    #         # Prepare the features and target
+    #         X = df[['complexity', 'win_prob', 'efficient_mobility', 'narrowness', 
+    #                 'piece_activity', 'game_phase', 'self_king_danger', 'opp_king_danger']].copy()
             
-            # Convert game_phase to numeric
-            phase_map = {'opening': 0, 'midgame': 1, 'endgame': 2}
-            X['game_phase'] = X['game_phase'].map(phase_map)
+    #         # Convert game_phase to numeric
+    #         phase_map = {'opening': 0, 'midgame': 1, 'endgame': 2}
+    #         X['game_phase'] = X['game_phase'].map(phase_map)
             
-            # Get the best model for each position (minimum rank)
-            rank_columns = ['opening_rank', 'midgame_rank', 'endgame_rank', 
-                           'tactics_rank', 'defensive_tactics_rank']
-            df['best_model'] = df[rank_columns].idxmin(axis=1)
-            df['best_model'] = df['best_model'].apply(lambda x: x.replace('_rank', ''))
-            y = df['best_model']
+    #         # Get the best model for each position (minimum rank)
+    #         rank_columns = ['opening_rank', 'midgame_rank', 'endgame_rank', 
+    #                        'tactics_rank', 'defensive_tactics_rank']
+    #         df['best_model'] = df[rank_columns].idxmin(axis=1)
+    #         df['best_model'] = df['best_model'].apply(lambda x: x.replace('_rank', ''))
+    #         y = df['best_model']
             
-            # Train the decision tree
-            clf = DecisionTreeClassifier(max_depth=8, min_samples_leaf=20, random_state=42)
-            clf.fit(X, y)
+    #         # Train the decision tree
+    #         clf = DecisionTreeClassifier(max_depth=8, min_samples_leaf=20, random_state=42)
+    #         clf.fit(X, y)
             
-            return clf
+    #         return clf
             
-        except Exception as e:
-            print(f"Error training decision tree classifier: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
+    #     except Exception as e:
+    #         print(f"Error training decision tree classifier: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return None
             
     def predict_best_model(self, board):
         """

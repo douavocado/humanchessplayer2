@@ -41,8 +41,6 @@ def check_model_weights():
         "../models/model_weights/piece_to_midgame_weights.pth",
         "../models/model_weights/piece_selector_endgame_weights.pth",
         "../models/model_weights/piece_to_endgame_weights.pth",
-        "../models/model_weights/piece_selector_tactics_weights.pth",
-        "../models/model_weights/piece_to_tactics_weights.pth",
         "../models/model_weights/piece_selector_defensive_tactics_weights.pth",
         "../models/model_weights/piece_to_defensive_tactics_weights.pth",
     ]

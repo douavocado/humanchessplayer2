@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 # Define file paths
-CSV_PATH = "models/data/defensive_tactics/lichess_tactics.csv"
+CSV_PATH = "models/data/defensive_tactics/lichess_db_puzzle.csv"
 ENGINE_PATH = "Engines/stockfish17-ubuntu"
 OUTPUT_PGN = "train_PGNs/defensive_tactics/synthetic.pgn"
 

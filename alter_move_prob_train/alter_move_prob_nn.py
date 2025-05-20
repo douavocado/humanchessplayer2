@@ -20,9 +20,9 @@ class AlterMoveProbNN(nn.Module):
         
         # Create trainable parameters for all factors used in alter_move_probabilities
         # Game phase dependent parameters, actually log-scale to ensure they are positive
-        self.weird_move_sd_opening = nn.Parameter(torch.tensor(0.0, dtype=torch.float))
-        self.weird_move_sd_midgame = nn.Parameter(torch.tensor(0.0, dtype=torch.float))
-        self.weird_move_sd_endgame = nn.Parameter(torch.tensor(0.0, dtype=torch.float))
+        self.weird_move_sd_opening = nn.Parameter(torch.tensor(0.0, dtype=torch.float)) # actual sd is exp(self.weird_move_sd_opening)
+        self.weird_move_sd_midgame = nn.Parameter(torch.tensor(0.0, dtype=torch.float)) # actual sd is exp(self.weird_move_sd_midgame)
+        self.weird_move_sd_endgame = nn.Parameter(torch.tensor(0.0, dtype=torch.float)) # actual sd is exp(self.weird_move_sd_endgame)
         
         # Other scaling factors
         self.protect_king_sf = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
@@ -40,7 +40,7 @@ class AlterMoveProbNN(nn.Module):
         self.exchange_sf = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
         self.exchange_k_danger_sf = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
         self.passed_pawn_end_sf = nn.Parameter(torch.tensor(1.0, dtype=torch.float))
-        self.repeat_sf = nn.Parameter(torch.tensor(0.1, dtype=torch.float))
+        self.repeat_sf = nn.Parameter(torch.tensor(0.0, dtype=torch.float)) # actual repeat_sf is exp(self.repeat_sf)
 
         # threshold probability for any "interesting" move that moves defaults to if less than this
         self.interesting_move_threshold = nn.Parameter(torch.tensor(0.0, dtype=torch.float)) # actual threshold is actually exp(self.interesting_move_threshold)/len(move_dic)
@@ -358,6 +358,25 @@ class AlterMoveProbNN(nn.Module):
                     altered_move_dic[move_uci] = altered_move_dic[move_uci] * self.passed_pawn_end_sf * scaling
                     passed_pawn_moves.append(board.san(chess.Move.from_uci(move_uci)))
             log += f"Found moves that move passed pawns forward: {passed_pawn_moves} \n"
+        
+        # Repeat moves are undesirable
+        # These moves are defined to be moves which repeatedly move a piece, and goto a square 
+        # which we could have gone to with the piece last move (including moving piece back and forth)
+        if prev_board is not None and prev_prev_board is not None:
+            repeat_moves = []
+            res = patch_fens(prev_prev_board.fen(), prev_board.fen(), depth_lim=1)
+            last_own_move_uci = res[0][0]
+            last_own_move_obj = chess.Move.from_uci(last_own_move_uci)
+            previous_reach = set([move.to_square for move in prev_prev_board.legal_moves if move.from_square == last_own_move_obj.from_square] + [last_own_move_obj.from_square])
+            for move_uci in move_dic.keys():
+                move_obj = chess.Move.from_uci(move_uci)
+                if move_obj.from_square == last_own_move_obj.to_square: # if we are moving the same piece as before
+                    to_square = move_obj.to_square
+                    if to_square in previous_reach: # then we have found repeating move
+                        altered_move_dic[move_uci] *= torch.exp(self.repeat_sf)
+                        repeat_moves.append(board.san(move_obj))
+            
+            log += "Found moves that are repetitive, and waste time: {} \n".format(repeat_moves)
         
         # Now, normalize probabilities
         total_prob = sum(altered_move_dic.values())
@@ -742,6 +761,26 @@ class AlterMoveProbNN(nn.Module):
                     passed_pawn_moves.append(board.san(chess.Move.from_uci(move_uci)))
             log += f"Found moves that move passed pawns forward: {passed_pawn_moves} \n"
         
+        # Repeat moves are undesirable
+        repeat_sf = torch.exp(self.params_dict.get("repeat_sf", 0.0))
+        # These moves are defined to be moves which repeatedly move a piece, and goto a square 
+        # which we could have gone to with the piece last move (including moving piece back and forth)
+        if prev_board is not None and prev_prev_board is not None:
+            repeat_moves = []
+            res = patch_fens(prev_prev_board.fen(), prev_board.fen(), depth_lim=1)
+            last_own_move_uci = res[0][0]
+            last_own_move_obj = chess.Move.from_uci(last_own_move_uci)
+            previous_reach = set([move.to_square for move in prev_prev_board.legal_moves if move.from_square == last_own_move_obj.from_square] + [last_own_move_obj.from_square])
+            for move_uci in move_dic.keys():
+                move_obj = chess.Move.from_uci(move_uci)
+                if move_obj.from_square == last_own_move_obj.to_square: # if we are moving the same piece as before
+                    to_square = move_obj.to_square
+                    if to_square in previous_reach: # then we have found repeating move
+                        altered_move_dic[move_uci] *= repeat_sf
+                        repeat_moves.append(board.san(move_obj))
+            
+            log += "Found moves that are repetitive, and waste time: {} \n".format(repeat_moves)
+
         # Now, normalize probabilities
         total_prob = sum(altered_move_dic.values())
         

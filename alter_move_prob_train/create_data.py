@@ -22,7 +22,7 @@ from sklearn.tree import DecisionTreeClassifier
 from tqdm import tqdm
 
 from common.board_information import (
-    phase_of_game, king_danger, get_lucas_analytics
+    phase_of_game, king_danger, get_lucas_analytics, is_under_mate_threat
 )
 from models.models import MoveScorer
 from common.utils import flip_uci
@@ -285,4 +285,4 @@ def main(max_games_per_file=None, existing_file=None, start_from_pgn=None):
 
 if __name__ == "__main__":
     max_games_per_file = 30  # Set to None to process all games
-    main(max_games_per_file, existing_file='alter_move_prob_train/data/training_data_20250509_184628.csv', start_from_pgn='lichess_OhanyanEminChess_2024-09-06.pgn') 
+    main(max_games_per_file) 

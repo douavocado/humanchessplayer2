@@ -141,6 +141,8 @@ def train_model(dataset, batch_size=32, num_epochs=5, learning_rate=0.001,
         except Exception as e:
             print(f"Error loading pretrained weights: {e}")
             print("Training with fresh model weights")
+        
+        # model.repeat_sf = nn.Parameter(torch.tensor(0.0, dtype=torch.float))
     else:
         print("No pretrained weights found. Training with fresh model weights")
     

@@ -7,6 +7,7 @@ models/model_results.txt
 model_research/plots/**
 model_research/reports/**
 model_research/results/**
+alter_move_prob_train/data/**
 Engines/**
 train_PGNs/**
 __pycache__/

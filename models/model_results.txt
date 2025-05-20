@@ -7,5 +7,5 @@ endgame piece selector: Accuracy: 60.0%, Avg loss: 1.087521
 
 tactics piece selector: Accuracy: 72.5%, Avg loss: 0.812884
 tactics piece_to: Accuracy: 88.8%, Avg loss: 0.377968
-defensive piece selector: Accuracy: 41.1%, Avg loss: 1.702091
-defensive piece_to: Accuracy: 57.2%, Avg loss: 1.185765 
+defensive piece selector: Accuracy: 41.4%, Avg loss: 1.687474 
+defensive piece_to: Accuracy: 57.7%, Avg loss: 1.157583 
