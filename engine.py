@@ -1160,7 +1160,7 @@ class Engine:
         start = time.time()
         no_lines = len(list(self.current_board.legal_moves))
         
-        analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(time=0.05), multipv=no_lines)
+        analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(time=0.02), multipv=no_lines)
         
         if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
             analysis = [analysis]
@@ -1228,7 +1228,7 @@ class Engine:
         # enemy plays our obvious move would have been mate in one
         if len(self.input_info["fens"]) >= 2 and self.stockfish_analysis[0]["score"].pov(self.input_info["side"]).mate() == 1:
             last_board = chess.Board(self.input_info["fens"][-2])
-            last_analysis = self.stockfish_engine.analyse(last_board, limit=chess.engine.Limit(time=0.02,mate=1))
+            last_analysis = self.stockfish_engine.analyse(last_board, limit=chess.engine.Limit(depth=6, time=0.02,mate=1))
             last_mate = last_analysis["score"].pov(self.input_info["side"]).mate()            
             if last_mate == 2:
                 last_mate_move_uci = last_analysis["pv"][1].uci()
@@ -1307,12 +1307,12 @@ class Engine:
         base_time *= (own_time/opp_time)**(10/self_initial_time)
         self.log += "Base time after relative time vs opponent: {} \n".format(base_time)
         
-        obvious_sf = 0.8
+        obvious_sf = 0.2
         # default value for time_taken
         time_taken = 1.0
         if obvious == True:
             # if we have made obvious move, we don't need to take much time
-            time_taken = base_time * (obvious_sf + np.clip(0.2*np.random.randn(), -0.5, 0.5))
+            time_taken = base_time * obvious_sf * (1 + np.random.uniform(-0.5, 0.5))
             self.log += "We have made obvious mode, so move quickly in {} seconds. \n".format(time_taken)
             return time_taken
         elif human_filters == True:
@@ -1321,7 +1321,7 @@ class Engine:
             game_phase = phase_of_game(self.current_board)
             # in the opening and endgame we spend less time on average than the mid game
             if game_phase == "opening":
-                base_time *= 0.3
+                base_time = (base_time ** 0.2)/2
             elif game_phase == "midgame":
                 if self_initial_time > 60:
                     base_time *= 1.7
@@ -1357,44 +1357,44 @@ class Engine:
             if self.mood == "confident":
                 # low variation, solid move times.                
                 if np.random.random() < 0.4: # then we have a quick low variation move
-                    time_taken = base_time * (0.8+ np.clip(0.1*np.random.randn(), -0.3, 0.3))
+                    time_taken = base_time * (0.6 + np.random.uniform(-0.3, 0.3))
                 elif np.random.random() < 0.8: # medium low variation move
-                    time_taken = base_time * (1.4+ np.clip(0.2*np.random.randn(), -0.4, 0.7))
+                    time_taken = base_time * (1.2 + np.random.uniform(-0.4, 0.7))
                 else:
                     # slightly longer think, larger variation
-                    time_taken = base_time * (3.2 + np.clip(0.7*np.random.randn(), -1.7, 2.0)) * high_range_multiplier
+                    time_taken = base_time * (3.2 + np.random.uniform(-0.7, 1.0)) * high_range_multiplier
             elif self.mood == "cocky":
                 # medium variation, quick move times
                 if np.random.random() < 0.9: # then we have a quick low variation move
-                    time_taken = base_time * (0.7 + np.clip(0.3*np.random.randn(), -0.2, 0.7))
+                    time_taken = base_time * (0.5 + np.random.uniform(-0.2, 0.7))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (3.1 + np.clip(0.4*np.random.randn(), -0.8, 0.8)) * high_range_multiplier
+                    time_taken = base_time * (3.1 + np.random.uniform(-0.8, 0.8)) * high_range_multiplier
             elif self.mood == "cautious":
                 # medium variation, slow moves
                 if np.random.random() < 0.6: # then we have a quick low variation move
-                    time_taken = base_time * (1.6+ np.clip(0.2*np.random.randn(), -0.3, 0.5))
+                    time_taken = base_time * (1.6 + np.random.uniform(-0.3, 0.5))
                 elif np.random.random() < 0.7: # medium low variation move
-                    time_taken = base_time * (2.5+ np.clip(0.25*np.random.randn(), -0.4, 0.7))
+                    time_taken = base_time * (2.5 + np.random.uniform(-0.4, 0.7))
                 else:
                     # slightly longer think, large variation
-                    time_taken = base_time * (5.9 + np.clip(1.4*np.random.randn(), -3.9, 4.5)) * high_range_multiplier
+                    time_taken = base_time * (5.9 + np.random.uniform(-1.9, 2.5)) * high_range_multiplier
             elif self.mood == "tilted":
                 # if we have just made the blunder, pause for long time to reflect on it
                 # otherwise low variation, quick move times
                 if self.just_blundered == True:
-                    time_taken = base_time * (4.2 + np.clip(0.7*np.random.randn(), -1.5, 1.5)) * high_range_multiplier
+                    time_taken = base_time * (4.2 + np.random.uniform(-1.5, 1.5)) * high_range_multiplier
                 else:
-                    time_taken = base_time * (0.6 + np.clip(0.08*np.random.randn(), -0.2, 0.2))
+                    time_taken = base_time * (0.4 + np.random.uniform(-0.2, 0.2))
             elif self.mood == "hurry":
                 # medium variation, quick move times
                 if np.random.random() < 0.5:
-                    time_taken = base_time * (0.6 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
+                    time_taken = base_time * (0.3 + np.random.uniform(-0.3, 0.3))
                 elif np.random.random() < 0.8:
-                    time_taken = base_time * (1.3 + np.clip(0.1*np.random.randn(), -0.3, 0.3))
+                    time_taken = base_time * (1.0 + np.random.uniform(-0.3, 0.3))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (2.0 + np.clip(0.2*np.random.randn(), -0.4, 0.6))
+                    time_taken = base_time * (2.0 + np.random.uniform(-0.4, 0.6))
                 
                 # if we are in hurry mode (i.e. we are in low time), then our time taken
                 # depends on how much time we have left
@@ -1402,12 +1402,12 @@ class Engine:
             elif self.mood == "flagging":
                 # large variation, quick move times
                 if np.random.random() < 0.5:
-                    time_taken = base_time * (1.0 + np.clip(0.2*np.random.randn(), -0.3, 0.6))
+                    time_taken = base_time * (0.5 + np.random.uniform(-0.3, 0.6))
                 elif np.random.random() < 0.8:
-                    time_taken = base_time * (1.9 + np.clip(0.3*np.random.randn(), -0.5, 0.8))
+                    time_taken = base_time * (1.3 + np.random.uniform(-0.5, 0.8))
                 else:
                     # slightly longer think
-                    time_taken = base_time * (3.6 + np.clip(0.4*np.random.randn(), -0.8, 1.0)) * high_range_multiplier
+                    time_taken = base_time * (3.6 + np.random.uniform(-0.8, 1.0)) * high_range_multiplier
             
             self.log += "Decided time taken after mood analysis: {} \n".format(time_taken)
         
@@ -1576,7 +1576,7 @@ class Engine:
         # If no takebacks, then use computer moves to determine best premove to make.
         # We pretend opponent makes top engine move, and we respond using get_stockfish_move
         # perform analysis on current position 
-        analysis = self.stockfish_engine.analyse(board, limit=chess.engine.Limit(time=0.02))
+        analysis = self.stockfish_engine.analyse(board, limit=chess.engine.Limit(depth=8, time=0.02))
         opp_best_move_obj = analysis["pv"][0]
         dummy_board = board.copy()
         dummy_board.push(opp_best_move_obj)
@@ -1601,7 +1601,7 @@ class Engine:
             else:
                 self.log += "Even though opening phase, did not find matching position in opening database. Resorting to stockfish premove. \n"
         if candidate_premove is None: # didn't find opening book premove
-            next_analysis = self.stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(time=0.02), multipv=10)
+            next_analysis = self.stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(depth=8, time=0.02), multipv=10)
             if isinstance(next_analysis, dict):
                 next_analysis = [next_analysis]
             # now use get_stockfish move on this position
@@ -1661,9 +1661,9 @@ class Engine:
             root_moves = list(board.legal_moves)
             
         if use_ponder:
-            analysis_object = self.ponder_stockfish_engine.analyse(board, limit=chess.engine.Limit(time=time_allowed), multipv=ponder_width, root_moves=root_moves)
+            analysis_object = self.ponder_stockfish_engine.analyse(board, limit=chess.engine.Limit(depth=8, time=time_allowed), multipv=ponder_width, root_moves=root_moves)
         else:
-            analysis_object = self.stockfish_engine.analyse(board, limit=chess.engine.Limit(time=time_allowed), multipv=ponder_width, root_moves=root_moves)
+            analysis_object = self.stockfish_engine.analyse(board, limit=chess.engine.Limit(depth=8, time=time_allowed), multipv=ponder_width, root_moves=root_moves)
         if isinstance(analysis_object, dict):
             analysis_object = [analysis_object]
         
@@ -1722,10 +1722,10 @@ class Engine:
         
         if use_ponder:
             
-            analysis_object = self.ponder_stockfish_engine.analyse(board, limit=chess.engine.Limit(time=0.05), multipv=ponder_width)
+            analysis_object = self.ponder_stockfish_engine.analyse(board, limit=chess.engine.Limit(depth=8, time=0.02), multipv=ponder_width)
             
         else:
-            analysis_object = self.stockfish_engine.analyse(board, limit=chess.engine.Limit(time=0.02), multipv=ponder_width)
+            analysis_object = self.stockfish_engine.analyse(board, limit=chess.engine.Limit(depth=8, time=0.02), multipv=ponder_width)
         if isinstance(analysis_object, dict):
             analysis_object = [analysis_object]
         
@@ -1775,7 +1775,7 @@ class Engine:
                     # move never got considered
                     # Get stockfish evaluation of move, but penalise heavily
                     if use_ponder:
-                        an_obj = self.ponder_stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(time=0.05), root_moves=[chess.Move.from_uci(move_uci)])
+                        an_obj = self.ponder_stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(depth=8, time=0.02), root_moves=[chess.Move.from_uci(move_uci)])
                         if "score" in an_obj:
                             new_eval = extend_mate_score(an_obj["score"].pov(self.input_info["side"]).score(mate_score=2500))
                         else:
@@ -1783,7 +1783,7 @@ class Engine:
                             self.log += "Something went wrong with analysis object with use_ponder: {}. Returning no ponder dic. \n".format(an_obj)
                             return None
                     else:
-                        an_obj = self.stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(time=0.01), root_moves=[chess.Move.from_uci(move_uci)])
+                        an_obj = self.stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(depth=8, time=0.02), root_moves=[chess.Move.from_uci(move_uci)])
                         if "score" in an_obj:
                             new_eval = extend_mate_score(an_obj["score"].pov(self.input_info["side"]).score(mate_score=2500))
                         else:
@@ -1827,7 +1827,7 @@ class Engine:
         # First check opponent just blundered based on eval
         curr_eval = extend_mate_score(self.stockfish_analysis[0]["score"].pov(self.input_info["side"]).score(mate_score=2500))
         prev_board = chess.Board(self.input_info["fens"][-2])
-        prev_analysis = self.stockfish_engine.analyse(prev_board, limit=chess.engine.Limit(time=0.02))
+        prev_analysis = self.stockfish_engine.analyse(prev_board, limit=chess.engine.Limit(depth=8, time=0.02))
         prev_eval = extend_mate_score(prev_analysis["score"].pov(self.input_info["side"]).score(mate_score=2500))
         if curr_eval - prev_eval > 150: # then opponent just blundered
             self.log += "Opponent has blundered, checking to see if it is from hung piece. \n"
