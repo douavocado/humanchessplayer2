@@ -4,7 +4,7 @@ import os
 from .logger import Logger # Use relative import
 
 class OpeningBookHandler:
-    def __init__(self, logger: Logger, opening_book_path: str = "Opening_books/bullet.bin"):
+    def __init__(self, logger: Logger, opening_book_path: str = "assets/data/Opening_books/bullet.bin"):
         self.logger = logger
         self.opening_book = None
         self.book_path = opening_book_path

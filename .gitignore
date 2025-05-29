@@ -7,15 +7,15 @@ models/model_results.txt
 model_research/plots/**
 model_research/reports/**
 model_research/results/**
-alter_move_prob_train/data/**
 Engines/**
-train_PGNs/**
+**/train_PGNs/**
 __pycache__/
 **/__pycache__/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
-visualisations/**
-visualisations_piece_to/**
+**/visualisations/**
+**/visualisations_piece_to/**
+**/data/**
 
 *.pyc
 *.pyo

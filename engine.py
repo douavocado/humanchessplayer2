@@ -16,7 +16,7 @@ import chess.engine
 import chess.polyglot
 
 from models.models import MoveScorer, StockFishSelector
-from alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
 
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH, 
@@ -50,7 +50,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: str = os.path.join(os.getcwd(), 'Engine_logs',str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt'), opening_book_path:str = "Opening_books/bullet.bin"):
+    def __init__(self, playing_level:int = 6, log_file: str = os.path.join(os.getcwd(), 'Engine_logs',str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt'), opening_book_path:str = "assets/data/Opening_books/bullet.bin"):
         self.input_info = {
             "side": None,
             "fens": None,
@@ -77,7 +77,7 @@ class Engine:
         self.stockfish_analysis = None
 
         # initialise move prob altering model
-        model_weights_path = "alter_move_prob_train/data/alter_move_prob_nn_best.pth"
+        model_weights_path = "development/alter_move_prob_train/data/alter_move_prob_nn_best.pth"
         self.move_prob_altering_model = AlterMoveProbNN()
         self.move_prob_altering_model.load_state_dict(torch.load(model_weights_path, weights_only=True))
         self.move_prob_altering_model.eval()

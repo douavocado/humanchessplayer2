@@ -17,8 +17,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import the MoveScorer from models
 from models.models import MoveScorer
 from visualizer import get_move_arrows
-from alter_move_prob import alter_move_probabilties
-from alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from scripts.utilities.alter_move_prob import alter_move_probabilties
+from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
 from common.board_information import (
     phase_of_game, king_danger, get_lucas_analytics, is_under_mate_threat
 )
@@ -134,7 +134,7 @@ class ChessGUI:
             self.alter_nn_model = AlterMoveProbNN()
             
             # Load trained weights if they exist
-            weights_dir = "alter_move_prob_train/data"
+            weights_dir = "development/alter_move_prob_train/data"
             weights_path = f"{weights_dir}/alter_move_prob_nn_best.pth"
             
             # Ensure the directory exists
@@ -1044,7 +1044,7 @@ class ChessGUI:
         Load the decision tree classifier for automatic model selection.
         If the model doesn't exist, train a new one.
         """
-        model_path = 'alter_move_prob_train/data/model_selector_clf.joblib'
+        model_path = 'development/alter_move_prob_train/data/model_selector_clf.joblib'
         
         try:
             if os.path.exists(model_path):
@@ -1054,7 +1054,7 @@ class ChessGUI:
             else:
                 print(f"Model selector not found at {model_path}. Creating a new one...")
                 # Create output directory if it doesn't exist
-                os.makedirs('alter_move_prob_train/data', exist_ok=True)
+                os.makedirs('development/alter_move_prob_train/data', exist_ok=True)
                 
                 # Train a new model using the function from create_data.py
                 self.model_selector_clf = self._train_decision_tree_classifier()
