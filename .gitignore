@@ -17,6 +17,8 @@ __pycache__/
 **/visualisations/**
 **/visualisations_piece_to/**
 **/data/**
+.vscode/**
+**/vscode/**
 
 *.pyc
 *.pyo
