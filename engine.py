@@ -861,8 +861,10 @@ class Engine:
         top_human_moves = sorted(human_move_evals.keys(), reverse=True, key= lambda x: human_move_evals[x])
         
         # If the number of re-evaluations far exceeds the numbre of top moves, we may keep 
-        # re-evaluating each seed move with greater depth        
-        depth = (re_evaluations // no_root_moves) + 1
+        # re-evaluating each seed move with greater depth    
+        # however there is a max depth, as probability of silly moves increases with depth
+        max_depth = 1 + int(2.5 * no_root_moves ** 0.5) # this is the maximum depth we will consider for re-evaluation, as for too deep re-evaluation we increase the chance of silly moves.
+        depth = min((re_evaluations // no_root_moves) + 1, max_depth)
         
         reval_start = time.time()
         re_evaluate_moves = random.sample(top_human_moves, min(re_evaluations, len(top_human_moves)))
@@ -1160,7 +1162,7 @@ class Engine:
         start = time.time()
         no_lines = len(list(self.current_board.legal_moves))
         
-        analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(time=0.02), multipv=no_lines)
+        analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
         
         if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
             analysis = [analysis]
@@ -1251,7 +1253,7 @@ class Engine:
         # self_initial_time = self.input_info["self_initial_time"]
         # own_time = max(self.input_info["self_clock_times"][-1],1)
         
-        # base_time = max(0.6*QUICKNESS*self_initial_time/(85 + self_initial_time*0.25), 0.1)
+        # base_time = max(0.6*QUICKNESS*self_initial_time**1.1/(100 + self_initial_time**0.7), 0.1)
         
         # # if we are in hurry mode (i.e. we are in low time), then we adjust our base 
         # # time accordingly
@@ -1298,7 +1300,7 @@ class Engine:
         """
         self.log += "Deciding time taken to make the move from receiving input. \n"
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = max(QUICKNESS*self_initial_time/(80 + self_initial_time**0.8),0.1)
+        base_time = max(QUICKNESS*self_initial_time**1.1/(100 + self_initial_time**0.7),0.1)
         self.log += "Initial base time without calculations: {} \n".format(base_time)
         # we move faster depending on whether we are proportionally behind on time
         # or move slower if we are ahead
@@ -1356,10 +1358,10 @@ class Engine:
             # Now sort according to moods
             if self.mood == "confident":
                 # low variation, solid move times.                
-                if np.random.random() < 0.4: # then we have a quick low variation move
+                if np.random.random() < 0.5: # then we have a quick low variation move
                     time_taken = base_time * (0.6 + np.random.uniform(-0.3, 0.3))
-                elif np.random.random() < 0.8: # medium low variation move
-                    time_taken = base_time * (1.2 + np.random.uniform(-0.4, 0.7))
+                elif np.random.random() < 0.85: # medium low variation move
+                    time_taken = base_time * (1.0 + np.random.uniform(-0.3, 0.3))
                 else:
                     # slightly longer think, larger variation
                     time_taken = base_time * (3.2 + np.random.uniform(-0.7, 1.0)) * high_range_multiplier
@@ -1373,25 +1375,25 @@ class Engine:
             elif self.mood == "cautious":
                 # medium variation, slow moves
                 if np.random.random() < 0.6: # then we have a quick low variation move
-                    time_taken = base_time * (1.6 + np.random.uniform(-0.3, 0.5))
+                    time_taken = base_time * (1.4 + np.random.uniform(-0.3, 0.3))
                 elif np.random.random() < 0.7: # medium low variation move
-                    time_taken = base_time * (2.5 + np.random.uniform(-0.4, 0.7))
+                    time_taken = base_time * (2.1 + np.random.uniform(-0.4, 0.4))
                 else:
                     # slightly longer think, large variation
-                    time_taken = base_time * (5.9 + np.random.uniform(-1.9, 2.5)) * high_range_multiplier
+                    time_taken = base_time * (4.9 + np.random.uniform(-0.9, 0.5)) * high_range_multiplier
             elif self.mood == "tilted":
                 # if we have just made the blunder, pause for long time to reflect on it
                 # otherwise low variation, quick move times
                 if self.just_blundered == True:
-                    time_taken = base_time * (4.2 + np.random.uniform(-1.5, 1.5)) * high_range_multiplier
+                    time_taken = base_time * (3.2 + np.random.uniform(-1.5, 1.5)) * high_range_multiplier
                 else:
                     time_taken = base_time * (0.4 + np.random.uniform(-0.2, 0.2))
             elif self.mood == "hurry":
                 # medium variation, quick move times
-                if np.random.random() < 0.5:
-                    time_taken = base_time * (0.3 + np.random.uniform(-0.3, 0.3))
+                if np.random.random() < 0.6:
+                    time_taken = base_time * (0.3 + np.random.uniform(-0.2, 0.3))
                 elif np.random.random() < 0.8:
-                    time_taken = base_time * (1.0 + np.random.uniform(-0.3, 0.3))
+                    time_taken = base_time * (0.9 + np.random.uniform(-0.3, 0.3))
                 else:
                     # slightly longer think
                     time_taken = base_time * (2.0 + np.random.uniform(-0.4, 0.6))
@@ -1401,7 +1403,7 @@ class Engine:
                 time_taken *= (3*own_time/self_initial_time)**0.9
             elif self.mood == "flagging":
                 # large variation, quick move times
-                if np.random.random() < 0.5:
+                if np.random.random() < 0.6:
                     time_taken = base_time * (0.5 + np.random.uniform(-0.3, 0.6))
                 elif np.random.random() < 0.8:
                     time_taken = base_time * (1.3 + np.random.uniform(-0.5, 0.8))
@@ -1425,8 +1427,8 @@ class Engine:
             
             # sometimes we don't use this
             if np.random.random() < 0.4:
-                time_taken = 0.6*target_time_spent + time_taken * 0.4
-                self.log += "Decided time taken after opponent speed consideration: {} \n".format(time_taken)
+                time_taken = 0.8*target_time_spent + time_taken * 0.2
+        self.log += "Decided time taken after opponent speed consideration: {} \n".format(time_taken)
         
         time_taken = max(time_taken, 0.1)
         self.log += "Decided time taken for move: {} \n".format(time_taken)
@@ -1700,14 +1702,16 @@ class Engine:
         if board.outcome() is not None:
             return None
         
+        max_depth = int(2.5 * search_width ** 0.5) # this is the maximum depth we will consider for ponder, as for too deep ponder we increase the chance of silly moves.
+
         if ponder_width is None:
             # As a maximum number of ponder moves (to prevent too quick responses),
             # depends on the time control.
             initial_time = self.input_info["self_initial_time"]
             if initial_time <= 180:
-                max_ponder_no = 2
-            else:
                 max_ponder_no = 3
+            else:
+                max_ponder_no = 4
         
             # decide ponder depth and width
             ponder_width = 1 # min ponder width        
@@ -1720,6 +1724,8 @@ class Engine:
             # ponder width has been preset
             ponder_depth = round(variations_allowed / (ponder_width * search_width))
         
+        ponder_depth = min(ponder_depth, max_depth)
+
         if use_ponder:
             
             analysis_object = self.ponder_stockfish_engine.analyse(board, limit=chess.engine.Limit(depth=8, time=0.02), multipv=ponder_width)
@@ -1842,7 +1848,7 @@ class Engine:
         else:
             self.log += "Opponent has not blundered. Current eval {}, previous eval {} \n".format(curr_eval, prev_eval)
     
-    def make_move(self, log:bool=True):
+    def make_move(self, log:bool=True, seed:int=None):
         """ This is the main function for prompting a move output from the engine. 
 
             Returns a dictionary with the following outputs:
@@ -1854,6 +1860,15 @@ class Engine:
                         This entry tends to get returned when we have had long think time for
                         our move.
         """
+        # First establish the a random seed for random, numpy and torch for reproducibility and write it to the log
+        if seed is None:
+            random_seed = np.random.randint(0, 1000000)
+        else:
+            random_seed = seed
+        random.seed(random_seed)
+        np.random.seed(random_seed)
+        torch.manual_seed(random_seed)
+        self.log += "Random seed for numpy and torch set to {} \n".format(random_seed)
         if log == True:
             self._write_log()
         
@@ -1992,7 +2007,7 @@ class Engine:
 
 if __name__ == "__main__":
     # Set random seeds for reproducibility
-    random_seed = 42
+    random_seed = 4
     random.seed(random_seed)
     np.random.seed(random_seed)
     try:
@@ -2003,12 +2018,12 @@ if __name__ == "__main__":
             torch.cuda.manual_seed_all(random_seed)
     except ImportError:
         pass  # torch not available
-    engine = Engine(playing_level=4)
+    engine = Engine(playing_level=3)
     # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
-    input_dic ={'fens': ['2rqr1k1/5pp1/p1pb1n1p/1p1p4/3P4/P2bPN1P/1P1BQPP1/R4RK1 w - - 0 20', '2rqr1k1/5pp1/p1pb1n1p/1p1p4/3P4/P2QPN1P/1P1B1PP1/R4RK1 b - - 0 20', '2rqr1k1/4bpp1/p1p2n1p/1p1p4/3P4/P2QPN1P/1P1B1PP1/R4RK1 w - - 1 21', '2rqr1k1/4bpp1/p1p2n1p/1p1pN3/3P4/P2QP2P/1P1B1PP1/R4RK1 b - - 2 21', '2rqr1k1/4bpp1/p4n1p/1pppN3/3P4/P2QP2P/1P1B1PP1/R4RK1 w - - 0 22', '2rqr1k1/4bpp1/p4n1p/1pPpN3/8/P2QP2P/1P1B1PP1/R4RK1 b - - 0 22', '3qr1k1/4bpp1/p4n1p/1prpN3/8/P2QP2P/1P1B1PP1/R4RK1 w - - 0 23', '3qr1k1/4bpp1/p4n1p/1prpN3/1B6/P2QP2P/1P3PP1/R4RK1 b - - 1 23'], 'self_clock_times': [54, 54, 52, 50, 50, 48, 43, 43], 'opp_clock_times': [48, 46, 44, 43, 42, 41, 40, 38], 'last_moves': ['e2d3', 'd6e7', 'f3e5', 'c6c5', 'd4c5', 'c8c5', 'd2b4'], 'side': False, 'self_initial_time': 60, 'opp_initial_time': 60}
+    input_dic ={'fens': ['r1b2rk1/1p3pbp/p1nq2p1/2P1p3/4P3/2N1B3/PP2BPPP/R4RK1 w - - 0 14', 'r1b2rk1/1p3pbp/p1nP2p1/4p3/4P3/2N1B3/PP2BPPP/R4RK1 b - - 0 14', 'r1br2k1/1p3pbp/p1nP2p1/4p3/4P3/2N1B3/PP2BPPP/R4RK1 w - - 1 15', 'r1br2k1/1p3pbp/p1nP2p1/2B1p3/4P3/2N5/PP2BPPP/R4RK1 b - - 2 15', 'r1br2k1/1p3pbp/p2P2p1/2B1p3/3nP3/2N5/PP2BPPP/R4RK1 w - - 3 16', 'r1br2k1/1p3pbp/p2P2p1/2B1p3/2BnP3/2N5/PP3PPP/R4RK1 b - - 4 16', 'r2r2k1/1p3pbp/p2Pb1p1/2B1p3/2BnP3/2N5/PP3PPP/R4RK1 w - - 5 17', 'r2r2k1/1p3pbp/p2Pb1p1/2BBp3/3nP3/2N5/PP3PPP/R4RK1 b - - 6 17'], 'self_clock_times': [169, 166, 165, 161, 160, 145, 142, 140], 'opp_clock_times': [167, 166, 159, 157, 156, 150, 142, 132], 'last_moves': ['c5d6', 'f8d8', 'e3c5', 'c6d4', 'e2c4', 'c8e6', 'c4d5'], 'side': False, 'self_initial_time': 180, 'opp_initial_time': 180}
     start = time.time()
     engine.update_info(input_dic)
-    print(engine.make_move(log=False))
+    print(engine.make_move(log=False, seed=random_seed))
     end = time.time()
     
     print("Engine log contents:")

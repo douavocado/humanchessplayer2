@@ -1092,7 +1092,7 @@ def run_game(arena=False):
                 
                 # wait a certain amount of time that depends on the time control
                 initial_time = GAME_INFO["self_initial_time"]
-                base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
+                base_time = 0.3*QUICKNESS*initial_time**1.1/(100 + initial_time**0.7)
                 wait_time = base_time*(0.8+0.4*random.random())
                 LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                 time.sleep(wait_time)
@@ -1125,7 +1125,7 @@ def run_game(arena=False):
                         if initial_time < 200 and np.random.random() < prob:                            
                             # then we do it
                             LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), last_board.fen())
-                            base_time = 0.4*QUICKNESS*initial_time/(85 + initial_time*0.25)
+                            base_time = 0.3*QUICKNESS*initial_time**1.1/(100 + initial_time**0.7)
                             wait_time = base_time*(0.8+0.4*random.random())
                             LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                             time.sleep(wait_time)
