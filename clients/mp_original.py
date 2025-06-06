@@ -1206,7 +1206,9 @@ def run_game(arena=False):
         input_dic = DYNAMIC_INFO.copy()
         input_dic["side"] = GAME_INFO["playing_side"]
         input_dic["self_initial_time"] = GAME_INFO["self_initial_time"]
-        input_dic["opp_initial_time"] = GAME_INFO["opp_initial_time"] # TODO
+        input_dic["opp_initial_time"] = GAME_INFO["opp_initial_time"]
+        input_dic["opp_rating"] = GAME_INFO["opp_rating"]
+        input_dic["self_rating"] = GAME_INFO["self_rating"]
         
         # check if manual mode on
         if is_capslock_on():

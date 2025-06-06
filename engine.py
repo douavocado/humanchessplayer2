@@ -58,6 +58,8 @@ class Engine:
             "opp_clock_times": None,
             "self_initial_time": None,
             "opp_initial_time": None,
+            "opp_rating": None,
+            "self_rating": None,
             "last_moves": None,
                            }
         self.current_board = chess.Board()
@@ -1432,6 +1434,19 @@ class Engine:
             if np.random.random() < 0.3:
                 time_taken = 0.8*target_time_spent + time_taken * 0.2
         self.log += "Decided time taken after opponent speed consideration: {} \n".format(time_taken)
+
+        # we also change the time taken based on the opponent's rating.
+        # generally we play faster against weaker opponents, and slower against stronger opponents
+        opp_rating = self.input_info["opp_rating"]
+        self_rating = self.input_info["self_rating"]
+        if opp_rating is not None and self_rating is not None:
+            rating_ratio = (self_rating - opp_rating)/self_rating - 1
+            rating_factor = 1 - 0.75*np.tanh(2*rating_ratio)
+            time_taken *= rating_factor
+            self.log += "Decided time taken after opponent relative rating consideration: {} \n".format(time_taken)
+        else:
+            self.log += "No rating information available. Not considering rating factor. \n"
+
         
         time_taken = max(time_taken, 0.1)
         self.log += "Decided time taken for move: {} \n".format(time_taken)
@@ -2009,23 +2024,13 @@ class Engine:
         self.stockfish_scorer.engine.quit()
 
 if __name__ == "__main__":
-    # Set random seeds for reproducibility
-    random_seed = 4
-    random.seed(random_seed)
-    np.random.seed(random_seed)
-    try:
-        import torch
-        torch.manual_seed(random_seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(random_seed)
-            torch.cuda.manual_seed_all(random_seed)
-    except ImportError:
-        pass  # torch not available
-    engine = Engine(playing_level=3)
+    engine = Engine(playing_level=3)    
     # b = chess.Board("3r2k1/3r1p1p/PQ2p1p1/8/5q2/2P2N2/1P3PP1/R3K2R w KQ - 1 24")
-    input_dic ={'fens': ['r1b2rk1/1p3pbp/p1nq2p1/2P1p3/4P3/2N1B3/PP2BPPP/R4RK1 w - - 0 14', 'r1b2rk1/1p3pbp/p1nP2p1/4p3/4P3/2N1B3/PP2BPPP/R4RK1 b - - 0 14', 'r1br2k1/1p3pbp/p1nP2p1/4p3/4P3/2N1B3/PP2BPPP/R4RK1 w - - 1 15', 'r1br2k1/1p3pbp/p1nP2p1/2B1p3/4P3/2N5/PP2BPPP/R4RK1 b - - 2 15', 'r1br2k1/1p3pbp/p2P2p1/2B1p3/3nP3/2N5/PP2BPPP/R4RK1 w - - 3 16', 'r1br2k1/1p3pbp/p2P2p1/2B1p3/2BnP3/2N5/PP3PPP/R4RK1 b - - 4 16', 'r2r2k1/1p3pbp/p2Pb1p1/2B1p3/2BnP3/2N5/PP3PPP/R4RK1 w - - 5 17', 'r2r2k1/1p3pbp/p2Pb1p1/2BBp3/3nP3/2N5/PP3PPP/R4RK1 b - - 6 17'], 'self_clock_times': [169, 166, 165, 161, 160, 145, 142, 140], 'opp_clock_times': [167, 166, 159, 157, 156, 150, 142, 132], 'last_moves': ['c5d6', 'f8d8', 'e3c5', 'c6d4', 'e2c4', 'c8e6', 'c4d5'], 'side': False, 'self_initial_time': 180, 'opp_initial_time': 180}
+    input_dic ={'fens': ['r2qk2r/pp3ppp/2p1pn2/4n3/1bPP4/P1N5/1P2QPPP/R1B2RK1 b kq - 1 12', 'r2qk2r/pp3ppp/2p1pn2/4n3/2PP4/P1b5/1P2QPPP/R1B2RK1 w kq - 0 13', 'r2qk2r/pp3ppp/2p1pn2/4P3/2P5/P1b5/1P2QPPP/R1B2RK1 b kq - 0 13', 'r2qk2r/pp3ppp/2p1pn2/4b3/2P5/P7/1P2QPPP/R1B2RK1 w kq - 0 14', 'r2qk2r/pp3ppp/2p1pn2/4Q3/2P5/P7/1P3PPP/R1B2RK1 b kq - 0 14', 'r2q1rk1/pp3ppp/2p1pn2/4Q3/2P5/P7/1P3PPP/R1B2RK1 w - - 1 15', 'r2q1rk1/pp3ppp/2p1pn2/4Q1B1/2P5/P7/1P3PPP/R4RK1 b - - 2 15', 'rq3rk1/pp3ppp/2p1pn2/4Q1B1/2P5/P7/1P3PPP/R4RK1 w - - 3 16'], 'self_clock_times': [55, 55, 54, 53, 50, 49, 41, 40], 'opp_clock_times': [57, 57, 56, 55, 54, 51, 50, 48], 'last_moves': ['b4c3', 'd4e5', 'c3e5', 'e2e5', 'e8g8', 'c1g5', 'd8b8'], 'side': True, 'self_initial_time': 60, 'opp_initial_time': 60, 'opp_rating': 2543, 'self_rating': 2560}
     start = time.time()
     engine.update_info(input_dic)
+    # Set random seeds for reproducibility
+    random_seed = 743825
     print(engine.make_move(log=False, seed=random_seed))
     end = time.time()
     
