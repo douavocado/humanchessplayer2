@@ -26,7 +26,7 @@ from common.utils import patch_fens, check_safe_premove
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
                                            capture_bottom_clock, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
-                                           capture_result, compare_result_images)
+                                           capture_result, compare_result_images, capture_rating)
 
 # import threading
 # from multiprocessing import Process, Manager
@@ -48,7 +48,9 @@ ENGINE = Engine(playing_level=DIFFICULTY)
 # TODO: incorporate settings for increment games and beserk games
 GAME_INFO = {"playing_side": None,
                   "self_initial_time": None,
-                  "opp_initial_time": None,} # these statistics don't change within a game
+                  "opp_initial_time": None,
+                  "opp_rating": None,
+                  "self_rating": None} # these statistics don't change within a game
 
 CASTLING_RIGHTS_FEN = "KQkq"
 
@@ -244,6 +246,19 @@ def set_game(starting_time):
     HOVER_SQUARE = None
     # getting game information, including the side the player is playing and the initial time
     board_img = capture_board()
+
+    # get ratings of both players
+    opp_rating = capture_rating(side="opp", position="start")
+    if opp_rating is None:
+        # try again with playing position
+        opp_rating = capture_rating(side="opp", position="playing")
+    own_rating = capture_rating(side="own", position="start")
+    if own_rating is None:
+        # try again with start position
+        own_rating = capture_rating(side="own", position="playing")
+    GAME_INFO["opp_rating"] = opp_rating
+    GAME_INFO["self_rating"] = own_rating
+    LOG += "Detected ratings: Opponent: {}, Self: {} \n".format(opp_rating, own_rating)
     
     GAME_INFO["self_initial_time"] = starting_time
     GAME_INFO["opp_initial_time"] = starting_time
@@ -1121,7 +1136,7 @@ def run_game(arena=False):
                         # then with some probability play it
                         # the lower the time control the more likely we do this
                         initial_time = GAME_INFO["self_initial_time"]
-                        prob = np.sqrt(10/initial_time)
+                        prob = np.sqrt(1/initial_time)
                         if initial_time < 200 and np.random.random() < prob:                            
                             # then we do it
                             LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), last_board.fen())

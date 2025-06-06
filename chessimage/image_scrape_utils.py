@@ -12,6 +12,9 @@ import cv2
 import time
 import numpy as np
 import chess
+import pytesseract
+import os
+from datetime import datetime
 
 def remove_background_colours(img, thresh = 1.04):
 
@@ -51,6 +54,13 @@ START_X = 543 # 550
 START_Y = 179 # 179
 STEP = 106 # 101
 PIECE_STEP = 106 # 100
+RATING_X = 1755
+RATING_WIDTH = 40
+RATING_HEIGHT = 24
+OPP_RATING_Y_WHITE = 458
+OWN_RATING_Y_WHITE = 706
+OPP_RATING_Y_BLACK = 473
+OWN_RATING_Y_BLACK = 691
 
 w_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 w_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
@@ -418,7 +428,108 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None):
         board.turn = turn
     return board.fen()
 
+def capture_rating(side, position):
+    """
+    Capture and recognize a chess rating from the screen using pytesseract
     
+    Args:
+        side (str): Either 'own' or 'opp' 
+        position (str): Either 'start' or 'playing'
+    
+    Returns:
+        int: The recognized rating, or None if confidence is too low
+    """
+    # Determine Y coordinate based on arguments
+    if side == 'own':
+        if position == 'start':
+            y_coord = OWN_RATING_Y_WHITE
+        elif position == 'playing':
+            y_coord = OWN_RATING_Y_BLACK
+        else:
+            raise ValueError("position must be 'start' or 'playing'")
+    elif side == 'opp':
+        if position == 'start':
+            y_coord = OPP_RATING_Y_WHITE
+        elif position == 'playing':
+            y_coord = OPP_RATING_Y_BLACK
+        else:
+            raise ValueError("position must be 'start' or 'playing'")
+    else:
+        raise ValueError("side must be 'own' or 'opp'")
+    
+    # Capture screenshot
+    rating_img = SCREEN_CAPTURE.capture((RATING_X, y_coord, RATING_WIDTH, RATING_HEIGHT)).copy()
+    
+    img = rating_img[:,:,:3]
+    
+    # Preprocess image using the same approach as the notebook's preprocess_image function
+    # Convert to grayscale (similar to preprocess_image "default" type)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Apply threshold to get image with only black and white
+    _, processed_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Use pytesseract to extract text with confidence
+    custom_config = '--oem 3 --psm 7'
+    
+    try:
+        # Get text and confidence data
+        data = pytesseract.image_to_data(processed_img, output_type=pytesseract.Output.DICT, config=custom_config)
+        
+        # Filter out low-confidence text and calculate average confidence
+        confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
+        if not confidences:
+            return None
+            
+        avg_confidence = sum(confidences) / len(confidences)
+        
+        # If confidence is too low, return None
+        if avg_confidence < 75:
+            return None
+        
+        # Extract text
+        text = pytesseract.image_to_string(processed_img, config=custom_config).strip()
+        
+        if not text:
+            return None
+        
+        # Remove question mark if present
+        if text.endswith('?'):
+            text = text[:-1]
+        
+        # Try to convert to integer
+        try:
+            rating = int(text)
+            # Ensure rating is reasonable (less than 9999)
+            if rating < 9999:
+                return rating
+            else:
+                return None
+        except ValueError:
+            return None
+            
+    except Exception as e:
+        # Handle any pytesseract errors
+        print("Tesseract Error in capture_rating: {} \n".format(e))
+        # Save the image to Error_files/ directory with timestamp for debugging
+        try:
+            # Create Error_files directory if it doesn't exist
+            error_dir = "Error_files"
+            if not os.path.exists(error_dir):
+                os.makedirs(error_dir)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            error_filename = os.path.join(error_dir, f"tesseract_error_{timestamp}.png")
+            
+            # Save the original and processed images
+            cv2.imwrite(error_filename, img)
+            cv2.imwrite(error_filename.replace(".png", "_processed.png"), processed_img)
+            
+            print(f"Saved error images to {error_filename}")
+        except Exception as save_error:
+            print(f"Could not save error image: {save_error}")
+        return None
 
 if __name__ == "__main__":
     time.sleep(5)

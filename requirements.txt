@@ -15,4 +15,5 @@ pandas>=2.2.0
 mss>=9.0.0
 pyscreenshot>=3.1
 pyxdg>=0.27
-tqdm>=4.65.0 
+tqdm>=4.65.0
+pytesseract>=0.3.13

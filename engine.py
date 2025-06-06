@@ -1417,16 +1417,19 @@ class Engine:
         # fast over the last few moves (as we feel the pressure to keep up with the pace)
         # we do not move slower if opponents has beserked, because our mood function should take care of that
         if len(self.input_info["opp_clock_times"]) >= 4:
+            target_ratio = min(self.input_info["self_clock_times"][-1] / (self.input_info["opp_clock_times"][-1] + 1e-6), 1)
             recent_time = (self.input_info["opp_clock_times"][-4] - self.input_info["opp_clock_times"][-1])/3 # opponents average move time in last 3 moves
             non_recent_time = (self.input_info["opp_clock_times"][0] - self.input_info["opp_clock_times"][-1])/(len(self.input_info["opp_clock_times"])-1)
             target_time_spent = 0.2*non_recent_time + 0.8*recent_time
             # normalise for what the opponent total time is (in the case where our starting time was different)
             # eg beserks
-            berserk_ratio = max(self.input_info["opp_initial_time"] / self.input_info["self_initial_time"],1)
+            berserk_ratio = max(self.input_info["opp_initial_time"] / (self.input_info["self_initial_time"] + 1e-6),1)
             target_time_spent /= berserk_ratio
+
+            target_time_spent *= target_ratio
             
             # sometimes we don't use this
-            if np.random.random() < 0.4:
+            if np.random.random() < 0.3:
                 time_taken = 0.8*target_time_spent + time_taken * 0.2
         self.log += "Decided time taken after opponent speed consideration: {} \n".format(time_taken)
         
