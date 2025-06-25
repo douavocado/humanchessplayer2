@@ -14,7 +14,6 @@ import argparse
 # Import only the constants module first, delay other imports
 import common.constants as constants
 
-
 parser = argparse.ArgumentParser(description="Setting game mode")
 parser.add_argument("-t", "--time", type=int, default=60,
                     help="The time control in seconds")

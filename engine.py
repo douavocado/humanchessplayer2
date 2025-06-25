@@ -66,6 +66,7 @@ class Engine:
         self.log = ""
         self.log_file = log_file
         
+        
         # setting up scorers for moves
         self.human_scorers = {
             "opening": MoveScorer(MOVE_FROM_WEIGHTS_OP_PTH, MOVE_TO_WEIGHTS_OP_PTH),
@@ -873,6 +874,8 @@ class Engine:
         san_re_evaluate_moves = [self.current_board.san(chess.Move.from_uci(x)) for x in re_evaluate_moves]
         time_allowed = target_time - (reval_start - start)
         self.log += "Re-evaluating moves: {} with depth {} with time allowed {} \n".format(san_re_evaluate_moves, depth, time_allowed)
+        # Targeted console output
+        print(f"[ENGINE] Re-evaluating moves: {san_re_evaluate_moves} with depth {depth}")
         re_evaluations_dic = self._re_evaluate(self.current_board, re_evaluate_moves, no_root_moves, depth=depth, prev_board=prev_board, limit=[depth*no_root_moves, time_allowed])
         san_re_evaluations_dic = {self.current_board.san(chess.Move.from_uci(k)):v for k,v in re_evaluations_dic.items()}
         self.log += "Re-evaluated evals with depth considered statistics are: {} \n".format(san_re_evaluations_dic)
@@ -1181,6 +1184,7 @@ class Engine:
         # Now determine our player "mood" and set it as our mode for the rest of the calculations
         self.mood = self._set_mood()
         self.log += "Setted mood to be: {} \n".format(self.mood)
+        print(f"[ENGINE] Setted mood to be: {self.mood}")
         self.analytics_updated = True
     
     def check_obvious_move(self):
@@ -1440,16 +1444,21 @@ class Engine:
         opp_rating = self.input_info["opp_rating"]
         self_rating = self.input_info["self_rating"]
         if opp_rating is not None and self_rating is not None:
-            rating_ratio = (self_rating - opp_rating)/self_rating - 1
+            rating_ratio = (self_rating - opp_rating)/self_rating
             rating_factor = 1 - 0.75*np.tanh(2*rating_ratio)
             time_taken *= rating_factor
             self.log += "Decided time taken after opponent relative rating consideration: {} \n".format(time_taken)
         else:
             self.log += "No rating information available. Not considering rating factor. \n"
 
-        
+        # make sure we are not taking time that we do not have
+        if time_taken > own_time*0.7+1:
+            time_taken = own_time*0.7 + 1
+            self.log += "We do not have enough time to take this much time. Reducing time taken to {} \n".format(time_taken)
         time_taken = max(time_taken, 0.1)
         self.log += "Decided time taken for move: {} \n".format(time_taken)
+        # Targeted console output
+        print(f"[ENGINE] Decided time taken for move: {time_taken:.3f}s")
         return time_taken
     
     def _set_mood(self):
@@ -2004,12 +2013,37 @@ class Engine:
         else:
             self.log += "Do not have enough time to ponder for he next position. Time taken so far: {} \n".format(time_spent)
             ponder_dic = None
-        return_dic["ponder_dic"] = ponder_dic
+
+        # If ponder dic is not None, for every position in ponder dic, also see if there is a premove we can make
+        if ponder_dic is not None:
+            return_ponder_dic = {}
+            for board_fen, response_move_uci in ponder_dic.items():
+                b = chess.Board()
+                b.set_board_fen(board_fen)
+                b.turn = self.input_info["side"]
+                # push response move uci to the board, but first check if it is legal
+                if chess.Move.from_uci(response_move_uci) in b.legal_moves:
+                    b.push_uci(response_move_uci)
+                    # get premove for the board
+                    premove = self.get_premove(b, self.input_info["side"], takeback_only=True)
+                    if premove is not None:
+                        return_ponder_dic[board_fen] = {"move":response_move_uci, "premove":premove}
+                    else:
+                        return_ponder_dic[board_fen] = {"move":response_move_uci, "premove":None}
+                else:
+                    # no premove for this position
+                    return_ponder_dic[board_fen] = {"move":response_move_uci, "premove":None}                
+        else:
+            return_ponder_dic = None
+
+        return_dic["ponder_dic"] = return_ponder_dic
         
         if log == True:
             self._write_log()
         self.log += "Returning return dic with all of our engine's calculations: \n"
         self.log += "{} \n".format(return_dic)
+        # Targeted console output
+        print(f"[ENGINE] Final output: {return_dic}")
         
         # log our calculating information for this move
         if log == True:

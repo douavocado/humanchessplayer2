@@ -823,7 +823,7 @@ def hover(duration=0.1, noise=STEP*2):
     if HOVER_SQUARE is None:
         # set new hover square
         last_known_board = chess.Board(DYNAMIC_INFO["fens"][-1])
-        relevant_move_objs = [chess.Move.from_uci(x) for x in PONDER_DIC.values() if last_known_board.color_at(chess.Move.from_uci(x).from_square) == GAME_INFO["playing_side"]]
+        relevant_move_objs = [chess.Move.from_uci(x["move"]) for x in PONDER_DIC.values() if last_known_board.color_at(chess.Move.from_uci(x["move"]).from_square) == GAME_INFO["playing_side"]]
         if len(relevant_move_objs) == 0:
             # then choose random own piece to hover
             own_piece_squares = list(chess.SquareSet(last_known_board.occupied_co[GAME_INFO["playing_side"]]))
@@ -1102,8 +1102,10 @@ def run_game(arena=False):
         current_board_fen = chess.Board(DYNAMIC_INFO["fens"][-1]).board_fen()
         if own_time > 10:            
             if current_board_fen in PONDER_DIC:                    
-                response_uci = PONDER_DIC[current_board_fen]
-                LOG += "Found current position in ponder dic. Responding with corresponding move: {} \n".format(response_uci)
+                response_dic = PONDER_DIC[current_board_fen]
+                response_uci = response_dic["move"]
+                premove = response_dic["premove"]
+                LOG += "Found current position in ponder dic. Responding with corresponding move: {} and premove: {} \n".format(response_uci, premove)
                 
                 # wait a certain amount of time that depends on the time control
                 initial_time = GAME_INFO["self_initial_time"]
@@ -1111,21 +1113,21 @@ def run_game(arena=False):
                 wait_time = base_time*(0.8+0.4*random.random())
                 LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                 time.sleep(wait_time)
-                successful = make_move(response_uci)
+                successful = make_move(response_uci, premove=premove)
                 if successful == True:
                     # We made clicks for the move successfully
                     LOG += "Made pondered moves successfully. \n"
                 else:
                     # We try one more time, in case it was mouse slip
                     LOG += "Did not make pondered move successfully, trying once more. \n"
-                    successful = make_move(response_uci)
+                    successful = make_move(response_uci, premove=premove)
                 write_log() 
                 continue
             elif len(DYNAMIC_INFO["fens"]) >= 2 and len(PONDER_DIC) >= 1:
                 # even if the position is not in ponder dic, if the last
                 # pondered move was a safe premove in the previous position,
                 # with some probability play it if it is legal move
-                last_pondered_move_obj = chess.Move.from_uci(list(PONDER_DIC.values())[-1])
+                last_pondered_move_obj = chess.Move.from_uci(list(PONDER_DIC.values())[-1]["move"])
                 last_board = chess.Board(DYNAMIC_INFO["fens"][-2])
                 curr_board = chess.Board(current_board_fen)
                 #switch the trun
@@ -1165,7 +1167,7 @@ def run_game(arena=False):
             # with some probability
             prob = (30 - own_time)/50
             # we consider last 10 pondered moves here instead
-            candidate_moves = [chess.Move.from_uci(x) for x in list(PONDER_DIC.values())[-10:] if chess.Move.from_uci(x) in dummy_board.legal_moves]
+            candidate_moves = [chess.Move.from_uci(x["move"]) for x in list(PONDER_DIC.values())[-10:] if chess.Move.from_uci(x["move"]) in dummy_board.legal_moves]
             for move_obj in candidate_moves:
                 if check_safe_premove(last_board, move_obj.uci()) or np.random.random() < prob:
                     # then we do it
