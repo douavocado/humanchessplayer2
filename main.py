@@ -100,7 +100,7 @@ else:
     games = args.games
     for i in range(games):
         time.sleep(0.5)
-        res = await_new_game()
+        res = await_new_game(timeout=5)
         if res is not None:
             set_game(res)
             run_game(arena=False)

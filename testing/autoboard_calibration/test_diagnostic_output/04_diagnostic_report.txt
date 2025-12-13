@@ -1,0 +1,60 @@
+CHESS BOARD AUTO-CALIBRATION DIAGNOSTIC REPORT
+============================================================
+
+CONFIGURATION SUMMARY
+------------------------------
+Board Position: (1178, 171, 100, 100)
+Detection Method: corner_template
+Confidence: 0.440
+Template Scale: 0.6
+Timestamp: 2025-09-12T20:42:45
+
+CLOCK DETECTION TEST RESULTS
+------------------------------
+
+Bottom Clock:
+  play: ✅ PASS (Time: 0:01)
+  start1: ✅ PASS (Time: 0:01)
+  start2: ✅ PASS (Time: 0:01)
+  end1: ✅ PASS (Time: 0:01)
+  end2: ✅ PASS (Time: 0:01)
+  end3: ✅ PASS (Time: 0:01)
+
+Top Clock:
+  play: ✅ PASS (Time: 0:01)
+  start1: ✅ PASS (Time: 0:01)
+  start2: ✅ PASS (Time: 0:01)
+  end1: ✅ PASS (Time: 0:01)
+  end2: ✅ PASS (Time: 0:01)
+
+Overall Success Rate: 11/11 (100.0%)
+
+UI ELEMENT POSITIONS
+------------------------------
+
+bottom_clock:
+  play: (1298, 171) [147x44]
+  start1: (1298, 185) [147x44]
+  start2: (1298, 199) [147x44]
+  end1: (1298, 240) [147x44]
+  end2: (1298, 176) [147x44]
+  end3: (1298, 205) [147x44]
+
+top_clock:
+  play: (1298, 416) [147x44]
+  start1: (1298, 388) [147x44]
+  start2: (1298, 402) [147x44]
+  end1: (1298, 347) [147x44]
+  end2: (1298, 439) [147x44]
+
+notation:
+  x: 1336
+  y: 583
+  width: 166
+  height: 104
+
+rating:
+  opp_white: (1633, 450) [40x24]
+  own_white: (1633, 698) [40x24]
+  opp_black: (1633, 465) [40x24]
+  own_black: (1633, 683) [40x24]

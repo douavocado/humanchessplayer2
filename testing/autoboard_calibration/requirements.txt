@@ -1,0 +1,14 @@
+# Chess Board Auto-Calibration Requirements
+
+# Core dependencies
+opencv-python>=4.5.0
+numpy>=1.19.0
+fastgrab>=1.0.0
+
+# Optional dependencies for enhanced functionality
+matplotlib>=3.3.0  # For interactive visualization
+Pillow>=8.0.0     # Additional image processing support
+
+# Development/testing dependencies (optional)
+pytest>=6.0.0     # For unit tests
+black>=21.0.0     # Code formatting

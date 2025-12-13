@@ -1,0 +1,135 @@
+{
+  "board_detection": {
+    "method": "corner_template",
+    "position": [
+      1178,
+      171,
+      100,
+      100
+    ],
+    "confidence": 0.4401436746120453,
+    "scale": 0.5,
+    "template_size": [
+      80,
+      80
+    ]
+  },
+  "timestamp": "2025-09-12T20:42:45",
+  "template_scale": 0.6,
+  "ui_elements": {
+    "bottom_clock": {
+      "play": {
+        "x": 1298,
+        "y": 171,
+        "width": 147,
+        "height": 44
+      },
+      "start1": {
+        "x": 1298,
+        "y": 185,
+        "width": 147,
+        "height": 44
+      },
+      "start2": {
+        "x": 1298,
+        "y": 199,
+        "width": 147,
+        "height": 44
+      },
+      "end1": {
+        "x": 1298,
+        "y": 240,
+        "width": 147,
+        "height": 44
+      },
+      "end2": {
+        "x": 1298,
+        "y": 176,
+        "width": 147,
+        "height": 44
+      },
+      "end3": {
+        "x": 1298,
+        "y": 205,
+        "width": 147,
+        "height": 44
+      }
+    },
+    "top_clock": {
+      "play": {
+        "x": 1298,
+        "y": 416,
+        "width": 147,
+        "height": 44
+      },
+      "start1": {
+        "x": 1298,
+        "y": 388,
+        "width": 147,
+        "height": 44
+      },
+      "start2": {
+        "x": 1298,
+        "y": 402,
+        "width": 147,
+        "height": 44
+      },
+      "end1": {
+        "x": 1298,
+        "y": 347,
+        "width": 147,
+        "height": 44
+      },
+      "end2": {
+        "x": 1298,
+        "y": 439,
+        "width": 147,
+        "height": 44
+      }
+    },
+    "notation": {
+      "x": 1336,
+      "y": 583,
+      "width": 166,
+      "height": 104
+    },
+    "rating": {
+      "opp_white": {
+        "x": 1633,
+        "y": 450,
+        "width": 40,
+        "height": 24
+      },
+      "own_white": {
+        "x": 1633,
+        "y": 698,
+        "width": 40,
+        "height": 24
+      },
+      "opp_black": {
+        "x": 1633,
+        "y": 465,
+        "width": 40,
+        "height": 24
+      },
+      "own_black": {
+        "x": 1633,
+        "y": 683,
+        "width": 40,
+        "height": 24
+      }
+    }
+  },
+  "state_analysis": {
+    "method": "state_specific_detection",
+    "states_detected": [
+      "play",
+      "start1",
+      "start2",
+      "end1",
+      "end2",
+      "end3"
+    ],
+    "note": "Coordinates account for UI shifts during different game states (start, play, end)"
+  }
+}

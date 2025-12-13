@@ -14,7 +14,20 @@ import numpy as np
 import chess
 import pytesseract
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
+
+# Add auto_calibration to path
+sys.path.append(str(Path(__file__).parent.parent / "auto_calibration"))
+
+try:
+    from config_loader import chess_config
+    USE_CONFIG = True
+    print("📍 Using auto-calibrated coordinates")
+except ImportError:
+    USE_CONFIG = False
+    print("⚠️  Auto-calibration not available, using hardcoded coordinates")
 
 def remove_background_colours(img, thresh = 1.04):
 
@@ -32,35 +45,108 @@ def remove_background_colours(img, thresh = 1.04):
 
 SCREEN_CAPTURE = screenshot.Screenshot()
 
-BOTTOM_CLOCK_X = 1420 # 1397
-BOTTOM_CLOCK_Y = 742 #720
-BOTTOM_CLOCK_Y_START = 756 #734
-BOTTOM_CLOCK_Y_START_2 =  770 #748
-BOTTOM_CLOCK_Y_END = 811 # 789 # resigned or timeout
-BOTTOM_CLOCK_Y_END_2 = 747 # 725 # aborted
-BOTTOM_CLOCK_Y_END_3 = 776 # 754
-TOP_CLOCK_X = 1420
-TOP_CLOCK_Y = 424 # 401
-TOP_CLOCK_Y_START = 396 # 373
-TOP_CLOCK_Y_START_2 = 410 # 387
-TOP_CLOCK_Y_END = 355 # 332 # resigned or timeout
-TOP_CLOCK_Y_END_2 = 420 # 397 # aborted
-CLOCK_WIDTH = 147
-CLOCK_HEIGHT = 44
-W_NOTATION_X = 1458
-W_NOTATION_Y = 591
-W_NOTATION_WIDTH, W_NOTATION_HEIGHT = 166, 104
-START_X = 543 # 550
-START_Y = 179 # 179
-STEP = 106 # 101
-PIECE_STEP = 106 # 100
-RATING_X = 1755
-RATING_WIDTH = 40
-RATING_HEIGHT = 24
-OPP_RATING_Y_WHITE = 458
-OWN_RATING_Y_WHITE = 706
-OPP_RATING_Y_BLACK = 473
-OWN_RATING_Y_BLACK = 691
+# Dynamic coordinate loading functions
+def get_coordinates():
+    """Get coordinates from config or fallback to hardcoded values."""
+    if USE_CONFIG:
+        return chess_config.get_coordinates()
+    else:
+        # Fallback hardcoded coordinates
+        return {
+            'board': {'x': 543, 'y': 179, 'width': 848, 'height': 848},
+            'bottom_clock': {
+                'play': {'x': 1420, 'y': 742, 'width': 147, 'height': 44},
+                'start1': {'x': 1420, 'y': 756, 'width': 147, 'height': 44},
+                'start2': {'x': 1420, 'y': 770, 'width': 147, 'height': 44},
+                'end1': {'x': 1420, 'y': 811, 'width': 147, 'height': 44},
+                'end2': {'x': 1420, 'y': 747, 'width': 147, 'height': 44},
+                'end3': {'x': 1420, 'y': 776, 'width': 147, 'height': 44}
+            },
+            'top_clock': {
+                'play': {'x': 1420, 'y': 424, 'width': 147, 'height': 44},
+                'start1': {'x': 1420, 'y': 396, 'width': 147, 'height': 44},
+                'start2': {'x': 1420, 'y': 410, 'width': 147, 'height': 44},
+                'end1': {'x': 1420, 'y': 355, 'width': 147, 'height': 44},
+                'end2': {'x': 1420, 'y': 420, 'width': 147, 'height': 44}
+            },
+            'notation': {'x': 1458, 'y': 591, 'width': 166, 'height': 104},
+            'rating': {
+                'opp_white': {'x': 1755, 'y': 458, 'width': 40, 'height': 24},
+                'own_white': {'x': 1755, 'y': 706, 'width': 40, 'height': 24},
+                'opp_black': {'x': 1755, 'y': 473, 'width': 40, 'height': 24},
+                'own_black': {'x': 1755, 'y': 691, 'width': 40, 'height': 24}
+            }
+        }
+
+def get_board_info():
+    """Get board position and step size."""
+    coords = get_coordinates()
+    board = coords['board']
+    step = board['width'] // 8  # Chess board is 8x8
+    return board['x'], board['y'], step
+
+def get_clock_info(clock_type, state="play"):
+    """Get clock position info."""
+    coords = get_coordinates()
+    clock = coords[clock_type][state]
+    return clock['x'], clock['y'], clock['width'], clock['height']
+
+# Load coordinates into legacy variable names for backward compatibility
+try:
+    coords = get_coordinates()
+    
+    # Board coordinates
+    START_X, START_Y, STEP = get_board_info()
+    PIECE_STEP = STEP
+    
+    # Clock coordinates (using 'play' state as default)
+    BOTTOM_CLOCK_X, BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT = get_clock_info('bottom_clock', 'play')
+    TOP_CLOCK_X, TOP_CLOCK_Y, _, _ = get_clock_info('top_clock', 'play')
+    
+    # State-specific Y coordinates for backward compatibility
+    _, BOTTOM_CLOCK_Y_START, _, _ = get_clock_info('bottom_clock', 'start1')
+    _, BOTTOM_CLOCK_Y_START_2, _, _ = get_clock_info('bottom_clock', 'start2')
+    _, BOTTOM_CLOCK_Y_END, _, _ = get_clock_info('bottom_clock', 'end1')
+    _, BOTTOM_CLOCK_Y_END_2, _, _ = get_clock_info('bottom_clock', 'end2')
+    _, BOTTOM_CLOCK_Y_END_3, _, _ = get_clock_info('bottom_clock', 'end3')
+    
+    _, TOP_CLOCK_Y_START, _, _ = get_clock_info('top_clock', 'start1')
+    _, TOP_CLOCK_Y_START_2, _, _ = get_clock_info('top_clock', 'start2')
+    _, TOP_CLOCK_Y_END, _, _ = get_clock_info('top_clock', 'end1')
+    _, TOP_CLOCK_Y_END_2, _, _ = get_clock_info('top_clock', 'end2')
+    
+    # Notation coordinates
+    notation = coords['notation']
+    W_NOTATION_X, W_NOTATION_Y = notation['x'], notation['y']
+    W_NOTATION_WIDTH, W_NOTATION_HEIGHT = notation['width'], notation['height']
+    
+    # Rating coordinates
+    rating = coords['rating']
+    RATING_X = rating['opp_white']['x']
+    RATING_WIDTH = rating['opp_white']['width']
+    RATING_HEIGHT = rating['opp_white']['height']
+    OPP_RATING_Y_WHITE = rating['opp_white']['y']
+    OWN_RATING_Y_WHITE = rating['own_white']['y']
+    OPP_RATING_Y_BLACK = rating['opp_black']['y']
+    OWN_RATING_Y_BLACK = rating['own_black']['y']
+    
+except Exception as e:
+    print(f"Warning: Error loading coordinates: {e}")
+    print("Using fallback hardcoded coordinates")
+    # Fallback values
+    START_X, START_Y, STEP, PIECE_STEP = 543, 179, 106, 106
+    BOTTOM_CLOCK_X, BOTTOM_CLOCK_Y = 1420, 742
+    BOTTOM_CLOCK_Y_START, BOTTOM_CLOCK_Y_START_2 = 756, 770
+    BOTTOM_CLOCK_Y_END, BOTTOM_CLOCK_Y_END_2, BOTTOM_CLOCK_Y_END_3 = 811, 747, 776
+    TOP_CLOCK_X, TOP_CLOCK_Y = 1420, 424
+    TOP_CLOCK_Y_START, TOP_CLOCK_Y_START_2 = 396, 410
+    TOP_CLOCK_Y_END, TOP_CLOCK_Y_END_2 = 355, 420
+    CLOCK_WIDTH, CLOCK_HEIGHT = 147, 44
+    W_NOTATION_X, W_NOTATION_Y = 1458, 591
+    W_NOTATION_WIDTH, W_NOTATION_HEIGHT = 166, 104
+    RATING_X, RATING_WIDTH, RATING_HEIGHT = 1755, 40, 24
+    OPP_RATING_Y_WHITE, OWN_RATING_Y_WHITE = 458, 706
+    OPP_RATING_Y_BLACK, OWN_RATING_Y_BLACK = 473, 691
 
 w_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 w_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
@@ -281,34 +367,44 @@ def capture_board(shift=False):
     return img
 
 def capture_bottom_clock(state="play"):
-    # TODO: configurable
-    if state == "play":
-        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start1":
-        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start2":
-        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end1":
-        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end2":
-        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end3":
-        im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_3, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    """Capture bottom clock using dynamic coordinates."""
+    try:
+        x, y, w, h = get_clock_info('bottom_clock', state)
+        im = SCREEN_CAPTURE.capture((x, y, w, h)).copy()
+    except:
+        # Fallback to legacy variables if config fails
+        if state == "play":
+            im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "start1":
+            im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "start2":
+            im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "end1":
+            im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "end2":
+            im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "end3":
+            im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_3, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     img= im[:,:,:3]
     return img
 
 def capture_top_clock(state="play"):
-    # TODO: configurable
-    if state == "play":
-        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start1":
-        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "start2":
-        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end1":
-        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
-    elif state == "end2":
-        im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+    """Capture top clock using dynamic coordinates."""
+    try:
+        x, y, w, h = get_clock_info('top_clock', state)
+        im = SCREEN_CAPTURE.capture((x, y, w, h)).copy()
+    except:
+        # Fallback to legacy variables if config fails
+        if state == "play":
+            im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "start1":
+            im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "start2":
+            im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_START_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "end1":
+            im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        elif state == "end2":
+            im = SCREEN_CAPTURE.capture((TOP_CLOCK_X,TOP_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
     img= im[:,:,:3]
     return img
 
