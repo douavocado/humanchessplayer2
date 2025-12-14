@@ -2,406 +2,446 @@
 """
 Chess Board Auto-Calibration Tool
 
-Main calibration tool that detects chess board and generates coordinate configuration.
-This tool creates a config file that replaces hardcoded coordinates in the main system.
+Main entry point for calibration. Supports:
+- Live calibration from current screen
+- Offline calibration from saved screenshots
+- Verification of existing configuration
+
+Usage:
+    # Live calibration (default)
+    python calibrator.py --live
+    
+    # Offline calibration from screenshots
+    python calibrator.py --offline ./calibration_screenshots/
+    
+    # Offline from single screenshot
+    python calibrator.py --screenshot ./my_screenshot.png
+    
+    # Verify existing configuration
+    python calibrator.py --verify
 """
 
-import json
-import time
+import argparse
 import sys
-from datetime import datetime
+import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional, Dict
 
-from board_detector import BoardDetector
-from coordinate_calculator import CoordinateCalculator
-from clock_detector import ClockDetector
-from calibration_utils import SCREEN_CAPTURE
+from .board_detector import BoardDetector
+from .clock_detector import ClockDetector
+from .coordinate_calculator import CoordinateCalculator
+from .visualiser import CalibrationVisualiser
+from .config import save_config, ChessConfig
+from .utils import capture_screenshot, load_image
 
-class ChessBoardCalibrator:
-    """Main calibration system for generating device-independent coordinates."""
+
+class Calibrator:
+    """
+    Main calibration orchestrator.
     
-    def __init__(self, search_region=None):
-        """
-        Initialise calibrator.
-        
-        Args:
-            search_region: Optional (x, y, width, height) to limit board search.
-                          Use (0, 0, 1920, 1080) for left monitor only.
-        """
-        self.board_detector = BoardDetector(search_region=search_region)
+    Coordinates board detection, clock detection, coordinate calculation,
+    and visualisation into a complete calibration workflow.
+    """
+    
+    def __init__(self):
+        """Initialise calibrator."""
+        self.board_detector = BoardDetector()
         self.clock_detector = ClockDetector()
-        self.calculator = CoordinateCalculator()  # Keep for non-clock coordinates
-        self.screen_capture = SCREEN_CAPTURE
-        self.search_region = search_region
-        
-    def run_calibration(self, output_file: str = "chess_config.json") -> Optional[Dict]:
+        self.calculator = CoordinateCalculator()
+        self.visualiser: Optional[CalibrationVisualiser] = None
+    
+    def run_live(self, countdown: int = 5, visualise: bool = True) -> Optional[Dict]:
         """
-        Run complete calibration process and save configuration.
+        Run live calibration from current screen.
         
         Args:
-            output_file: Path to save the configuration file
-            
+            countdown: Seconds to wait before capturing.
+            visualise: Whether to create debug visualisations.
+        
         Returns:
-            Configuration dictionary or None if failed
+            Calibration configuration, or None if failed.
         """
         print("=" * 60)
         print("CHESS BOARD AUTO-CALIBRATION")
         print("=" * 60)
         print()
-        print("This tool will automatically detect your chess board and generate")
-        print("device-independent coordinates for clocks and UI elements.")
+        print("This tool will automatically detect your chess board and UI elements.")
         print()
         print("Instructions:")
-        print("1. Open a chess game in your browser (Chess.com or Lichess)")
-        print("2. Make sure the board and clocks are visible")
-        print("3. The calibration will start in 5 seconds...")
+        print("1. Open a chess game in your browser (Lichess)")
+        print("2. Ensure the board and clocks are visible")
+        print("3. The calibration will start after the countdown")
         print()
         
         # Countdown
-        for i in range(5, 0, -1):
-            print(f"Starting in {i}...")
-            time.sleep(1)
+        if countdown > 0:
+            for i in range(countdown, 0, -1):
+                print(f"Starting in {i}...")
+                time.sleep(1)
         
-        print("\nStep 1: Detecting chess board...")
+        print("\n" + "-" * 40)
+        print("STEP 1: Capturing screenshot...")
+        print("-" * 40)
         
-        # Detect board position
-        board_data = self.board_detector.find_chess_board()
-        if not board_data:
-            print("❌ FAILED: Could not detect chess board")
-            print("\nTroubleshooting:")
-            print("• Ensure a chess game is open and fully visible")
-            print("• Try adjusting browser zoom to 100%")
-            print("• Make sure the board is not obstructed")
+        # Capture screenshot
+        image = capture_screenshot()
+        if image is None:
+            print("❌ Failed to capture screenshot")
             return None
         
-        print(f"✅ Board detected: {board_data['method']} (confidence: {board_data['confidence']:.3f})")
-        print(f"   Position: {board_data['position']}")
+        print(f"✅ Screenshot captured: {image.shape[1]}x{image.shape[0]}")
         
-        print("\nStep 2: Detecting clock positions...")
+        # Run calibration on image
+        return self._calibrate_image(image, visualise)
+    
+    def run_offline(self, screenshot_path: str, 
+                   state_hint: Optional[str] = None,
+                   visualise: bool = True) -> Optional[Dict]:
+        """
+        Run calibration from a saved screenshot.
         
-        # Set board position for clock detector and detect clocks
-        self.clock_detector.set_board_position(board_data)
-        clock_data = self.clock_detector.find_clocks()
+        Args:
+            screenshot_path: Path to screenshot file.
+            state_hint: Optional hint about the game state.
+            visualise: Whether to create debug visualisations.
         
-        if not clock_data:
-            print("❌ FAILED: Could not detect any clocks")
-            print("\nTroubleshooting:")
-            print("• Ensure a chess game is OPEN and ACTIVE")
-            print("• Clocks must show actual time values (not '--:--')")
-            print("• Try during active gameplay when times are displayed")
-            print("• Make sure clock area is not obstructed")
-            print("• The board detector may need recalibration if coordinates are far off")
-            return None
-        
-        print(f"✅ Clocks detected: {clock_data['total_detections']} positions found")
-        for clock in clock_data['clocks']:
-            pos = clock['position']
-            print(f"   {clock['clock_type']} ({clock['state']}): ({pos[0]}, {pos[1]}) - "
-                  f"{clock['time_value']}s (confidence: {clock['confidence']:.3f})")
-        
-        print("\nStep 3: Calculating remaining UI coordinates...")
-        
-        # Calculate non-clock coordinates using the existing calculator
-        screenshot_img = self.screen_capture.capture()
-        if screenshot_img is None:
-            print("❌ FAILED: Could not capture screenshot for coordinate calculation")
-            return None
-        
-        self.calculator.set_board_position(board_data)
-        base_coordinates = self.calculator.calculate_ui_coordinates(screenshot_img)
-        
-        # Merge OCR-detected clocks with calculated coordinates
-        coordinates = self._merge_clock_coordinates(base_coordinates, clock_data)
-        
-        print("\nStep 4: Validating coordinates...")
-        
-        # Validate the final coordinates using OCR-based validation
-        validation = self.clock_detector.validate_existing_coordinates(coordinates, screenshot_img)
-        
-        if validation['overall_success_rate'] < 0.3:
-            print(f"⚠️  WARNING: Low success rate ({validation['overall_success_rate']:.1%})")
-            print("   The calibration may not be accurate. Consider:")
-            print("   • Running calibration during active gameplay")
-            print("   • Ensuring clocks are clearly visible")
-            print("   • Trying a different browser zoom level")
-        else:
-            print(f"✅ Validation successful: {validation['overall_success_rate']:.1%} success rate")
-        
-        print("\nStep 5: Generating configuration...")
-        
-        # Create final configuration
-        config = {
-            'calibration_info': {
-                'timestamp': datetime.now().isoformat(),
-                'board_detection': board_data,
-                'clock_detection': {
-                    'method': clock_data['detection_method'],
-                    'total_detections': clock_data['total_detections'],
-                    'clocks_found': len(clock_data['clocks'])
-                },
-                'validation_success_rate': validation['overall_success_rate'],
-                'total_positions_tested': validation['total_tested'],
-                'successful_positions': validation['total_successful']
-            },
-            'coordinates': coordinates,
-            'validation_results': validation,
-            'clock_detection_results': clock_data
-        }
-        
-        # Save configuration to file
-        config_path = Path(__file__).parent / output_file
-        try:
-            # Convert numpy types to native Python types for JSON serialization
-            config_json = self._convert_numpy_types(config)
-            with open(config_path, 'w') as f:
-                json.dump(config_json, f, indent=2)
-            print(f"✅ Configuration saved to: {config_path}")
-        except Exception as e:
-            print(f"❌ FAILED to save configuration: {e}")
-            return None
-        
-        print("\n" + "=" * 60)
-        print("CALIBRATION COMPLETE!")
+        Returns:
+            Calibration configuration, or None if failed.
+        """
         print("=" * 60)
+        print("OFFLINE CALIBRATION")
+        print("=" * 60)
+        print()
+        print(f"Source: {screenshot_path}")
+        if state_hint:
+            print(f"State hint: {state_hint}")
+        print()
         
-        self.print_summary(config)
+        # Load image
+        image = load_image(screenshot_path)
+        if image is None:
+            print(f"❌ Failed to load image: {screenshot_path}")
+            return None
         
-        print(f"\nNext steps:")
-        print(f"1. The configuration has been saved to: {config_path}")
-        print(f"2. Your main.py will now use these coordinates instead of hardcoded values")
-        print(f"3. To recalibrate, simply run this tool again")
+        print(f"✅ Image loaded: {image.shape[1]}x{image.shape[0]}")
+        
+        # Run calibration
+        config = self._calibrate_image(image, visualise)
+        
+        if config:
+            # Add source info
+            config['calibration_info']['source'] = screenshot_path
+            if state_hint:
+                config['calibration_info']['state_hint'] = state_hint
         
         return config
     
-    def _convert_numpy_types(self, obj):
-        """Convert numpy types to native Python types for JSON serialization."""
-        import numpy as np
-        
-        if isinstance(obj, dict):
-            return {self._convert_numpy_types(key): self._convert_numpy_types(value) 
-                    for key, value in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self._convert_numpy_types(item) for item in obj]
-        elif isinstance(obj, np.integer):
-            return int(obj)
-        elif isinstance(obj, np.floating):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return self._convert_numpy_types(obj.tolist())
-        elif isinstance(obj, np.bool_):
-            return bool(obj)
-        else:
-            return obj
-    
-    def _merge_clock_coordinates(self, base_coordinates: Dict, clock_data: Dict) -> Dict:
+    def _calibrate_image(self, image, visualise: bool = True) -> Optional[Dict]:
         """
-        Merge OCR-detected clock positions with calculated coordinates.
+        Run calibration on an image.
         
         Args:
-            base_coordinates: Coordinates calculated by CoordinateCalculator
-            clock_data: Clock detection results from ClockDetector
-            
+            image: BGR image to calibrate from.
+            visualise: Whether to create debug visualisations.
+        
         Returns:
-            Updated coordinates dictionary with OCR-detected clocks
+            Calibration configuration, or None if failed.
         """
-        coordinates = base_coordinates.copy()
+        # Step 2: Detect board
+        print("\n" + "-" * 40)
+        print("STEP 2: Detecting chess board...")
+        print("-" * 40)
         
-        # Initialize clock dictionaries if they don't exist
-        if 'bottom_clock' not in coordinates:
-            coordinates['bottom_clock'] = {}
-        if 'top_clock' not in coordinates:
-            coordinates['top_clock'] = {}
+        board_detection = self.board_detector.detect(image)
         
-        # Process each detected clock
-        for clock in clock_data['clocks']:
-            clock_type = clock['clock_type'] + '_clock'  # Convert 'bottom' -> 'bottom_clock'
-            state = clock['state']
-            x, y, width, height = clock['position']
+        if board_detection is None:
+            print("❌ Failed to detect chess board")
+            print()
+            print("Troubleshooting:")
+            print("• Ensure a chess game is visible on screen")
+            print("• The board should be clearly visible with standard Lichess colours")
+            print("• Try adjusting browser zoom to 100%")
+            return None
+        
+        print(f"✅ Board detected:")
+        print(f"   Position: ({board_detection['x']}, {board_detection['y']})")
+        print(f"   Size: {board_detection['size']}x{board_detection['size']}")
+        print(f"   Step: {board_detection['step']}px")
+        print(f"   Confidence: {board_detection['confidence']:.3f}")
+        
+        # Step 3: Detect clocks
+        print("\n" + "-" * 40)
+        print("STEP 3: Detecting clocks...")
+        print("-" * 40)
+        
+        self.clock_detector.set_board(board_detection)
+        clock_detection = self.clock_detector.detect(image)
+        
+        if clock_detection:
+            print(f"✅ Clocks detected: {clock_detection['detection_count']} positions")
+            print(f"   Clock X: {clock_detection['clock_x']}")
             
-            # Add the detected clock position
-            coordinates[clock_type][state] = {
-                'x': x,
-                'y': y,
-                'width': width,
-                'height': height,
-                'detection_confidence': clock['confidence'],
-                'time_value_detected': clock['time_value']
-            }
+            for clock_type in ['bottom_clock', 'top_clock']:
+                if clock_type in clock_detection and clock_detection[clock_type]:
+                    states = list(clock_detection[clock_type].keys())
+                    print(f"   {clock_type}: {', '.join(states)}")
+        else:
+            print("⚠️  Clock detection failed - will estimate positions")
+            clock_detection = None
         
-        # Ensure we have all expected states for each clock type
-        # If OCR detection missed some states, keep the calculated ones as fallback
-        expected_states = ['play', 'start1', 'start2', 'end1', 'end2', 'end3']
+        # Step 4: Calculate coordinates
+        print("\n" + "-" * 40)
+        print("STEP 4: Calculating coordinates...")
+        print("-" * 40)
+        
+        self.calculator.set_board(board_detection)
+        self.calculator.set_clocks(clock_detection)
+        coordinates = self.calculator.calculate_all()
+        
+        # Estimate missing clock states
+        if clock_detection:
+            estimated = self.calculator.estimate_missing_clock_states(clock_detection)
+            for clock_type in ['bottom_clock', 'top_clock']:
+                if clock_type in estimated:
+                    for state, coords in estimated[clock_type].items():
+                        if state not in coordinates.get(clock_type, {}):
+                            if clock_type not in coordinates:
+                                coordinates[clock_type] = {}
+                            coordinates[clock_type][state] = coords
+        
+        print("✅ Coordinates calculated")
+        
+        # Step 5: Visualise
+        if visualise:
+            print("\n" + "-" * 40)
+            print("STEP 5: Creating visualisations...")
+            print("-" * 40)
+            
+            self.visualiser = CalibrationVisualiser()
+            outputs = self.visualiser.visualise_all(
+                image, board_detection, clock_detection, coordinates
+            )
+            
+            print(f"✅ Debug output saved to: {self.visualiser.get_output_dir()}")
+        
+        # Build final config
+        config = {
+            'calibration_info': {
+                'method': 'live' if not hasattr(self, '_is_offline') else 'offline',
+                'board_confidence': board_detection['confidence'],
+                'clock_detection_count': clock_detection['detection_count'] if clock_detection else 0,
+                'clock_states_detected': []
+            },
+            'coordinates': coordinates
+        }
+        
+        # List detected clock states
+        for clock_type in ['bottom_clock', 'top_clock']:
+            if clock_detection and clock_type in clock_detection:
+                for state in clock_detection[clock_type]:
+                    config['calibration_info']['clock_states_detected'].append(
+                        f"{clock_type}.{state}"
+                    )
+        
+        return config
+    
+    def verify(self, verbose: bool = True) -> Dict:
+        """
+        Verify existing configuration by testing clock detection.
+        
+        Args:
+            verbose: Whether to print detailed results.
+        
+        Returns:
+            Verification results dictionary.
+        """
+        print("=" * 60)
+        print("CONFIGURATION VERIFICATION")
+        print("=" * 60)
+        print()
+        
+        # Load current config
+        config = ChessConfig()
+        config.print_status()
+        print()
+        
+        if config.is_using_fallback():
+            print("⚠️  No calibration file found - using fallback coordinates")
+            print("   Run calibration first: python -m auto_calibration.calibrator --live")
+            return {'success': False, 'reason': 'no_config'}
+        
+        # Capture screenshot
+        print("Capturing screenshot for verification...")
+        image = capture_screenshot()
+        
+        if image is None:
+            print("❌ Failed to capture screenshot")
+            return {'success': False, 'reason': 'capture_failed'}
+        
+        # Test clock positions
+        print("\nTesting clock positions...")
+        
+        coords = config.get_coordinates()
+        results = {}
+        total_tested = 0
+        total_success = 0
+        
+        self.clock_detector.set_board({
+            'x': coords['board']['x'],
+            'y': coords['board']['y'],
+            'size': coords['board']['width']
+        })
         
         for clock_type in ['bottom_clock', 'top_clock']:
-            detected_states = set(coordinates[clock_type].keys())
+            if clock_type not in coords:
+                continue
             
-            # If we have at least one OCR detection for this clock type,
-            # we can estimate missing states based on the pattern
-            if detected_states:
-                # Find the 'play' state or use the first available as reference
-                reference_state = 'play' if 'play' in detected_states else list(detected_states)[0]
-                reference_coord = coordinates[clock_type][reference_state]
+            results[clock_type] = {}
+            
+            for state, pos in coords[clock_type].items():
+                total_tested += 1
                 
-                # Fill in missing states using small Y offsets from reference
-                state_offsets = {
-                    'play': 0,
-                    'start1': 14,
-                    'start2': 28, 
-                    'end1': 69,
-                    'end2': 5,
-                    'end3': 34
+                is_valid, time_value = self.clock_detector.validate_position(
+                    image, pos['x'], pos['y']
+                )
+                
+                results[clock_type][state] = {
+                    'valid': is_valid,
+                    'time_value': time_value,
+                    'position': (pos['x'], pos['y'])
                 }
                 
-                reference_offset = state_offsets.get(reference_state, 0)
+                if is_valid:
+                    total_success += 1
+                    status = f"✅ {time_value}s"
+                else:
+                    status = "❌"
                 
-                for state in expected_states:
-                    if state not in detected_states:
-                        # Estimate position based on reference
-                        y_offset = state_offsets[state] - reference_offset
-                        
-                        coordinates[clock_type][state] = {
-                            'x': reference_coord['x'],
-                            'y': reference_coord['y'] + y_offset,
-                            'width': reference_coord['width'],
-                            'height': reference_coord['height'],
-                            'detection_confidence': 0.5,  # Lower confidence for estimated
-                            'estimated': True
-                        }
+                if verbose:
+                    print(f"  {clock_type}.{state}: {status}")
         
-        return coordinates
-    
-    def print_summary(self, config: Dict):
-        """Print a summary of calibration results."""
-        board_pos = config['calibration_info']['board_detection']['position']
-        success_rate = config['calibration_info']['validation_success_rate']
+        success_rate = total_success / total_tested if total_tested > 0 else 0
         
-        print(f"\nSummary:")
-        print(f"• Board Position: ({board_pos[0]}, {board_pos[1]}) [{board_pos[2]}x{board_pos[3]}]")
-        print(f"• Board Detection Method: {config['calibration_info']['board_detection']['method']}")
-        print(f"• Board Confidence: {config['calibration_info']['board_detection']['confidence']:.3f}")
+        print()
+        print("-" * 40)
+        print(f"Success rate: {total_success}/{total_tested} ({success_rate:.1%})")
         
-        # Show clock detection info
-        if 'clock_detection' in config['calibration_info']:
-            clock_info = config['calibration_info']['clock_detection']
-            print(f"• Clock Detection Method: {clock_info['method']}")
-            print(f"• Clocks Found: {clock_info['clocks_found']} positions")
+        if success_rate >= 0.5:
+            print("✅ Configuration appears valid")
+        elif success_rate > 0:
+            print("⚠️  Configuration partially valid - some states may need recalibration")
+        else:
+            print("❌ Configuration invalid - recalibration recommended")
         
-        print(f"• Validation Success Rate: {success_rate:.1%}")
-        
-        print(f"\nDetected UI Elements:")
-        coords = config['coordinates']
-        
-        # Show board position
-        if 'board' in coords:
-            b = coords['board']
-            print(f"• Board: ({b['x']}, {b['y']}) [{b['width']}x{b['height']}]")
-        
-        # Show clock positions with OCR info
-        if 'bottom_clock' in coords and 'play' in coords['bottom_clock']:
-            bc = coords['bottom_clock']['play']
-            confidence = bc.get('detection_confidence', 'N/A')
-            time_val = bc.get('time_value_detected', 'N/A')
-            estimated = " (estimated)" if bc.get('estimated', False) else ""
-            print(f"• Bottom Clock (play): ({bc['x']}, {bc['y']}) - "
-                  f"confidence: {confidence}, time: {time_val}s{estimated}")
-        
-        if 'top_clock' in coords and 'play' in coords['top_clock']:
-            tc = coords['top_clock']['play']
-            confidence = tc.get('detection_confidence', 'N/A')
-            time_val = tc.get('time_value_detected', 'N/A')
-            estimated = " (estimated)" if tc.get('estimated', False) else ""
-            print(f"• Top Clock (play): ({tc['x']}, {tc['y']}) - "
-                  f"confidence: {confidence}, time: {time_val}s{estimated}")
-        
-        # Show state coverage
-        bottom_states = len(coords.get('bottom_clock', {}))
-        top_states = len(coords.get('top_clock', {}))
-        ocr_detected = 0
-        estimated = 0
-        
-        for clock_type in ['bottom_clock', 'top_clock']:
-            if clock_type in coords:
-                for state_data in coords[clock_type].values():
-                    if state_data.get('estimated', False):
-                        estimated += 1
-                    elif 'detection_confidence' in state_data:
-                        ocr_detected += 1
-        
-        print(f"• Game States: {bottom_states} bottom, {top_states} top positions")
-        print(f"• OCR Detected: {ocr_detected}, Estimated: {estimated}")
+        return {
+            'success': success_rate >= 0.5,
+            'success_rate': success_rate,
+            'total_tested': total_tested,
+            'total_success': total_success,
+            'results': results
+        }
+
 
 def main():
-    """Main function for running calibration."""
-    import argparse
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="Chess Board Auto-Calibration Tool",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Live calibration (default)
+  python -m auto_calibration.calibrator --live
+  
+  # Offline from screenshot
+  python -m auto_calibration.calibrator --screenshot ./screenshot.png
+  
+  # Offline from directory
+  python -m auto_calibration.calibrator --offline ./screenshots/
+  
+  # Verify existing config
+  python -m auto_calibration.calibrator --verify
+        """
+    )
     
-    parser = argparse.ArgumentParser(description="Chess Board Auto-Calibration Tool")
-    parser.add_argument("-o", "--output", type=str, default="chess_config.json",
-                        help="Output configuration file name")
-    parser.add_argument("-l", "--left-monitor", action="store_true",
-                        help="Search only the left monitor (first 1920 pixels, or scaled)")
-    parser.add_argument("-r", "--region", type=str, default=None,
-                        help="Search region as 'x,y,width,height' (e.g., '0,0,1920,1080')")
-    parser.add_argument("-w", "--monitor-width", type=int, default=1920,
-                        help="Monitor width for --left-monitor option (default: 1920)")
-    parser.add_argument("-H", "--monitor-height", type=int, default=None,
-                        help="Monitor height for --left-monitor option (default: full height)")
-    parser.add_argument("-s", "--scale", type=float, default=1.0,
-                        help="Screenshot scale factor (e.g., 1.5 if HiDPI scaling affects capture)")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--live", "-l", action="store_true",
+                           help="Live calibration from current screen (default)")
+    mode_group.add_argument("--screenshot", "-s", type=str,
+                           help="Offline calibration from single screenshot")
+    mode_group.add_argument("--offline", "-o", type=str, nargs='?', const='.',
+                           help="Offline calibration from screenshots directory")
+    mode_group.add_argument("--verify", "-v", action="store_true",
+                           help="Verify existing configuration")
+    
+    parser.add_argument("--countdown", "-c", type=int, default=5,
+                       help="Countdown seconds before live capture (default: 5)")
+    parser.add_argument("--state", type=str,
+                       help="State hint for offline calibration")
+    parser.add_argument("--no-visualise", action="store_true",
+                       help="Skip debug visualisation")
+    parser.add_argument("--no-save", action="store_true",
+                       help="Don't save configuration to file")
     
     args = parser.parse_args()
     
-    print("Chess Board Auto-Calibration Tool")
-    print("=====================================")
-    
-    # Determine search region
-    search_region = None
-    
-    if args.region:
-        # Parse custom region
-        try:
-            parts = [int(x.strip()) for x in args.region.split(',')]
-            if len(parts) == 4:
-                search_region = tuple(parts)
-                print(f"Using custom search region: {search_region}")
-            else:
-                print("Error: --region must be 'x,y,width,height'")
-                return 1
-        except ValueError:
-            print("Error: --region values must be integers")
-            return 1
-    elif args.left_monitor:
-        # Use left monitor
-        # Apply scale factor for HiDPI/mixed scaling setups
-        scaled_width = int(args.monitor_width * args.scale)
-        height = args.monitor_height if args.monitor_height else 3000  # Large default
-        scaled_height = int(height * args.scale)
-        search_region = (0, 0, scaled_width, scaled_height)
-        if args.scale != 1.0:
-            print(f"Searching left monitor (logical {args.monitor_width}px, scaled to {scaled_width}px at {args.scale}x)")
-        else:
-            print(f"Searching left monitor only (first {args.monitor_width} pixels)")
-    
-    calibrator = ChessBoardCalibrator(search_region=search_region)
+    calibrator = Calibrator()
+    config = None
     
     try:
-        config = calibrator.run_calibration(args.output)
+        if args.verify:
+            calibrator.verify()
+            return 0
+        
+        elif args.screenshot:
+            config = calibrator.run_offline(
+                args.screenshot,
+                args.state,
+                not args.no_visualise
+            )
+        
+        elif args.offline:
+            # Use offline fitter for directory
+            from .offline_fitter import fit_from_screenshots
+            config = fit_from_screenshots(args.offline, not args.no_save)
+            return 0 if config else 1
+        
+        else:
+            # Default: live calibration
+            config = calibrator.run_live(
+                args.countdown,
+                not args.no_visualise
+            )
         
         if config:
-            print("\n🎉 Calibration successful!")
+            print("\n" + "=" * 60)
+            print("CALIBRATION COMPLETE")
+            print("=" * 60)
+            
+            # Print summary
+            info = config['calibration_info']
+            print(f"\nBoard confidence: {info['board_confidence']:.3f}")
+            print(f"Clock states detected: {len(info.get('clock_states_detected', []))}")
+            
+            if not args.no_save:
+                output_path = save_config(config)
+                print(f"\n✅ Configuration saved to: {output_path}")
+                print("\nYour system will now use these calibrated coordinates.")
+            
             return 0
         else:
-            print("\n❌ Calibration failed!")
+            print("\n❌ Calibration failed")
             return 1
-            
+    
     except KeyboardInterrupt:
         print("\n\nCalibration cancelled by user.")
         return 1
+    
     except Exception as e:
-        print(f"\n❌ Calibration error: {e}")
+        print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
         return 1
 
+
 if __name__ == "__main__":
-    exit(main())
+    sys.exit(main())

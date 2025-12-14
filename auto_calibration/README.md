@@ -1,157 +1,243 @@
-# Chess Board Auto-Calibration Tool
+# Chess Board Auto-Calibration
 
-This tool automatically detects your chess board position and generates device-independent coordinate configuration, replacing hardcoded screen coordinates with adaptive values.
+Automatic detection of chess board position and UI elements (clocks, notation, ratings) for the chess bot. Works across different monitors, resolutions, and scaling factors.
 
 ## Quick Start
 
-### 1. Run Calibration
+### Live Calibration (Recommended)
+
 ```bash
 # Activate your environment
 conda activate humanchess2
 
-# Run the calibration tool
-cd auto_calibration
-python calibrator.py
+# Run calibration with a chess game visible on screen
+python -m auto_calibration.calibrator --live
 ```
 
-### 2. Follow Instructions
-- Open a chess game (Chess.com or Lichess)
-- Ensure board and clocks are visible
-- Wait for the 5-second countdown
-- The tool will automatically detect and save coordinates
+### Offline Calibration (From Screenshots)
 
-### 3. Use Configuration
-Your main.py will now automatically use the calibrated coordinates instead of hardcoded values.
+```bash
+# Calibrate from a saved screenshot
+python -m auto_calibration.calibrator --screenshot ./my_screenshot.png
 
-## What It Does
-
-### Automatically Detects:
-- ✅ **Chess board position** (any size/zoom level)
-- ✅ **Clock positions** for all game states (play, start1/start2, end1/end2/end3)
-- ✅ **UI element locations** (notation, ratings)
-- ✅ **State-specific coordinate variations** (handles UI shifts during different game phases)
-
-### Generates Configuration:
-- 📄 **chess_config.json** - Complete coordinate configuration
-- 🔧 **Device-independent** - Works across different screens/resolutions
-- 🎯 **State-aware** - Handles position shifts like your START_Y_2, END_Y_2, END_Y_3
-- 🚀 **Drop-in replacement** - No code changes needed in main system
-
-## Files Overview
-
-- **`calibrator.py`** - Main calibration tool (run this)
-- **`config_loader.py`** - Configuration loading system for main code
-- **`board_detector.py`** - Chess board detection using template matching
-- **`coordinate_calculator.py`** - UI coordinate calculation relative to board
-- **`calibration_utils.py`** - Utility functions for image processing
-
-## Integration
-
-### For Main System
-The calibration automatically integrates with your existing code:
-
-```python
-# Instead of hardcoded:
-BOTTOM_CLOCK_X = 1420
-BOTTOM_CLOCK_Y = 742
-
-# Now uses:
-from auto_calibration.config_loader import get_clock_position
-x, y, w, h = get_clock_position('bottom_clock', 'play')
+# Calibrate from multiple screenshots
+python -m auto_calibration.calibrator --offline ./screenshots/
 ```
 
-### State-Specific Coordinates
-All your state variations are automatically mapped:
+## How It Works
 
-```python
-# Replaces your manual coordinate variations:
-get_clock_position('bottom_clock', 'play')    # Normal gameplay
-get_clock_position('bottom_clock', 'start1')  # New game (like START_Y)
-get_clock_position('bottom_clock', 'start2')  # New game alt (like START_Y_2)
-get_clock_position('bottom_clock', 'end1')    # Game over (like END_Y)
-get_clock_position('bottom_clock', 'end2')    # Game over alt (like END_Y_2)
-get_clock_position('bottom_clock', 'end3')    # Game over alt (like END_Y_3)
+### Phase 1: Board Detection
+
+The system uses colour segmentation to find the Lichess chess board:
+
+1. **Downscale** the image 8× for fast initial scanning
+2. **Create colour masks** for Lichess light (cream) and dark (green) squares
+3. **Find the largest connected region** matching board colours
+4. **Verify 8×8 grid pattern** by checking alternating cell intensities
+5. **Refine** position on full resolution
+
+### Phase 2: Clock Detection
+
+Clocks are found using your existing `read_clock()` function:
+
+1. **Calculate search region** - clocks are to the right of the board
+2. **Find clock X position** by testing multiple X values
+3. **Sweep Y-axis** in 3px increments
+4. **Validate with `read_clock()`** - if it returns a time, the position is correct
+5. **Cluster nearby detections** to handle slight variations
+
+### Phase 3: Coordinate Calculation
+
+Once board and clocks are found, notation and rating positions are derived:
+
+- **Notation panel**: Centred between top and bottom clocks
+- **Rating positions**: Fixed offset from clock X position
+
+## Commands
+
+### Calibrator
+
+```bash
+# Live calibration (5 second countdown)
+python -m auto_calibration.calibrator --live
+
+# Live with custom countdown
+python -m auto_calibration.calibrator --live --countdown 10
+
+# From single screenshot
+python -m auto_calibration.calibrator --screenshot ./screenshot.png
+
+# From screenshots directory
+python -m auto_calibration.calibrator --offline ./calibration_screenshots/
+
+# Verify existing configuration
+python -m auto_calibration.calibrator --verify
+
+# Skip visualisation
+python -m auto_calibration.calibrator --live --no-visualise
 ```
 
-## Configuration File
+### Screenshot Collector
 
-The generated `chess_config.json` contains:
+For capturing screenshots of different game states:
+
+```bash
+# Single capture with 3s delay
+python -m auto_calibration.screenshot_collector
+
+# Capture with state hint
+python -m auto_calibration.screenshot_collector --state play
+
+# Interactive mode (prompts for each state)
+python -m auto_calibration.screenshot_collector --interactive
+
+# Multiple captures
+python -m auto_calibration.screenshot_collector --count 5
+```
+
+## Clock States
+
+The system handles 6 different clock positions that vary based on game phase:
+
+| State | Description |
+|-------|-------------|
+| `play` | Normal gameplay (after several moves) |
+| `start1` | Game start, before first move |
+| `start2` | After first move played |
+| `end1` | Game over (by resignation) |
+| `end2` | Game over (by timeout) |
+| `end3` | Game over (by checkmate/stalemate/draw) |
+
+When calibrating from a single screenshot, missing states are estimated based on known Y-offsets.
+
+## Output Files
+
+### Configuration
+
+After calibration, `chess_config.json` is created/updated:
 
 ```json
 {
   "calibration_info": {
-    "timestamp": "2025-09-12T20:36:39",
-    "board_detection": { "method": "corner_template", "confidence": 0.84 },
-    "validation_success_rate": 0.818
+    "timestamp": "2025-01-15T14:30:22",
+    "method": "live",
+    "board_confidence": 0.85,
+    "clock_states_detected": ["bottom_clock.play", "top_clock.play"]
   },
   "coordinates": {
-    "board": { "x": 543, "y": 179, "width": 848, "height": 848 },
+    "board": {"x": 543, "y": 179, "width": 848, "height": 848},
     "bottom_clock": {
-      "play": { "x": 1420, "y": 742, "width": 147, "height": 44 },
-      "start1": { "x": 1420, "y": 756, "width": 147, "height": 44 },
-      "start2": { "x": 1420, "y": 770, "width": 147, "height": 44 }
+      "play": {"x": 1420, "y": 742, "width": 147, "height": 44},
+      "start1": {"x": 1420, "y": 756, "width": 147, "height": 44},
+      ...
     },
-    "top_clock": { /* similar structure */ },
-    "notation": { /* notation area coordinates */ },
-    "rating": { /* rating area coordinates */ }
+    ...
   }
 }
 ```
 
-## Fallback System
+### Debug Visualisations
 
-If no configuration file exists, the system automatically falls back to your original hardcoded coordinates, ensuring your system never breaks.
+Each calibration run creates a timestamped folder in `calibration_outputs/`:
 
-## When to Recalibrate
+```
+calibration_outputs/2025-01-15_14-30-22/
+├── 01_original.png           # Input screenshot
+├── 02_colour_segmentation.png # Colour masks
+├── 03_board_detection.png    # Board with grid overlay
+├── 04_clock_detection.png    # Detected clock positions
+├── 05_final_overlay.png      # All elements combined
+├── extracted_regions/        # Individual extracted regions
+│   ├── board.png
+│   ├── bottom_clock_play.png
+│   ├── notation.png
+│   └── ...
+└── report.txt                # Text summary
+```
 
-Run calibration again when:
-- 🖥️ **Screen resolution changes**
-- 🔍 **Browser zoom level changes**
-- 🖱️ **Monitor setup changes** (add/remove monitors)
-- 🌐 **Chess site layout updates**
-- ❌ **Clock detection starts failing**
+## Integration
+
+### Using Calibrated Coordinates
+
+```python
+from auto_calibration.config import get_config
+
+# Get configuration
+config = get_config()
+
+# Get board position
+x, y, step = config.get_board_info()
+
+# Get clock position for specific state
+cx, cy, cw, ch = config.get_clock_position('bottom_clock', 'play')
+
+# Check if using fallback (no calibration)
+if config.is_using_fallback():
+    print("Run calibration!")
+```
+
+### Backward Compatibility
+
+The calibration integrates with `chessimage/image_scrape_utils.py`:
+
+```python
+# These still work exactly the same:
+from chessimage.image_scrape_utils import capture_board, capture_bottom_clock
+```
 
 ## Troubleshooting
 
 ### Board Detection Fails
-- Ensure chess game is fully visible
-- Try 100% browser zoom
-- Use during active gameplay (best detection)
-- Close other windows that might interfere
 
-### Low Success Rate
-- Run during active game with visible clocks
-- Ensure good contrast between UI elements
-- Try different game states (start vs play vs end)
+- Ensure a Lichess game is visible on screen
+- The board should show the standard green/cream theme
+- Try browser zoom at 100%
+- Avoid obstructing the board with windows
 
-### Integration Issues
-- Check that `chess_config.json` exists
-- Verify file permissions
-- Check console output for error messages
+### Clock Detection Fails
+
+- Clocks must show actual time values (not "--:--")
+- Run during active gameplay, not before game starts
+- Ensure clock area is not obstructed
+
+### Low Confidence
+
+- Run calibration during active gameplay
+- Try capturing multiple screenshots with different game states
+- Use offline fitting with multiple screenshots
+
+### Multi-Monitor Setup
+
+The system captures the entire screen by default. If you have multiple monitors:
+
+```bash
+# The board should be clearly visible
+# The system will find the largest chess board pattern
+python -m auto_calibration.calibrator --live
+```
+
+## File Structure
+
+```
+auto_calibration/
+├── __init__.py               # Module init
+├── calibrator.py             # Main entry point
+├── board_detector.py         # Board detection
+├── clock_detector.py         # Clock detection
+├── coordinate_calculator.py  # Derived coordinates
+├── visualiser.py             # Debug visualisation
+├── config.py                 # Configuration loading/saving
+├── offline_fitter.py         # Offline fitting
+├── screenshot_collector.py   # Screenshot helper
+├── utils.py                  # Shared utilities
+├── chess_config.json         # Generated configuration
+├── calibration_screenshots/  # Saved screenshots
+└── calibration_outputs/      # Debug outputs
+```
 
 ## Performance
 
-- **Calibration**: One-time process (~10 seconds)
-- **Runtime**: Zero performance impact (simple coordinate lookup)
-- **Memory**: Minimal (small JSON config in memory)
-- **Same speed**: Identical performance to hardcoded coordinates
-
-## Example Usage
-
-```bash
-# Run calibration
-python calibrator.py
-
-# Check status in your main code
-from auto_calibration.config_loader import print_config_status
-print_config_status()
-
-# Use in your existing functions
-from auto_calibration.config_loader import get_clock_position
-
-def capture_bottom_clock(state="play"):
-    x, y, w, h = get_clock_position('bottom_clock', state)
-    return SCREEN_CAPTURE.capture((x, y, w, h))
-```
-
-This tool eliminates the need for manual coordinate calibration while maintaining full compatibility with your existing codebase! 🎯
+- **Calibration time**: ~2-5 seconds
+- **Board detection**: Uses 8× downsampling for speed
+- **Clock detection**: 1D Y-sweep (not 2D grid search)
+- **Runtime overhead**: Zero (simple coordinate lookup)

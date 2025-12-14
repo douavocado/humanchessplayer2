@@ -14,6 +14,8 @@ __pycache__/
 **/__pycache__/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
+venv/
+**/venv/
 **/visualisations/**
 **/visualisations_piece_to/**
 **/data/**

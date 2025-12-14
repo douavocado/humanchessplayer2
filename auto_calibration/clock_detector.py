@@ -2,629 +2,562 @@
 """
 Chess Clock Detection Module
 
-Automatically detects chess clock positions using OCR-based validation.
-Unlike the board detector, this uses the read_clock function to validate
-potential clock regions by attempting to read the time display.
+Detects clock positions using text block detection.
+
+Primary detection method:
+- Find dark text blocks on light background (Lichess theme)
+- Identify clocks by their characteristic wide aspect ratio (~6:1)
+
+Fallback method:
+- Y-axis sweep with OCR validation using read_clock()
 """
 
 import cv2
 import numpy as np
-import time
+import sys
 from pathlib import Path
 from typing import Tuple, Optional, Dict, List
-from calibration_utils import SCREEN_CAPTURE
-import sys
 
-# Add parent directory to path for imports
-parent_dir = Path(__file__).parent.parent
-sys.path.append(str(parent_dir))
+from .utils import extract_region, cluster_values, cluster_mean
+from .config import ChessConfig
+from .panel_detector import ClockTextDetector
 
-# Import with context manager to handle path issues
-import os
-original_cwd = os.getcwd()
-try:
-    # Temporarily change to parent directory for imports that use relative paths
-    os.chdir(parent_dir)
-    from chessimage.image_scrape_utils import read_clock, remove_background_colours
-finally:
-    # Always restore original directory
-    os.chdir(original_cwd)
 
-# Import relaxed OCR function
-from read_clock_relaxed import read_clock_relaxed
+# Add parent directory for imports
+PARENT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PARENT_DIR))
+
+
+# Standard clock dimensions (for reference board size of 848px)
+REFERENCE_BOARD_SIZE = 848
+REFERENCE_CLOCK_WIDTH = 147
+REFERENCE_CLOCK_HEIGHT = 44
+
+
+def get_read_clock_function():
+    """
+    Import the read_clock function from image_scrape_utils.
+    
+    Returns:
+        The read_clock function, or a fallback if import fails.
+    """
+    try:
+        from chessimage.image_scrape_utils import read_clock
+        return read_clock
+    except ImportError:
+        # Return a fallback function that always fails
+        def fallback_read_clock(clock_image):
+            return None
+        return fallback_read_clock
+
 
 class ClockDetector:
-    """Detects chess clock positions using OCR validation."""
+    """
+    Detects clock positions using text block detection.
     
-    def __init__(self, board_position: Optional[Dict] = None):
-        self.screen_capture = SCREEN_CAPTURE
-        self.board_position = board_position
-        
-        # Standard clock dimensions based on existing coordinates
-        self.clock_width = 147
-        self.clock_height = 44
-        
-        # Search constraints
-        self.min_search_step = 3  # Minimum pixel step for search grid
-        self.max_search_step = 8  # Maximum pixel step for search grid
-        
-        # Game states to detect
-        self.game_states = ['play', 'start1', 'start2', 'end1', 'end2', 'end3']
-        
-    def set_board_position(self, board_data: Dict):
-        """Set the detected board position to constrain search area."""
-        self.board_position = board_data
-        
-    def get_search_region(self, screenshot_shape: Tuple[int, int]) -> Tuple[int, int, int, int]:
-        """
-        Calculate search region for clocks based on board position or screen dimensions.
-        Returns (x, y, width, height) of search area.
-        """
-        screen_height, screen_width = screenshot_shape
-        
-        if self.board_position:
-            # Search to the right of the detected board
-            board_x, board_y, board_width, board_height = self.board_position['position']
-            
-            # Start search with small overlap to ensure we catch clocks at board edge
-            search_x = board_x + board_width - 20  # Small overlap with board edge
-            search_y = max(0, board_y - 50)  # Start slightly above board
-            search_width = min(520, screen_width - search_x)  # Slightly wider search
-            search_height = min(board_height + 100, screen_height - search_y)  # Extend below board
-            
-            print(f"Using board-constrained search region: ({search_x}, {search_y}) [{search_width}x{search_height}]")
-            print(f"Board position was: ({board_x}, {board_y}) [{board_width}x{board_height}]")
-        else:
-            # Fallback: search right half of screen
-            search_x = screen_width // 2
-            search_y = 0
-            search_width = screen_width // 2
-            search_height = screen_height
-            
-            print(f"Using fallback search region: ({search_x}, {search_y}) [{search_width}x{search_height}]")
-        
-        return search_x, search_y, search_width, search_height
+    Primary method (text-based):
+    1. Find dark text blocks on light background
+    2. Identify clock-like blocks (wide aspect ratio ~6:1)
+    3. Select largest blocks at top and bottom of board area
     
-    def extract_clock_region(self, screenshot_img: np.ndarray, x: int, y: int) -> np.ndarray:
-        """Extract clock-sized region from screenshot at given position."""
-        h, w = screenshot_img.shape[:2]
-        
-        # Ensure region is within bounds
-        x = max(0, min(x, w - self.clock_width))
-        y = max(0, min(y, h - self.clock_height))
-        
-        return screenshot_img[y:y+self.clock_height, x:x+self.clock_width]
+    Fallback method (OCR sweep):
+    1. Calculate expected X position relative to board
+    2. Sweep Y-axis in small increments
+    3. At each Y, extract clock region and try read_clock()
+    4. Cluster successful Y positions
     
-    def validate_clock_region(self, clock_region: np.ndarray, x: int, y: int) -> Tuple[bool, Optional[int], float]:
-        """
-        Validate if a region contains a readable clock using strict OCR-only validation.
-        
-        Returns:
-            (is_valid, time_value, confidence)
-        """
-        if clock_region.shape[0] != self.clock_height or clock_region.shape[1] != self.clock_width:
-            return False, None, 0.0
-        
-        # Try relaxed OCR first (for current chess sites)
-        try:
-            time_value = read_clock_relaxed(clock_region, threshold=0.2)
-            if time_value is not None:
-                if 0 <= time_value <= 7200:  # 0 to 2 hours
-                    # High confidence for successful relaxed OCR
-                    if 30 <= time_value <= 1800:  # 30 seconds to 30 minutes
-                        confidence = 0.90
-                    elif 10 <= time_value <= 3600:  # 10 seconds to 1 hour
-                        confidence = 0.80
-                    else:
-                        confidence = 0.70
-                    
-                    return True, time_value, confidence
-        except:
-            pass
-        
-        # Fallback to strict OCR (for legacy compatibility)
-        try:
-            time_value = read_clock(clock_region)
-            if time_value is not None:
-                if 0 <= time_value <= 3600:
-                    # High confidence for successful strict OCR
-                    confidence = 0.95
-                    return True, time_value, confidence
-        except:
-            pass
-        
-        # NO FALLBACK - only return True if OCR actually succeeds
-        # This prevents false positives from blank/empty regions
-        return False, None, 0.0
+    Clock dimensions are scaled based on detected board size.
+    """
     
-    def _calculate_clock_likelihood(self, clock_region: np.ndarray, x: int, y: int) -> float:
-        """
-        Calculate likelihood that this region contains a clock based on 
-        multiple factors including position and visual characteristics.
-        """
-        likelihood = 0.0
-        
-        # Factor 1: Position-based likelihood
-        # Clocks are typically at specific Y ranges relative to board
-        if self.board_position:
-            board_x, board_y, board_width, board_height = self.board_position['position']
-            
-            # Expected clock Y positions (approximate)
-            expected_top_clock_y = board_y + 150
-            expected_bottom_clock_y = board_y + board_height - 150
-            
-            # Distance from expected positions
-            dist_to_top = abs(y - expected_top_clock_y)
-            dist_to_bottom = abs(y - expected_bottom_clock_y)
-            min_dist = min(dist_to_top, dist_to_bottom)
-            
-            if min_dist < 50:
-                position_score = 0.4
-            elif min_dist < 100:
-                position_score = 0.3
-            elif min_dist < 150:
-                position_score = 0.2
-            else:
-                position_score = 0.0
-                
-            likelihood += position_score
-        
-        # Factor 2: Visual characteristics
-        try:
-            # Convert to grayscale
-            if len(clock_region.shape) == 3:
-                gray = cv2.cvtColor(clock_region, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = clock_region.copy()
-            
-            # Check for digital clock characteristics
-            
-            # 1. Text-like variance (not uniform)
-            variance = np.var(gray)
-            if variance > 20:
-                likelihood += 0.2
-            
-            # 2. Horizontal structure (typical of digital clocks)
-            horizontal_grad = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-            vertical_grad = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-            
-            h_energy = np.sum(np.abs(horizontal_grad))
-            v_energy = np.sum(np.abs(vertical_grad))
-            
-            if v_energy > h_energy and v_energy > 1000:
-                likelihood += 0.2
-            
-            # 3. Check for colon-like structure in middle
-            middle_region = gray[:, 60:90]  # Approximate middle area
-            if np.var(middle_region) > 15:
-                likelihood += 0.1
-                
-        except:
-            pass
-        
-        return min(1.0, likelihood)
+    # Y-sweep parameters (for fallback OCR method)
+    SWEEP_STEP = 3  # Pixels between Y positions to test
+    SWEEP_PADDING = 100  # Extra pixels to search above/below board
     
-    def _validate_visual_clock_pattern(self, clock_region: np.ndarray) -> float:
-        """
-        Check if region has visual characteristics of a clock display.
-        Returns confidence score 0.0 to 1.0.
-        """
-        try:
-            # Convert to grayscale
-            if len(clock_region.shape) == 3:
-                gray = cv2.cvtColor(clock_region, cv2.COLOR_BGR2GRAY)
-            else:
-                gray = clock_region.copy()
-            
-            # Check for digital-clock-like characteristics
-            
-            # 1. Check for text/number-like regions (not uniform color)
-            mean_intensity = np.mean(gray)
-            intensity_variance = np.var(gray)
-            
-            # Clocks should have some variation (text vs background)
-            if intensity_variance < 10:  # Too uniform
-                return 0.0
-            
-            # 2. Check for typical clock layout patterns
-            # Digital clocks often have text in specific regions
-            
-            # Check if there are darker regions (text) against lighter background
-            # or lighter regions (text) against darker background
-            binary_threshold = mean_intensity
-            _, binary = cv2.threshold(gray, binary_threshold, 255, cv2.THRESH_BINARY)
-            
-            # Count connected components (should have some for digits/text)
-            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
-            
-            # Good clocks typically have 2-6 distinct regions (digits, colons, etc.)
-            if 2 <= num_labels <= 8:
-                component_confidence = 0.4
-            elif num_labels > 1:
-                component_confidence = 0.2
-            else:
-                component_confidence = 0.0
-            
-            # 3. Check for horizontal text-like patterns
-            # Clocks typically have horizontally arranged digits
-            horizontal_edges = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-            horizontal_energy = np.sum(np.abs(horizontal_edges))
-            
-            vertical_edges = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-            vertical_energy = np.sum(np.abs(vertical_edges))
-            
-            # Clock text typically has more vertical edges than horizontal
-            if vertical_energy > 0 and horizontal_energy > 0:
-                edge_ratio = vertical_energy / (horizontal_energy + vertical_energy)
-                if 0.3 <= edge_ratio <= 0.8:  # Balanced edges typical of text
-                    edge_confidence = 0.3
-                else:
-                    edge_confidence = 0.1
-            else:
-                edge_confidence = 0.0
-            
-            # Combine confidence factors
-            total_confidence = min(1.0, component_confidence + edge_confidence)
-            
-            return total_confidence
-            
-        except Exception as e:
-            return 0.0
+    # Clustering threshold for grouping nearby detections
+    CLUSTER_THRESHOLD = 15
     
-    def search_clock_positions(self, screenshot_img: np.ndarray, 
-                             clock_type: str = "bottom") -> List[Dict]:
+    # Expected gap between board and clock panel (relative to board size)
+    CLOCK_GAP_RATIO_MIN = 0.01  # ~1% of board size
+    CLOCK_GAP_RATIO_MAX = 0.08  # ~8% of board size
+    
+    def __init__(self, board_detection: Optional[Dict] = None):
         """
-        Search for clock positions in the screenshot.
+        Initialise clock detector.
         
         Args:
-            screenshot_img: Screenshot to search in
-            clock_type: "top" or "bottom" to guide search priority
-            
-        Returns:
-            List of detected clock positions with metadata
+            board_detection: Board detection result from BoardDetector.
         """
-        search_x, search_y, search_width, search_height = self.get_search_region(screenshot_img.shape[:2])
+        self.board = board_detection
+        self.read_clock = get_read_clock_function()
+        self.text_detector = ClockTextDetector(board_detection)
         
-        detections = []
-        
-        # Adaptive step size based on search area
-        area = search_width * search_height
-        if area > 100000:  # Large area
-            step = self.max_search_step
-        elif area > 50000:  # Medium area
-            step = 5
-        else:  # Small area
-            step = self.min_search_step
-        
-        print(f"Searching for {clock_type} clock with step size {step}...")
-        
-        # Search grid
-        positions_tested = 0
-        valid_detections = 0
-        ocr_attempts = 0
-        ocr_successes = 0
-        
-        # Sample some positions for debugging
-        debug_samples = []
-        sample_count = 0
-        max_samples = 10
-        
-        for y in range(search_y, search_y + search_height - self.clock_height, step):
-            for x in range(search_x, search_x + search_width - self.clock_width, step):
-                positions_tested += 1
-                
-                # Extract potential clock region
-                clock_region = self.extract_clock_region(screenshot_img, x, y)
-                
-                # Validate the region
-                is_valid, time_value, confidence = self.validate_clock_region(clock_region, x, y)
-                
-                # Track OCR statistics
-                ocr_attempts += 1
-                if time_value is not None:
-                    ocr_successes += 1
-                
-                # Sample some regions for debugging (every 500th position)
-                if sample_count < max_samples and positions_tested % 500 == 0:
-                    debug_samples.append({
-                        'position': (x, y),
-                        'time_value': time_value,
-                        'is_valid': is_valid,
-                        'confidence': confidence
-                    })
-                    sample_count += 1
-                
-                if is_valid and confidence > 0.7:
-                    valid_detections += 1
-                    
-                    detection = {
-                        'position': (x, y, self.clock_width, self.clock_height),
-                        'time_value': time_value,
-                        'confidence': confidence,
-                        'clock_type': clock_type,
-                        'state': 'unknown'  # Will be determined later
-                    }
-                    
-                    detections.append(detection)
-                    
-                    print(f"  Found clock at ({x}, {y}): {time_value}s (confidence: {confidence:.3f})")
-        
-        # Print debug statistics
-        ocr_success_rate = (ocr_successes / ocr_attempts) * 100 if ocr_attempts > 0 else 0
-        print(f"Tested {positions_tested} positions, found {valid_detections} valid clocks")
-        print(f"OCR success rate: {ocr_successes}/{ocr_attempts} ({ocr_success_rate:.1f}%)")
-        
-        # Print some sample results for debugging
-        if debug_samples:
-            print(f"Sample validation results:")
-            for i, sample in enumerate(debug_samples[:3]):  # Show first 3 samples
-                pos = sample['position']
-                print(f"  Position ({pos[0]}, {pos[1]}): time={sample['time_value']}, "
-                      f"valid={sample['is_valid']}, conf={sample['confidence']:.3f}")
-        
-        # Sort by confidence
-        detections.sort(key=lambda d: d['confidence'], reverse=True)
-        
-        return detections
+        # Calculate scaled clock dimensions
+        self._update_clock_dimensions()
     
-    def cluster_detections(self, detections: List[Dict], 
-                          cluster_distance: int = 50) -> List[Dict]:
-        """
-        Cluster nearby detections and keep the best one from each cluster.
-        This handles cases where the same clock is detected at slightly different positions.
-        """
-        if not detections:
-            return []
-        
-        clusters = []
-        
-        for detection in detections:
-            x, y, w, h = detection['position']
-            
-            # Find if this detection belongs to an existing cluster
-            assigned = False
-            for cluster in clusters:
-                cluster_x, cluster_y, _, _ = cluster['position']
-                
-                # Check if within cluster distance
-                if (abs(x - cluster_x) <= cluster_distance and 
-                    abs(y - cluster_y) <= cluster_distance):
-                    
-                    # Keep the detection with higher confidence
-                    if detection['confidence'] > cluster['confidence']:
-                        clusters.remove(cluster)
-                        clusters.append(detection)
-                    assigned = True
-                    break
-            
-            if not assigned:
-                clusters.append(detection)
-        
-        print(f"Clustered {len(detections)} detections into {len(clusters)} unique positions")
-        return clusters
+    def _update_clock_dimensions(self):
+        """Update clock dimensions based on board size."""
+        if self.board:
+            board_size = self.board['size']
+            scale = board_size / REFERENCE_BOARD_SIZE
+            self.clock_width = int(REFERENCE_CLOCK_WIDTH * scale)
+            self.clock_height = int(REFERENCE_CLOCK_HEIGHT * scale)
+            self.scale = scale
+        else:
+            self.clock_width = REFERENCE_CLOCK_WIDTH
+            self.clock_height = REFERENCE_CLOCK_HEIGHT
+            self.scale = 1.0
     
-    def assign_clock_states(self, detections: List[Dict]) -> List[Dict]:
-        """
-        Attempt to assign game states to detected clocks based on their positions.
-        This is heuristic-based since we can't know the actual game state.
-        """
-        if not detections:
-            return []
-        
-        # Sort by Y coordinate to separate top and bottom clocks
-        sorted_detections = sorted(detections, key=lambda d: d['position'][1])
-        
-        # If we have multiple detections, try to assign top/bottom and states
-        if len(sorted_detections) >= 2:
-            # Assume roughly equal Y spacing between different states
-            y_positions = [d['position'][1] for d in sorted_detections]
-            y_range = max(y_positions) - min(y_positions)
-            
-            # If Y range is significant, we likely have different states
-            if y_range > 50:
-                # Group by approximate Y regions
-                mid_y = (min(y_positions) + max(y_positions)) / 2
-                
-                top_clocks = [d for d in sorted_detections if d['position'][1] < mid_y]
-                bottom_clocks = [d for d in sorted_detections if d['position'][1] >= mid_y]
-                
-                # Assign clock types
-                for clock in top_clocks:
-                    clock['clock_type'] = 'top'
-                for clock in bottom_clocks:
-                    clock['clock_type'] = 'bottom'
-                
-                # Assign states based on Y ordering within each group
-                self._assign_states_to_group(top_clocks, 'top')
-                self._assign_states_to_group(bottom_clocks, 'bottom')
-            else:
-                # All detections are at similar Y levels - might be same state
-                for i, detection in enumerate(sorted_detections):
-                    detection['state'] = 'play' if i == 0 else f'variant_{i}'
-        
-        return sorted_detections
+    def set_board(self, board_detection: Dict):
+        """Set the board detection result and update clock dimensions."""
+        self.board = board_detection
+        self.text_detector.set_board(board_detection)
+        self._update_clock_dimensions()
     
-    def _assign_states_to_group(self, clocks: List[Dict], clock_type: str):
-        """Assign states to a group of clocks based on Y position."""
-        if not clocks:
-            return
-        
-        # Sort by Y position
-        clocks.sort(key=lambda c: c['position'][1])
-        
-        # Assign states based on expected patterns
-        state_order = ['play', 'start1', 'start2', 'end1', 'end2', 'end3']
-        
-        for i, clock in enumerate(clocks):
-            if i < len(state_order):
-                clock['state'] = state_order[i]
-            else:
-                clock['state'] = f'extra_{i}'
-    
-    def find_clocks(self, max_attempts: int = 2) -> Optional[Dict]:
+    def detect(self, image: np.ndarray) -> Optional[Dict]:
         """
-        Main function to find both top and bottom clocks on screen.
+        Detect clock positions in an image.
+        
+        Uses text-based detection as primary method, with OCR sweep as fallback.
+        
+        Args:
+            image: BGR image to search.
         
         Returns:
-            Dictionary with detected clock positions or None
+            Dictionary with detection results:
+            {
+                'bottom_clock': {state: {'x', 'y', 'width', 'height'}, ...},
+                'top_clock': {state: {'x', 'y', 'width', 'height'}, ...},
+                'clock_x': int,  # Common X position
+                'detection_count': int,
+                'detection_method': str  # 'text' or 'ocr_sweep'
+            }
+            Or None if no clocks found.
         """
-        print("Searching for chess clocks on screen...")
-        
-        all_detections = []
-        
-        for attempt in range(max_attempts):
-            print(f"Attempt {attempt + 1}/{max_attempts}")
-            
-            # Capture screenshot
-            screenshot_img = self.screen_capture.capture()
-            if screenshot_img is None:
-                print(f"Failed to capture screenshot on attempt {attempt + 1}")
-                continue
-            
-            # Search for clocks (both top and bottom in one pass)
-            detections = self.search_clock_positions(screenshot_img, "both")
-            
-            if detections:
-                all_detections.extend(detections)
-                break
-        
-        if not all_detections:
-            print("No clocks detected")
+        if self.board is None:
+            print("Error: Board detection required before clock detection")
             return None
         
-        # Filter for higher confidence detections first
-        high_confidence = [d for d in all_detections if d['confidence'] >= 0.8]
-        medium_confidence = [d for d in all_detections if 0.65 <= d['confidence'] < 0.8]
+        # Try text-based detection first (faster and more reliable)
+        result = self._detect_by_text(image)
         
-        print(f"High confidence detections: {len(high_confidence)}")
-        print(f"Medium confidence detections: {len(medium_confidence)}")
+        if result:
+            return result
         
-        # Use high confidence if available, otherwise medium, but limit the total
-        detections_to_use = high_confidence if high_confidence else medium_confidence
+        # Fallback to OCR sweep method
+        print("Text detection failed, trying OCR sweep...")
+        return self._detect_by_ocr_sweep(image)
+    
+    def _detect_by_text(self, image: np.ndarray) -> Optional[Dict]:
+        """
+        Detect clocks using text block detection.
         
-        # Limit detections to prevent too many false positives
-        detections_to_use = detections_to_use[:50]
+        Args:
+            image: BGR image.
         
-        if not detections_to_use:
-            print("No suitable clock detections found")
+        Returns:
+            Detection result or None.
+        """
+        text_result = self.text_detector.detect(image)
+        
+        if text_result is None:
             return None
         
-        # Cluster nearby detections
-        clustered = self.cluster_detections(detections_to_use)
+        top_clock = text_result.get('top_clock')
+        bottom_clock = text_result.get('bottom_clock')
         
-        # Limit to most promising candidates
-        clustered = clustered[:10]  # Top 10 candidates
+        if not top_clock and not bottom_clock:
+            return None
         
-        # Assign clock types and states
-        final_detections = self.assign_clock_states(clustered)
+        # Determine common X position
+        if top_clock and bottom_clock:
+            clock_x = (top_clock['x'] + bottom_clock['x']) // 2
+        elif top_clock:
+            clock_x = top_clock['x']
+        else:
+            clock_x = bottom_clock['x']
         
-        # Organize results
+        # Format as game state dictionary (default to 'play' state)
         result = {
-            'detection_method': 'ocr_validation',
-            'total_detections': len(final_detections),
-            'clocks': final_detections,
-            'timestamp': time.time()
+            'clock_x': clock_x,
+            'detection_count': (1 if top_clock else 0) + (1 if bottom_clock else 0),
+            'detection_method': 'text'
         }
         
-        print(f"Successfully detected {len(final_detections)} clock positions")
-        for detection in final_detections:
-            pos = detection['position']
-            print(f"  {detection['clock_type']} clock ({detection['state']}): "
-                  f"({pos[0]}, {pos[1]}) - {detection['time_value']}s "
-                  f"(confidence: {detection['confidence']:.3f})")
+        if top_clock:
+            result['top_clock'] = {
+                'play': {
+                    'x': top_clock['x'],
+                    'y': top_clock['y'],
+                    'width': top_clock['width'],
+                    'height': top_clock['height']
+                }
+            }
+        
+        if bottom_clock:
+            result['bottom_clock'] = {
+                'play': {
+                    'x': bottom_clock['x'],
+                    'y': bottom_clock['y'],
+                    'width': bottom_clock['width'],
+                    'height': bottom_clock['height']
+                }
+            }
         
         return result
     
-    def validate_existing_coordinates(self, coordinates: Dict, 
-                                    screenshot_img: Optional[np.ndarray] = None) -> Dict:
+    def _detect_by_ocr_sweep(self, image: np.ndarray) -> Optional[Dict]:
         """
-        Validate existing clock coordinates by attempting to read them.
+        Detect clocks using OCR sweep method (fallback).
         
         Args:
-            coordinates: Dictionary of clock coordinates to validate
-            screenshot_img: Optional screenshot, will capture if not provided
-            
+            image: BGR image.
+        
         Returns:
-            Dictionary with validation results
+            Detection result or None.
         """
-        if screenshot_img is None:
-            screenshot_img = self.screen_capture.capture()
-            if screenshot_img is None:
-                return {'error': 'Could not capture screenshot'}
         
-        validation_results = {
-            'total_tested': 0,
-            'total_successful': 0,
-            'clock_results': {},
-            'overall_success_rate': 0.0
+        if image is None or image.size == 0:
+            return None
+        
+        img_h, img_w = image.shape[:2]
+        board_x = self.board['x']
+        board_y = self.board['y']
+        board_size = self.board['size']
+        
+        # Calculate scaled gap values
+        gap_min = int(board_size * self.CLOCK_GAP_RATIO_MIN)
+        gap_max = int(board_size * self.CLOCK_GAP_RATIO_MAX)
+        
+        print(f"Clock detection: board={board_size}px, scale={self.scale:.2f}, "
+              f"clock_size={self.clock_width}x{self.clock_height}")
+        
+        # Calculate search region
+        # Clock X is to the right of board
+        clock_x_start = board_x + board_size + gap_min
+        clock_x_end = min(board_x + board_size + gap_max, img_w - self.clock_width)
+        
+        if clock_x_start >= img_w - self.clock_width:
+            print("Error: No space for clock to right of board")
+            return None
+        
+        # Find the correct X position
+        clock_x = self._find_clock_x(image, clock_x_start, clock_x_end, board_y, board_size)
+        
+        if clock_x is None:
+            print("Warning: Could not find clock X position, using estimate")
+            # Use scaled default gap
+            clock_x = board_x + board_size + int(29 * self.scale)
+        
+        # Define Y search ranges for top and bottom clocks
+        # Scale the sweep padding too
+        scaled_padding = int(self.SWEEP_PADDING * self.scale)
+        top_y_start = max(0, board_y - scaled_padding)
+        top_y_end = board_y + board_size // 3
+        
+        bottom_y_start = board_y + 2 * board_size // 3
+        bottom_y_end = min(img_h - self.clock_height, board_y + board_size + scaled_padding)
+        
+        # Sweep for top clock
+        top_detections = self._sweep_y_range(image, clock_x, top_y_start, top_y_end)
+        
+        # Sweep for bottom clock
+        bottom_detections = self._sweep_y_range(image, clock_x, bottom_y_start, bottom_y_end)
+        
+        if not top_detections and not bottom_detections:
+            return None
+        
+        # Cluster and assign states
+        top_clock = self._cluster_and_assign_states(top_detections, 'top')
+        bottom_clock = self._cluster_and_assign_states(bottom_detections, 'bottom')
+        
+        return {
+            'bottom_clock': bottom_clock,
+            'top_clock': top_clock,
+            'clock_x': clock_x,
+            'detection_count': len(top_detections) + len(bottom_detections)
         }
+    
+    def _extract_and_resize_clock(self, image: np.ndarray, x: int, y: int) -> Optional[np.ndarray]:
+        """
+        Extract clock region at scaled size and resize to standard 147x44 for OCR.
         
-        # Test each clock type and state
-        for clock_type in ['bottom_clock', 'top_clock']:
-            if clock_type in coordinates:
-                validation_results['clock_results'][clock_type] = {}
+        Args:
+            image: Source image.
+            x: X position.
+            y: Y position.
+        
+        Returns:
+            Resized clock region (147x44) or None if extraction failed.
+        """
+        # Extract at scaled size
+        region = extract_region(image, x, y, self.clock_width, self.clock_height)
+        
+        if region is None:
+            return None
+        
+        # Resize to standard size for read_clock()
+        # read_clock() expects exactly 147x44 with digits at specific positions
+        resized = cv2.resize(region, (REFERENCE_CLOCK_WIDTH, REFERENCE_CLOCK_HEIGHT),
+                            interpolation=cv2.INTER_AREA)
+        
+        return resized
+    
+    def _find_clock_x(self, image: np.ndarray, x_start: int, x_end: int,
+                      board_y: int, board_size: int) -> Optional[int]:
+        """
+        Find the correct X position for clocks.
+        
+        Tests multiple X positions and returns the one with most successful reads.
+        
+        Args:
+            image: Source image.
+            x_start: Start of X search range.
+            x_end: End of X search range.
+            board_y: Board Y position.
+            board_size: Board size.
+        
+        Returns:
+            Best X position, or None if none found.
+        """
+        # Test Y positions where clocks are likely to be (scaled)
+        test_y_positions = [
+            board_y + int(250 * self.scale),  # Approximate top clock position
+            board_y + board_size - int(100 * self.scale),  # Approximate bottom clock position
+        ]
+        
+        best_x = None
+        best_count = 0
+        
+        # Use scaled step for X search
+        x_step = max(3, int(5 * self.scale))
+        
+        # Test X positions
+        for x in range(x_start, x_end, x_step):
+            success_count = 0
+            
+            for y in test_y_positions:
+                # Sweep small Y range around test position (scaled)
+                y_range = int(30 * self.scale)
+                y_step = max(3, int(5 * self.scale))
                 
-                for state, coords in coordinates[clock_type].items():
-                    validation_results['total_tested'] += 1
+                for dy in range(-y_range, y_range + 1, y_step):
+                    test_y = y + dy
+                    if test_y < 0:
+                        continue
                     
-                    # Extract clock region
-                    x, y = coords['x'], coords['y']
-                    w, h = coords['width'], coords['height']
+                    region = self._extract_and_resize_clock(image, x, test_y)
+                    if region is None:
+                        continue
                     
-                    # Ensure coordinates are within bounds
-                    if (x >= 0 and y >= 0 and 
-                        x + w <= screenshot_img.shape[1] and 
-                        y + h <= screenshot_img.shape[0]):
-                        
-                        clock_region = screenshot_img[y:y+h, x:x+w]
-                        
-                        # Validate using read_clock
-                        is_valid, time_value, confidence = self.validate_clock_region(clock_region, x, y)
-                        
-                        validation_results['clock_results'][clock_type][state] = {
-                            'success': is_valid,
-                            'time_value': time_value,
-                            'confidence': confidence,
-                            'coordinates': coords
-                        }
-                        
-                        if is_valid:
-                            validation_results['total_successful'] += 1
-                        
-                        status = '✅' if is_valid else '❌'
-                        time_str = f"{time_value}s" if time_value is not None else "None"
-                        print(f"  {clock_type}.{state}: {status} {time_str} (confidence: {confidence:.3f})")
-                    else:
-                        validation_results['clock_results'][clock_type][state] = {
-                            'success': False,
-                            'error': 'Coordinates out of bounds',
-                            'coordinates': coords
-                        }
-                        print(f"  {clock_type}.{state}: ❌ (out of bounds)")
+                    time_value = self.read_clock(region)
+                    if time_value is not None:
+                        success_count += 1
+            
+            if success_count > best_count:
+                best_count = success_count
+                best_x = x
+            
+            # Early termination if we found a good position
+            if success_count >= 3:
+                return x
         
-        # Calculate overall success rate
-        if validation_results['total_tested'] > 0:
-            validation_results['overall_success_rate'] = (
-                validation_results['total_successful'] / validation_results['total_tested']
-            )
+        return best_x
+    
+    def _sweep_y_range(self, image: np.ndarray, clock_x: int,
+                       y_start: int, y_end: int) -> List[Dict]:
+        """
+        Sweep Y range and find all positions where clock can be read.
         
-        print(f"Validation complete: {validation_results['total_successful']}/{validation_results['total_tested']} "
-              f"({validation_results['overall_success_rate']:.1%}) success rate")
+        Args:
+            image: Source image.
+            clock_x: X position of clock.
+            y_start: Start of Y range.
+            y_end: End of Y range.
         
-        return validation_results
+        Returns:
+            List of successful detections.
+        """
+        detections = []
+        
+        # Scale the sweep step
+        sweep_step = max(2, int(self.SWEEP_STEP * self.scale))
+        
+        for y in range(y_start, y_end, sweep_step):
+            region = self._extract_and_resize_clock(image, clock_x, y)
+            
+            if region is None:
+                continue
+            
+            time_value = self.read_clock(region)
+            
+            if time_value is not None:
+                detections.append({
+                    'x': clock_x,
+                    'y': y,
+                    'width': self.clock_width,
+                    'height': self.clock_height,
+                    'time_value': time_value
+                })
+        
+        return detections
+    
+    def _cluster_and_assign_states(self, detections: List[Dict],
+                                    clock_type: str) -> Dict[str, Dict]:
+        """
+        Cluster detections and assign game states.
+        
+        Args:
+            detections: List of detection dicts.
+            clock_type: 'top' or 'bottom'.
+        
+        Returns:
+            Dictionary mapping state names to coordinates.
+        """
+        if not detections:
+            return {}
+        
+        # Extract Y values
+        y_values = [d['y'] for d in detections]
+        
+        # Cluster nearby Y values (scaled threshold)
+        cluster_threshold = int(self.CLUSTER_THRESHOLD * self.scale)
+        clusters = cluster_values(y_values, cluster_threshold)
+        
+        # Get representative detection for each cluster
+        cluster_detections = []
+        
+        for cluster in clusters:
+            # Find detection closest to cluster mean
+            mean_y = cluster_mean(cluster)
+            best_detection = min(detections, key=lambda d: abs(d['y'] - mean_y))
+            cluster_detections.append({
+                **best_detection,
+                'y': mean_y  # Use cluster mean for stability
+            })
+        
+        # Sort by Y position
+        cluster_detections.sort(key=lambda d: d['y'])
+        
+        # Assign states based on position
+        # For bottom clock: first (lowest Y) is 'play', then start1, start2, end1, end2, end3
+        # For top clock: first (lowest Y) is end1, then higher Y values
+        
+        state_order = ['play', 'start1', 'start2', 'end1', 'end2', 'end3']
+        
+        result = {}
+        
+        for i, detection in enumerate(cluster_detections):
+            if i < len(state_order):
+                state = state_order[i]
+            else:
+                state = f'extra_{i}'
+            
+            result[state] = {
+                'x': detection['x'],
+                'y': detection['y'],
+                'width': detection['width'],
+                'height': detection['height'],
+                'time_value': detection.get('time_value')
+            }
+        
+        return result
+    
+    def validate_position(self, image: np.ndarray, x: int, y: int,
+                          width: Optional[int] = None, 
+                          height: Optional[int] = None) -> Tuple[bool, Optional[int]]:
+        """
+        Validate a specific clock position.
+        
+        Args:
+            image: Source image.
+            x: X coordinate.
+            y: Y coordinate.
+            width: Clock width (uses scaled default if None).
+            height: Clock height (uses scaled default if None).
+        
+        Returns:
+            (is_valid, time_value) tuple.
+        """
+        w = width if width is not None else self.clock_width
+        h = height if height is not None else self.clock_height
+        
+        region = extract_region(image, x, y, w, h)
+        
+        if region is None:
+            return False, None
+        
+        # Resize to standard dimensions for read_clock
+        resized = cv2.resize(region, (REFERENCE_CLOCK_WIDTH, REFERENCE_CLOCK_HEIGHT),
+                            interpolation=cv2.INTER_AREA)
+        
+        time_value = self.read_clock(resized)
+        
+        return time_value is not None, time_value
+    
+    def validate_all_states(self, image: np.ndarray,
+                           clock_positions: Dict) -> Dict[str, Dict]:
+        """
+        Validate all clock state positions.
+        
+        Args:
+            image: Source image.
+            clock_positions: Dictionary of clock positions from config.
+        
+        Returns:
+            Validation results for each clock type and state.
+        """
+        results = {}
+        
+        for clock_type in ['bottom_clock', 'top_clock']:
+            if clock_type not in clock_positions:
+                continue
+            
+            results[clock_type] = {}
+            
+            for state, coords in clock_positions[clock_type].items():
+                is_valid, time_value = self.validate_position(
+                    image, coords['x'], coords['y'],
+                    coords.get('width'), coords.get('height')
+                )
+                
+                results[clock_type][state] = {
+                    'valid': is_valid,
+                    'time_value': time_value,
+                    'coordinates': coords
+                }
+        
+        return results
 
-if __name__ == "__main__":
-    # Test the clock detector
-    detector = ClockDetector()
+
+def detect_clocks(image: np.ndarray, board_detection: Dict) -> Optional[Dict]:
+    """
+    Convenience function to detect clocks.
     
-    print("Testing clock detection...")
-    result = detector.find_clocks()
+    Args:
+        image: BGR image to search.
+        board_detection: Board detection result.
     
-    if result:
-        print(f"\nDetected {result['total_detections']} clocks:")
-        for clock in result['clocks']:
-            pos = clock['position']
-            print(f"  {clock['clock_type']} ({clock['state']}): ({pos[0]}, {pos[1]}) "
-                  f"- {clock['time_value']}s (confidence: {clock['confidence']:.3f})")
-    else:
-        print("No clocks detected")
+    Returns:
+        Clock detection result dict or None.
+    """
+    detector = ClockDetector(board_detection)
+    return detector.detect(image)
+
+
+def detect_clocks_from_screenshot(board_detection: Dict) -> Optional[Dict]:
+    """
+    Detect clocks from current screen.
+    
+    Args:
+        board_detection: Board detection result.
+    
+    Returns:
+        Clock detection result dict or None.
+    """
+    from .utils import capture_screenshot
+    
+    screenshot = capture_screenshot()
+    if screenshot is None:
+        return None
+    
+    return detect_clocks(screenshot, board_detection)

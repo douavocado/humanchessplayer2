@@ -1,495 +1,131 @@
 {
   "calibration_info": {
-    "timestamp": "2025-12-07T13:29:56.283795",
-    "board_detection": {
-      "method": "colour_pattern",
-      "position": [
-        1185,
-        735,
-        1353,
-        1353
-      ],
-      "confidence": 1.4724603293942562,
-      "details": {
-        "light_mean": 236.81284064665124,
-        "dark_mean": 114.89498929336189,
-        "mean_diff": 121.91785135328935,
-        "light_std": 6.5471920194463955,
-        "dark_std": 27.64590239471848,
-        "dark_fraction": 0.5188888888888888,
-        "separation_score": 1.0,
-        "balance_score": 1.0,
-        "uniformity_score": 0.7,
-        "region_size": 1622
-      }
-    },
-    "clock_detection": {
-      "method": "ocr_validation",
-      "total_detections": 10,
-      "clocks_found": 10
-    },
-    "validation_success_rate": 0.5714285714285714,
-    "total_positions_tested": 14,
-    "successful_positions": 8
+    "method": "offline_fitting",
+    "screenshots_used": 6,
+    "board_confidence": 0.7218475849524579,
+    "clock_states_detected": [
+      "end1",
+      "end2",
+      "play",
+      "start1",
+      "start2",
+      "end1",
+      "end2",
+      "play",
+      "start1",
+      "start2"
+    ],
+    "timestamp": "2025-12-14T14:40:24.706687"
   },
   "coordinates": {
     "board": {
-      "x": 1185,
-      "y": 735,
-      "width": 1353,
-      "height": 1353
+      "x": 1096,
+      "y": 189,
+      "width": 1656,
+      "height": 1656
     },
     "bottom_clock": {
-      "play": {
-        "x": 2534,
-        "y": 1405,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2728
-      },
-      "start1": {
-        "x": 2718,
-        "y": 1725,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.9,
-        "time_value_detected": 884
-      },
-      "start2": {
-        "x": 2558,
-        "y": 2016,
-        "width": 147,
-        "height": 44
-      },
       "end1": {
-        "x": 2558,
-        "y": 2057,
-        "width": 147,
-        "height": 44
+        "x": 2767,
+        "y": 1206,
+        "width": 214,
+        "height": 38
       },
       "end2": {
-        "x": 2558,
-        "y": 1993,
-        "width": 147,
-        "height": 44
+        "x": 2767,
+        "y": 1206,
+        "width": 220,
+        "height": 38
+      },
+      "play": {
+        "x": 2767,
+        "y": 1160,
+        "width": 220,
+        "height": 38
+      },
+      "start1": {
+        "x": 2767,
+        "y": 1188,
+        "width": 219,
+        "height": 38
+      },
+      "start2": {
+        "x": 2767,
+        "y": 1174,
+        "width": 219,
+        "height": 38
       },
       "end3": {
-        "x": 2558,
-        "y": 2022,
-        "width": 147,
-        "height": 44
+        "x": 2767,
+        "y": 1226,
+        "width": 220,
+        "height": 38,
+        "estimated": true
       }
     },
     "top_clock": {
-      "play": {
-        "x": 2518,
-        "y": 717,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2684
-      },
-      "start1": {
-        "x": 2574,
-        "y": 717,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2684
-      },
-      "start2": {
-        "x": 2854,
-        "y": 1125,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2860
-      },
       "end1": {
-        "x": 2518,
-        "y": 1157,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2684
+        "x": 2767,
+        "y": 795,
+        "width": 219,
+        "height": 38
       },
       "end2": {
-        "x": 2574,
-        "y": 1157,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2684
+        "x": 2767,
+        "y": 795,
+        "width": 219,
+        "height": 38
       },
-      "end3": {
-        "x": 2678,
-        "y": 1157,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2667
+      "play": {
+        "x": 2767,
+        "y": 841,
+        "width": 219,
+        "height": 38
       },
-      "extra_6": {
-        "x": 2782,
-        "y": 1205,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.8,
-        "time_value_detected": 2446
+      "start1": {
+        "x": 2767,
+        "y": 813,
+        "width": 219,
+        "height": 38
       },
-      "extra_7": {
-        "x": 2878,
-        "y": 1213,
-        "width": 147,
-        "height": 44,
-        "detection_confidence": 0.9,
-        "time_value_detected": 284
+      "start2": {
+        "x": 2767,
+        "y": 827,
+        "width": 219,
+        "height": 38
       }
     },
     "notation": {
-      "x": 2596,
-      "y": 1147,
-      "width": 166,
-      "height": 104
+      "x": 2841,
+      "y": 935,
+      "width": 324,
+      "height": 203
     },
     "rating": {
       "opp_white": {
-        "x": 2893,
-        "y": 1014,
-        "width": 40,
-        "height": 24
+        "x": 3118,
+        "y": 888,
+        "width": 78,
+        "height": 46
       },
       "own_white": {
-        "x": 2893,
-        "y": 1262,
-        "width": 40,
-        "height": 24
+        "x": 3118,
+        "y": 1103,
+        "width": 78,
+        "height": 46
       },
       "opp_black": {
-        "x": 2893,
-        "y": 1029,
-        "width": 40,
-        "height": 24
+        "x": 3118,
+        "y": 1103,
+        "width": 78,
+        "height": 46
       },
       "own_black": {
-        "x": 2893,
-        "y": 1247,
-        "width": 40,
-        "height": 24
+        "x": 3118,
+        "y": 888,
+        "width": 78,
+        "height": 46
       }
     }
-  },
-  "validation_results": {
-    "total_tested": 14,
-    "total_successful": 8,
-    "clock_results": {
-      "bottom_clock": {
-        "play": {
-          "success": true,
-          "time_value": 2728,
-          "confidence": 0.8,
-          "coordinates": {
-            "x": 2534,
-            "y": 1405,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2728
-          }
-        },
-        "start1": {
-          "success": false,
-          "time_value": null,
-          "confidence": 0.0,
-          "coordinates": {
-            "x": 2718,
-            "y": 1725,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.9,
-            "time_value_detected": 884
-          }
-        },
-        "start2": {
-          "success": false,
-          "time_value": null,
-          "confidence": 0.0,
-          "coordinates": {
-            "x": 2558,
-            "y": 2016,
-            "width": 147,
-            "height": 44
-          }
-        },
-        "end1": {
-          "success": true,
-          "time_value": 4697,
-          "confidence": 0.7,
-          "coordinates": {
-            "x": 2558,
-            "y": 2057,
-            "width": 147,
-            "height": 44
-          }
-        },
-        "end2": {
-          "success": false,
-          "time_value": null,
-          "confidence": 0.0,
-          "coordinates": {
-            "x": 2558,
-            "y": 1993,
-            "width": 147,
-            "height": 44
-          }
-        },
-        "end3": {
-          "success": false,
-          "time_value": null,
-          "confidence": 0.0,
-          "coordinates": {
-            "x": 2558,
-            "y": 2022,
-            "width": 147,
-            "height": 44
-          }
-        }
-      },
-      "top_clock": {
-        "play": {
-          "success": true,
-          "time_value": 2684,
-          "confidence": 0.8,
-          "coordinates": {
-            "x": 2518,
-            "y": 717,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2684
-          }
-        },
-        "start1": {
-          "success": true,
-          "time_value": 2684,
-          "confidence": 0.8,
-          "coordinates": {
-            "x": 2574,
-            "y": 717,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2684
-          }
-        },
-        "start2": {
-          "success": false,
-          "time_value": null,
-          "confidence": 0.0,
-          "coordinates": {
-            "x": 2854,
-            "y": 1125,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2860
-          }
-        },
-        "end1": {
-          "success": true,
-          "time_value": 2684,
-          "confidence": 0.8,
-          "coordinates": {
-            "x": 2518,
-            "y": 1157,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2684
-          }
-        },
-        "end2": {
-          "success": true,
-          "time_value": 2684,
-          "confidence": 0.8,
-          "coordinates": {
-            "x": 2574,
-            "y": 1157,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2684
-          }
-        },
-        "end3": {
-          "success": false,
-          "time_value": null,
-          "confidence": 0.0,
-          "coordinates": {
-            "x": 2678,
-            "y": 1157,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2667
-          }
-        },
-        "extra_6": {
-          "success": true,
-          "time_value": 2446,
-          "confidence": 0.8,
-          "coordinates": {
-            "x": 2782,
-            "y": 1205,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.8,
-            "time_value_detected": 2446
-          }
-        },
-        "extra_7": {
-          "success": true,
-          "time_value": 284,
-          "confidence": 0.9,
-          "coordinates": {
-            "x": 2878,
-            "y": 1213,
-            "width": 147,
-            "height": 44,
-            "detection_confidence": 0.9,
-            "time_value_detected": 284
-          }
-        }
-      }
-    },
-    "overall_success_rate": 0.5714285714285714
-  },
-  "clock_detection_results": {
-    "detection_method": "ocr_validation",
-    "total_detections": 10,
-    "clocks": [
-      {
-        "position": [
-          2518,
-          717,
-          147,
-          44
-        ],
-        "time_value": 2684,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "play"
-      },
-      {
-        "position": [
-          2574,
-          717,
-          147,
-          44
-        ],
-        "time_value": 2684,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "start1"
-      },
-      {
-        "position": [
-          2854,
-          1125,
-          147,
-          44
-        ],
-        "time_value": 2860,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "start2"
-      },
-      {
-        "position": [
-          2518,
-          1157,
-          147,
-          44
-        ],
-        "time_value": 2684,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "end1"
-      },
-      {
-        "position": [
-          2574,
-          1157,
-          147,
-          44
-        ],
-        "time_value": 2684,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "end2"
-      },
-      {
-        "position": [
-          2678,
-          1157,
-          147,
-          44
-        ],
-        "time_value": 2667,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "end3"
-      },
-      {
-        "position": [
-          2782,
-          1205,
-          147,
-          44
-        ],
-        "time_value": 2446,
-        "confidence": 0.8,
-        "clock_type": "top",
-        "state": "extra_6"
-      },
-      {
-        "position": [
-          2878,
-          1213,
-          147,
-          44
-        ],
-        "time_value": 284,
-        "confidence": 0.9,
-        "clock_type": "top",
-        "state": "extra_7"
-      },
-      {
-        "position": [
-          2534,
-          1405,
-          147,
-          44
-        ],
-        "time_value": 2728,
-        "confidence": 0.8,
-        "clock_type": "bottom",
-        "state": "play"
-      },
-      {
-        "position": [
-          2718,
-          1725,
-          147,
-          44
-        ],
-        "time_value": 884,
-        "confidence": 0.9,
-        "clock_type": "bottom",
-        "state": "start1"
-      }
-    ],
-    "timestamp": 1765110596.105897
   }
 }

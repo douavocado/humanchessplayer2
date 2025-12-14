@@ -19,14 +19,19 @@ from datetime import datetime
 from pathlib import Path
 
 # Add auto_calibration to path
-sys.path.append(str(Path(__file__).parent.parent / "auto_calibration"))
+sys.path.append(str(Path(__file__).parent.parent))
 
 try:
-    from config_loader import chess_config
+    from auto_calibration.config import get_config
+    chess_config = get_config()
     USE_CONFIG = True
-    print("📍 Using auto-calibrated coordinates")
+    if not chess_config.is_using_fallback():
+        print("📍 Using auto-calibrated coordinates")
+    else:
+        print("⚠️  No calibration file found, using fallback coordinates")
 except ImportError:
     USE_CONFIG = False
+    chess_config = None
     print("⚠️  Auto-calibration not available, using hardcoded coordinates")
 
 def remove_background_colours(img, thresh = 1.04):
@@ -321,11 +326,20 @@ def read_clock(clock_image):
         image = remove_background_colours(clock_image, thresh=1.6).astype(np.uint8)
     else:
         image = clock_image.copy()
-        
+    
+    # Get template dimensions for resizing
+    template_h, template_w = TEMPLATES.shape[1:3]  # (height, width) from shape (10, H, W)
+    
     d1 = image[:, :30]
     d2 = image[:, 34:64]
     d3 = image[:, 83:113]
     d4 = image[:, 117:147]
+    
+    # Resize each digit region to match template size
+    d1 = cv2.resize(d1, (template_w, template_h), interpolation=cv2.INTER_AREA)
+    d2 = cv2.resize(d2, (template_w, template_h), interpolation=cv2.INTER_AREA)
+    d3 = cv2.resize(d3, (template_w, template_h), interpolation=cv2.INTER_AREA)
+    d4 = cv2.resize(d4, (template_w, template_h), interpolation=cv2.INTER_AREA)
 
     digit_1 = multitemplate_match_f(d1, TEMPLATES)
     digit_2 = multitemplate_match_f(d2, TEMPLATES)
