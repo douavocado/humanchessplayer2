@@ -91,6 +91,9 @@ class Calibrator:
         
         print(f"✅ Screenshot captured: {image.shape[1]}x{image.shape[0]}")
         
+        # Mark as live calibration
+        self._is_offline = False
+        
         # Run calibration on image
         return self._calibrate_image(image, visualise)
     
@@ -124,6 +127,9 @@ class Calibrator:
             return None
         
         print(f"✅ Image loaded: {image.shape[1]}x{image.shape[0]}")
+        
+        # Mark as offline calibration
+        self._is_offline = True
         
         # Run calibration
         config = self._calibrate_image(image, visualise)
@@ -227,7 +233,7 @@ class Calibrator:
         # Build final config
         config = {
             'calibration_info': {
-                'method': 'live' if not hasattr(self, '_is_offline') else 'offline',
+                'method': 'offline' if getattr(self, '_is_offline', False) else 'live',
                 'board_confidence': board_detection['confidence'],
                 'clock_detection_count': clock_detection['detection_count'] if clock_detection else 0,
                 'clock_states_detected': []
