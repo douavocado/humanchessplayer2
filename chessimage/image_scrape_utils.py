@@ -93,6 +93,14 @@ def get_board_info():
 def get_clock_info(clock_type, state="play"):
     """Get clock position info."""
     coords = get_coordinates()
+    if clock_type not in coords:
+        raise KeyError(f"Clock type '{clock_type}' not found in coordinates")
+    if state not in coords[clock_type]:
+        # Try fallback to 'play' state
+        if 'play' in coords[clock_type]:
+            state = 'play'
+        else:
+            raise KeyError(f"Clock state '{state}' not found for {clock_type}")
     clock = coords[clock_type][state]
     return clock['x'], clock['y'], clock['width'], clock['height']
 
@@ -229,7 +237,8 @@ def multitemplate_match_f(img, templates):
     
     scores =  nums/denoms
     # if scores are all low, return None
-    if scores.max() < 0.5:
+    # Lowered threshold from 0.5 to 0.4 to handle thin digits like "1"
+    if scores.max() < 0.4:
         return None
     return scores.argmax()
 
@@ -321,25 +330,71 @@ def compare_result_images(img1, img2, max_shift=3, threshold=0.95):
     return best_score
 
 def read_clock(clock_image):
-    # assumes image is black and white
-    if clock_image.ndim== 3:
+    """
+    Read time from a clock image.
+    
+    Uses digit positions from calibration config if available,
+    otherwise falls back to scaled positions based on clock width.
+    """
+    if clock_image is None:
+        return None
+    if clock_image.ndim == 3:
         image = remove_background_colours(clock_image, thresh=1.6).astype(np.uint8)
     else:
         image = clock_image.copy()
     
+    # Validate image dimensions
+    if image.size == 0 or image.ndim != 2:
+        return None
+    
+    img_height, img_width = image.shape
+    
     # Get template dimensions for resizing
     template_h, template_w = TEMPLATES.shape[1:3]  # (height, width) from shape (10, H, W)
     
-    d1 = image[:, :30]
-    d2 = image[:, 34:64]
-    d3 = image[:, 83:113]
-    d4 = image[:, 117:147]
+    # Try to get digit positions from config
+    digit_positions = None
+    if USE_CONFIG and chess_config is not None:
+        digit_positions = chess_config.get_digit_positions()
+    
+    if digit_positions is not None:
+        # Use calibrated digit positions (as fractions of clock width)
+        d1_start = int(digit_positions['d1_start'] * img_width)
+        d1_end = int(digit_positions['d1_end'] * img_width)
+        d2_start = int(digit_positions['d2_start'] * img_width)
+        d2_end = int(digit_positions['d2_end'] * img_width)
+        d3_start = int(digit_positions['d3_start'] * img_width)
+        d3_end = int(digit_positions['d3_end'] * img_width)
+        d4_start = int(digit_positions['d4_start'] * img_width)
+        d4_end = int(digit_positions['d4_end'] * img_width)
+    else:
+        # Fall back to scaled positions based on original 147px width
+        ORIGINAL_WIDTH = 147.0
+        scale = img_width / ORIGINAL_WIDTH
+        d1_start, d1_end = 0, int(30 * scale)
+        d2_start, d2_end = int(34 * scale), int(64 * scale)
+        d3_start, d3_end = int(83 * scale), int(113 * scale)
+        d4_start, d4_end = int(117 * scale), min(int(147 * scale), img_width)
+    
+    # Extract digit regions
+    d1 = image[:, d1_start:d1_end]
+    d2 = image[:, d2_start:d2_end]
+    d3 = image[:, d3_start:d3_end]
+    d4 = image[:, d4_start:d4_end]
+    
+    # Validate extracted regions
+    for i, d in enumerate([d1, d2, d3, d4], 1):
+        if d.size == 0:
+            return None  # Invalid region
     
     # Resize each digit region to match template size
-    d1 = cv2.resize(d1, (template_w, template_h), interpolation=cv2.INTER_AREA)
-    d2 = cv2.resize(d2, (template_w, template_h), interpolation=cv2.INTER_AREA)
-    d3 = cv2.resize(d3, (template_w, template_h), interpolation=cv2.INTER_AREA)
-    d4 = cv2.resize(d4, (template_w, template_h), interpolation=cv2.INTER_AREA)
+    try:
+        d1 = cv2.resize(d1, (template_w, template_h), interpolation=cv2.INTER_AREA)
+        d2 = cv2.resize(d2, (template_w, template_h), interpolation=cv2.INTER_AREA)
+        d3 = cv2.resize(d3, (template_w, template_h), interpolation=cv2.INTER_AREA)
+        d4 = cv2.resize(d4, (template_w, template_h), interpolation=cv2.INTER_AREA)
+    except Exception as e:
+        return None  # Resize failed
 
     digit_1 = multitemplate_match_f(d1, TEMPLATES)
     digit_2 = multitemplate_match_f(d2, TEMPLATES)
@@ -385,8 +440,11 @@ def capture_bottom_clock(state="play"):
     try:
         x, y, w, h = get_clock_info('bottom_clock', state)
         im = SCREEN_CAPTURE.capture((x, y, w, h)).copy()
-    except:
+        if im is None:
+            raise ValueError(f"Failed to capture bottom clock at ({x}, {y}, {w}, {h})")
+    except (KeyError, ValueError) as e:
         # Fallback to legacy variables if config fails
+        print(f"Warning: Failed to get clock info for bottom_clock state '{state}': {e}")
         if state == "play":
             im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
         elif state == "start1":
@@ -399,6 +457,10 @@ def capture_bottom_clock(state="play"):
             im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_2, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
         elif state == "end3":
             im = SCREEN_CAPTURE.capture((BOTTOM_CLOCK_X,BOTTOM_CLOCK_Y_END_3, CLOCK_WIDTH, CLOCK_HEIGHT)).copy()
+        else:
+            raise ValueError(f"Unknown state '{state}' and fallback failed")
+    if im is None or im.size == 0:
+        raise ValueError(f"Captured image is None or empty for bottom_clock state '{state}'")
     img= im[:,:,:3]
     return img
 

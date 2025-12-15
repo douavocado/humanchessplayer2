@@ -186,6 +186,18 @@ class ChessConfig:
             return self.config['calibration_info']
         return None
     
+    def get_digit_positions(self) -> Optional[Dict]:
+        """
+        Get clock digit positions as fractions of clock width.
+        
+        Returns:
+            Dictionary with d1_start, d1_end, d2_start, d2_end, etc. as fractions [0-1],
+            or None if not calibrated.
+        """
+        if self.config and 'digit_positions' in self.config:
+            return self.config['digit_positions']
+        return None
+    
     def print_status(self):
         """Print current configuration status."""
         if self.using_fallback:
