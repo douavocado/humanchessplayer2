@@ -1,6 +1,8 @@
-Engine_logs/**
-Client_logs/**
+# Ignore contents but keep folder structure
+Engine_logs/**/*
+Client_logs/**/*
 Error_files/**
+debug_detection_output/**/*
 models/data/**
 models/model_weights/**
 models/model_results.txt

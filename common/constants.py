@@ -68,6 +68,7 @@ CAPTURE_BONUS = 10
 QUICKNESS = 2.1 # adjust depending on computer fastness. The bigger the number the slower the moves made
 DIFFICULTY = 4 # engine difficulty
 MOUSE_QUICKNESS = 3 # number between 0 and 10. Bigger the number the slower we are with mouse movements
+RESOLUTION_SCALE = 2.0  # Set to 2.0 for 4K, 1.0 for 1080p - adjusts mouse curve point density
 
 # BENCHMARKS
 """ 

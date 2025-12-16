@@ -78,6 +78,7 @@ class Engine:
         self.stockfish_engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
         self.ponder_stockfish_engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_PONDER_STOCKFISH)
         self.stockfish_analysis = None
+        self._stockfish_path = PATH_TO_STOCKFISH  # Store for potential engine restart
 
         # initialise move prob altering model
         model_weights_path = "development/alter_move_prob_train/data/alter_move_prob_nn_best.pth"
@@ -1167,7 +1168,21 @@ class Engine:
         start = time.time()
         no_lines = len(list(self.current_board.legal_moves))
         
-        analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
+        try:
+            analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
+        except chess.engine.EngineTerminatedError:
+            # Engine crashed - try to restart it
+            self.log += "WARNING: Stockfish engine crashed, attempting restart... \n"
+            print("[ENGINE] WARNING: Stockfish engine crashed, attempting restart...")
+            try:
+                self.stockfish_engine = chess.engine.SimpleEngine.popen_uci(self._stockfish_path)
+                analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
+                self.log += "Engine restart successful. \n"
+                print("[ENGINE] Engine restart successful.")
+            except Exception as e:
+                self.log += f"ERROR: Failed to restart engine: {e} \n"
+                print(f"[ENGINE] ERROR: Failed to restart engine: {e}")
+                raise
         
         if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
             analysis = [analysis]

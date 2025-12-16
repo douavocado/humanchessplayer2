@@ -255,6 +255,205 @@ def run_debug_mode(interval=2.0, offline=False, offline_dir="auto_calibration/of
         except Exception as e:
             return None
     
+    def analyse_board_image(board_img, bottom='w'):
+        """
+        Analyse a board image and return detailed FEN detection info.
+        
+        Args:
+            board_img: BGR board image
+            bottom: 'w' if white is at bottom, 'b' if black is at bottom
+            
+        Returns:
+            Dictionary with detection results
+        """
+        from chessimage.image_scrape_utils import (
+            get_fen_from_image, PIECE_TEMPLATES, STEP, PIECE_STEP,
+            remove_background_colours, multitemplate_multimatch
+        )
+        import chess
+        
+        result = {
+            'success': False,
+            'fen': None,
+            'piece_count': 0,
+            'shape': board_img.shape if board_img is not None else None,
+            'step': STEP,
+            'piece_step': PIECE_STEP,
+            'square_details': [],
+            'error': None
+        }
+        
+        if board_img is None:
+            result['error'] = "Board image is None"
+            return result
+        
+        try:
+            # Get FEN
+            fen = get_fen_from_image(board_img, bottom=bottom)
+            result['fen'] = fen
+            
+            # Parse FEN to count pieces
+            board = chess.Board(fen)
+            result['piece_count'] = len(board.piece_map())
+            result['board_valid'] = board.is_valid()
+            
+            # Get detailed square-by-square analysis
+            if board_img.ndim == 3:
+                processed = remove_background_colours(board_img).astype(np.uint8)
+            else:
+                processed = board_img.copy()
+            
+            # Extract all 64 squares
+            images = [processed[x*STEP:x*STEP+PIECE_STEP, y*STEP:y*STEP+PIECE_STEP] 
+                     for x in range(8) for y in range(8)]
+            images = np.stack(images, axis=0)
+            
+            # Run template matching
+            valid_squares, argmaxes = multitemplate_multimatch(images, PIECE_TEMPLATES)
+            
+            piece_chars = 'RNBKQPrnbkqp'
+            
+            # Analyse each square
+            for sq in range(64):
+                row, col = sq // 8, sq % 8
+                file_letter = chr(ord('a') + col)
+                rank_number = 8 - row
+                square_name = f"{file_letter}{rank_number}"
+                
+                # Calculate match scores for this square
+                sq_img = images[sq]
+                T = PIECE_TEMPLATES.astype(float)
+                I = sq_img.astype(float)
+                w, h = sq_img.shape
+                T_primes = T - np.expand_dims(1/(w*h)*T.sum(axis=(1,2)), (-1,-2))
+                I_prime = I - 1/(w*h)*I.sum()
+                T_denom = (T_primes**2).sum(axis=(1,2))
+                I_denom = (I_prime**2).sum()
+                denoms = np.sqrt(T_denom * I_denom) + 1e-10
+                nums = (T_primes * np.expand_dims(I_prime, 0)).sum(axis=(1,2))
+                scores = nums / denoms
+                
+                best_idx = int(scores.argmax())
+                best_score = float(scores.max())
+                
+                is_valid = sq in valid_squares
+                detected_piece = piece_chars[argmaxes[sq]] if is_valid else None
+                
+                result['square_details'].append({
+                    'square': square_name,
+                    'row': row,
+                    'col': col,
+                    'detected_piece': detected_piece,
+                    'best_match': piece_chars[best_idx],
+                    'best_score': round(best_score, 3),
+                    'is_valid': is_valid
+                })
+            
+            result['success'] = True
+            result['detected_pieces'] = sum(1 for s in result['square_details'] if s['is_valid'])
+            
+        except Exception as e:
+            result['error'] = str(e)
+            import traceback
+            result['traceback'] = traceback.format_exc()
+        
+        return result
+    
+    def create_board_debug_image(board_img, analysis):
+        """
+        Create a debug image showing detected pieces on the board.
+        
+        Overlays detection results on the board image.
+        """
+        if board_img is None:
+            return None
+        
+        debug_img = board_img.copy()
+        step = analysis.get('step', 207)
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = step / 100  # Scale font based on square size
+        thickness = max(1, int(step / 50))
+        
+        for sq_info in analysis.get('square_details', []):
+            row, col = sq_info['row'], sq_info['col']
+            x = col * step
+            y = row * step
+            
+            piece = sq_info.get('detected_piece')
+            score = sq_info.get('best_score', 0)
+            
+            if piece:
+                # Draw piece letter
+                color = (0, 255, 0) if score > 0.7 else (0, 255, 255)  # Green if high confidence, yellow otherwise
+                text = piece
+                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                text_x = x + (step - text_size[0]) // 2
+                text_y = y + (step + text_size[1]) // 2
+                cv2.putText(debug_img, text, (text_x, text_y), font, font_scale, color, thickness)
+            
+            # Draw score in corner
+            score_text = f"{score:.2f}"
+            cv2.putText(debug_img, score_text, (x + 2, y + int(step * 0.15)), 
+                       font, font_scale * 0.4, (255, 255, 255), 1)
+        
+        return debug_img
+    
+    def save_problematic_squares(board_img, analysis, output_dir):
+        """
+        Save individual square images for squares with low confidence or misdetections.
+        
+        Helps diagnose template matching issues.
+        """
+        from chessimage.image_scrape_utils import STEP, PIECE_STEP, remove_background_colours, PIECE_TEMPLATES
+        
+        if board_img is None or not analysis.get('success'):
+            return
+        
+        # Process board to get grayscale squares
+        if board_img.ndim == 3:
+            processed = remove_background_colours(board_img).astype(np.uint8)
+        else:
+            processed = board_img.copy()
+        
+        squares_dir = Path(output_dir) / "squares"
+        squares_dir.mkdir(parents=True, exist_ok=True)
+        
+        problem_count = 0
+        for sq_info in analysis.get('square_details', []):
+            row, col = sq_info['row'], sq_info['col']
+            score = sq_info.get('best_score', 0)
+            is_valid = sq_info.get('is_valid', False)
+            detected = sq_info.get('detected_piece')
+            square_name = sq_info.get('square', f'{row}_{col}')
+            
+            # Save if: low confidence, unexpected detection, or potential misdetection
+            should_save = (is_valid and score < 0.6) or (not is_valid and score > 0.4)
+            
+            if should_save and problem_count < 20:  # Limit to avoid too many files
+                # Extract square
+                sq_img = processed[row*STEP:row*STEP+PIECE_STEP, col*STEP:col*STEP+PIECE_STEP]
+                sq_rgb = board_img[row*STEP:row*STEP+PIECE_STEP, col*STEP:col*STEP+PIECE_STEP]
+                
+                # Save both processed and RGB versions
+                status = 'detected' if is_valid else 'empty'
+                piece_str = detected if detected else 'none'
+                filename = f"{square_name}_{status}_{piece_str}_{score:.2f}"
+                
+                cv2.imwrite(str(squares_dir / f"{filename}_processed.png"), sq_img)
+                cv2.imwrite(str(squares_dir / f"{filename}_rgb.png"), sq_rgb)
+                problem_count += 1
+        
+        if problem_count > 0:
+            log(f"    Saved {problem_count} problematic square images to {squares_dir}")
+        
+        # Also save the piece templates for comparison
+        templates_dir = squares_dir / "templates"
+        templates_dir.mkdir(exist_ok=True)
+        piece_chars = 'RNBKQPrnbkqp'
+        for i, char in enumerate(piece_chars):
+            cv2.imwrite(str(templates_dir / f"template_{char}.png"), PIECE_TEMPLATES[i])
+    
     # Load offline screenshots if in offline mode
     offline_screenshots = {}
     if offline:
@@ -337,16 +536,50 @@ def run_debug_mode(interval=2.0, offline=False, offline_dir="auto_calibration/of
             # Create subdirectory for this screenshot
             attempt_dir = f"offline_{screenshot_state}"
             
-            # Extract and save board
+            # Extract and analyse board
+            board_img = None
             try:
                 board_img = extract_board_from_screenshot(screenshot)
                 if board_img is not None:
                     save_debug_image(board_img, "board", attempt_dir)
                     log(f"Board extracted: shape={board_img.shape}")
+                    
+                    # Analyse board for both orientations
+                    for bottom in ['w', 'b']:
+                        analysis = analyse_board_image(board_img, bottom=bottom)
+                        
+                        if analysis['success']:
+                            log(f"  Board (bottom={bottom}): FEN={analysis['fen']}")
+                            log(f"    Pieces detected: {analysis['detected_pieces']}/32, Valid board: {analysis.get('board_valid', False)}")
+                            
+                            # Create and save debug overlay image
+                            debug_overlay = create_board_debug_image(board_img, analysis)
+                            if debug_overlay is not None:
+                                save_debug_image(debug_overlay, f"board_debug_{bottom}", attempt_dir)
+                            
+                            # Save problematic squares for detailed analysis
+                            save_problematic_squares(board_img, analysis, debug_dir / attempt_dir)
+
+                            # Log any squares with low confidence
+                            low_conf_squares = [s for s in analysis['square_details'] 
+                                              if s['is_valid'] and s['best_score'] < 0.6]
+                            if low_conf_squares:
+                                log(f"    Low confidence pieces:")
+                                for sq in low_conf_squares[:5]:  # Show first 5
+                                    log(f"      {sq['square']}: {sq['detected_piece']} (score={sq['best_score']})")
+                            
+                            # Check for common issues
+                            empty_board = analysis['fen'].split()[0] == '8/8/8/8/8/8/8/8'
+                            if empty_board:
+                                log(f"    ⚠️  WARNING: Empty board detected! Check piece templates.")
+                        else:
+                            log(f"  Board (bottom={bottom}): FAILED - {analysis.get('error', 'Unknown error')}")
                 else:
                     log(f"ERROR: Failed to extract board")
             except Exception as e:
-                log(f"ERROR extracting board: {e}")
+                log(f"ERROR extracting/analysing board: {e}")
+                import traceback
+                log(f"  {traceback.format_exc()}")
             
             # Test clock extraction for different states
             # For start1.png, we test 'start1' state; for start2.png, test 'start2' state, etc.
@@ -435,13 +668,35 @@ def run_debug_mode(interval=2.0, offline=False, offline_dir="auto_calibration/of
                 attempt_dir = f"attempt_{detection_count:04d}"
                 
                 # Capture and analyse board
+                board_img = None
                 try:
                     board_img = capture_board()
                     if board_img is not None:
                         save_debug_image(board_img, "board", attempt_dir)
                         log(f"Board captured: shape={board_img.shape}")
+                        
+                        # Analyse board (assume white at bottom by default)
+                        analysis = analyse_board_image(board_img, bottom='w')
+                        
+                        if analysis['success']:
+                            log(f"  FEN: {analysis['fen']}")
+                            log(f"  Pieces: {analysis['detected_pieces']}/32, Valid: {analysis.get('board_valid', False)}")
+                            
+                            # Create debug overlay
+                            debug_overlay = create_board_debug_image(board_img, analysis)
+                            if debug_overlay is not None:
+                                save_debug_image(debug_overlay, "board_debug", attempt_dir)
+                            
+                            # Save problematic squares for detailed analysis
+                            save_problematic_squares(board_img, analysis, debug_dir / attempt_dir)
+
+                            # Check for empty board
+                            if analysis['fen'].split()[0] == '8/8/8/8/8/8/8/8':
+                                log(f"  ⚠️  WARNING: Empty board detected!")
+                        else:
+                            log(f"  Board analysis FAILED: {analysis.get('error', 'Unknown')}")
                 except Exception as e:
-                    log(f"ERROR capturing board: {e}")
+                    log(f"ERROR capturing/analysing board: {e}")
                 
                 # Test each clock state
                 clock_states = ['start1', 'start2', 'play', 'end1', 'end2']

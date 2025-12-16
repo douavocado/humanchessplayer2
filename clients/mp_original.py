@@ -20,11 +20,11 @@ import numpy as np
 from common.custom_cursor import CustomCursor
 
 from engine import Engine
-from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY
+from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY, RESOLUTION_SCALE
 from common.utils import patch_fens, check_safe_premove
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
-                                           capture_bottom_clock, get_fen_from_image, check_fen_last_move_bottom,
+                                           capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
                                            capture_result, compare_result_images, capture_rating)
 
@@ -64,6 +64,20 @@ PONDER_DIC = {}
 
 HOVER_SQUARE = None
 
+# Performance tracking
+SCAN_TIMES = []  # Track recent scan times for performance monitoring
+SCAN_LOG_INTERVAL = 10  # Log performance summary every N scans
+
+# Move timing tracking - for measuring realised move time vs executed move time
+MOVE_TIMING = {
+    "move_decision_time": None,      # When we decided to make the move
+    "move_execution_end_time": None, # When mouse execution finished
+    "clock_before_move": None,       # Our clock time before the move
+    "move_uci": None,                # The move we made
+    "mouse_time_ms": None,           # Time spent on mouse movement
+    "waiting_for_clock": False       # Whether we're waiting to detect clock change
+}
+
 
 
 #linux funciton to check capslock
@@ -76,9 +90,12 @@ def is_capslock_on():
 
 def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     """ Make human drag and drop move with human mouse speed and randomness in mind.
+        Uses optimised Bezier curves that are faster at higher resolutions.
         
         Returns True if move was made successfully, else if mouse slip was made return False.
     """
+    global LOG
+    
     # 1 in 100 moves, we simulate a potential mouse slip
     successful = True
     if np.random.random() < 0.03:
@@ -97,23 +114,41 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     new_to_y = to_y + offset_y
     
     current_x, current_y = pyautogui.position()
-    from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
-    duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance)**0.3
-    to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance)**0.5
-    # duration_from =0.001
-    # duration_to = 0.001    
-    CURSOR.drag_and_drop([new_from_x, new_from_y], [new_to_x, new_to_y], duration=[duration_from, duration_to])
+    from_distance = np.sqrt((new_from_x - current_x)**2 + (new_from_y - current_y)**2)
+    to_distance = np.sqrt((new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2)
+    
+    # Duration scales with distance but adjusted for resolution
+    # At 4K (RESOLUTION_SCALE=2.0), distances are 2x but we want similar timing to 1080p
+    base_duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance / RESOLUTION_SCALE)**0.3
+    base_duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance / RESOLUTION_SCALE)**0.5
+    
+    # Ensure minimum reasonable duration for human-like movement
+    duration_from = max(0.08, min(0.25, base_duration_from + 0.08))
+    duration_to = max(0.10, min(0.30, base_duration_to + 0.10))
+    
+    drag_start = time.time()
+    
+    # Use quick_move_to for faster human-like curves
+    CURSOR.quick_move_to([new_from_x, new_from_y], duration=duration_from, resolution_scale=RESOLUTION_SCALE)
+    pyautogui.mouseDown()
+    CURSOR.quick_move_to([new_to_x, new_to_y], duration=duration_to, resolution_scale=RESOLUTION_SCALE)
+    pyautogui.mouseUp()
+    
+    actual_duration = (time.time() - drag_start) * 1000
+    
+    planned_ms = (duration_from + duration_to) * 1000
+    LOG += f"[PERF] Drag: planned={planned_ms:.0f}ms, actual={actual_duration:.0f}ms, dist={from_distance:.0f}+{to_distance:.0f}px\n"
 
     return successful
 
 def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     """ Exactly the same as drag mouse, but sometimes we mix it up by clicking two squares
-        rather than click and drag for variation. Tends to be a little faster than drag
-        and drop.
+        rather than click and drag for variation. Uses optimised human-like Bezier curves.
         
         Returns True if move was made successfully, else False if mouse slip was made.    
     """
+    global LOG
+    
     # 1 in 100 moves, we simulate a potential mouse slip
     successful = True
     if np.random.random() < 0.03:
@@ -132,18 +167,29 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     new_to_y = to_y + offset_y
     
     current_x, current_y = pyautogui.position()
-    from_distance =np.sqrt( (new_from_x - current_x)**2 + (new_from_y - current_y)**2 )
-    duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance)
-    to_distance = np.sqrt( (new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2 )
-    duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance)
+    from_distance = np.sqrt((new_from_x - current_x)**2 + (new_from_y - current_y)**2)
+    to_distance = np.sqrt((new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2)
     
-    # duration_from = 0.001
-    # duration_to = 0.001
+    # Duration scales with distance but adjusted for resolution
+    base_duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance / RESOLUTION_SCALE)
+    base_duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance / RESOLUTION_SCALE)
     
-    CURSOR.move_to([new_from_x, new_from_y], duration=duration_from, steady=True)
+    # Ensure minimum reasonable duration for human-like movement
+    duration_from = max(0.08, min(0.25, base_duration_from + 0.08))
+    duration_to = max(0.08, min(0.25, base_duration_to + 0.08))
+    
+    click_start = time.time()
+    
+    # Use quick_move_to for faster human-like curves
+    CURSOR.quick_move_to([new_from_x, new_from_y], duration=duration_from, resolution_scale=RESOLUTION_SCALE)
     pyautogui.click(button="left")
-    CURSOR.move_to([new_to_x, new_to_y], duration=duration_to, steady=True)
+    CURSOR.quick_move_to([new_to_x, new_to_y], duration=duration_to, resolution_scale=RESOLUTION_SCALE)
     pyautogui.click(button="left")
+    
+    actual_duration = (time.time() - click_start) * 1000
+    
+    planned_ms = (duration_from + duration_to) * 1000
+    LOG += f"[PERF] Click: planned={planned_ms:.0f}ms, actual={actual_duration:.0f}ms, dist={from_distance:.0f}+{to_distance:.0f}px\n"
     
     return successful
 
@@ -436,19 +482,44 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
     
 def update_dynamic_info_from_fullimage():
     """ Scrape image information from screenshot and update info dic. """
-    global LOG, DYNAMIC_INFO, GAME_INFO
-    board_img = capture_board()
-    top_clock_img = capture_top_clock()
-    bot_clock_img = capture_bottom_clock()
+    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING
+    
+    scan_start = time.time()
+    
+    # Use single-capture optimization: one screenshot, crop all regions
+    board_img, top_clock_img, bot_clock_img = capture_all_regions()
+    capture_time = time.time()
 
     bottom = "w" if GAME_INFO["playing_side"] == chess.WHITE else "b"
 
     our_time = read_clock(bot_clock_img)        
     opp_time = read_clock(top_clock_img)
+    clock_time = time.time()
     
     fen = get_fen_from_image(board_img, bottom=bottom) # assumes white turn
+    fen_time = time.time()
+    
     # now check the turn
-    check_turn_res = check_turn_from_last_moved(fen, board_img, bottom)    
+    check_turn_res = check_turn_from_last_moved(fen, board_img, bottom)
+    turn_time = time.time()
+    
+    # Track and log timing stats
+    global SCAN_TIMES
+    total_scan_ms = (turn_time - scan_start) * 1000
+    SCAN_TIMES.append(total_scan_ms)
+    
+    # Keep only last 50 scan times
+    if len(SCAN_TIMES) > 50:
+        SCAN_TIMES = SCAN_TIMES[-50:]
+    
+    # Log performance summary periodically
+    if len(SCAN_TIMES) % SCAN_LOG_INTERVAL == 0:
+        avg_ms = sum(SCAN_TIMES[-SCAN_LOG_INTERVAL:]) / SCAN_LOG_INTERVAL
+        LOG += f"[PERF] Avg scan time (last {SCAN_LOG_INTERVAL}): {avg_ms:.0f}ms, scans/sec: {1000/avg_ms:.1f}\n"
+    
+    # Log individual slow scans
+    if total_scan_ms > 80:  # Log if scan took longer than expected
+        LOG += f"[PERF] Slow scan: {total_scan_ms:.0f}ms (capture:{(capture_time-scan_start)*1000:.0f}, clock:{(clock_time-capture_time)*1000:.0f}, fen:{(fen_time-clock_time)*1000:.0f}, turn:{(turn_time-fen_time)*1000:.0f})\n"    
     
     if check_turn_res is None:
         # then there was error, save the error in error files
@@ -569,6 +640,25 @@ def update_dynamic_info_from_fullimage():
                 our_time = DYNAMIC_INFO["self_clock_times"][-1]                
         DYNAMIC_INFO["self_clock_times"].append(our_time)
         DYNAMIC_INFO["self_clock_times"] = DYNAMIC_INFO["self_clock_times"][-FEN_NO_CAP:]
+        
+        # Check for realised move time (clock changed after our move)
+        if MOVE_TIMING["waiting_for_clock"] and MOVE_TIMING["clock_before_move"] is not None:
+            if our_time != MOVE_TIMING["clock_before_move"]:
+                # Clock has changed - calculate realised move time
+                realised_time_ms = (time.time() - MOVE_TIMING["move_decision_time"]) * 1000
+                mouse_time_ms = MOVE_TIMING["mouse_time_ms"] or 0
+                scan_overhead_ms = realised_time_ms - mouse_time_ms
+                clock_diff = MOVE_TIMING["clock_before_move"] - our_time
+                
+                LOG += f"[PERF] REALISED MOVE TIME for {MOVE_TIMING['move_uci']}: {realised_time_ms:.0f}ms total\n"
+                LOG += f"[PERF]   - Mouse execution: {mouse_time_ms:.0f}ms\n"
+                LOG += f"[PERF]   - Detection/overhead: {scan_overhead_ms:.0f}ms\n"
+                LOG += f"[PERF]   - Clock changed by: {clock_diff}s (server latency included)\n"
+                
+                # Reset timing state
+                MOVE_TIMING["waiting_for_clock"] = False
+                MOVE_TIMING["move_decision_time"] = None
+                MOVE_TIMING["clock_before_move"] = None
         
         # check if we have beserked
         # we check this if our current time is under half the original initial time AND
@@ -859,7 +949,18 @@ def make_move(move_uci:str, premove:str=None):
         
         Returns True if clicks were made successfully, else returns False
     """
-    global LOG, HOVER_SQUARE
+    global LOG, HOVER_SQUARE, MOVE_TIMING
+    
+    move_start_time = time.time()
+    
+    # Record timing for realised move comparison
+    MOVE_TIMING["move_decision_time"] = move_start_time
+    MOVE_TIMING["move_uci"] = move_uci
+    if len(DYNAMIC_INFO["self_clock_times"]) > 0:
+        MOVE_TIMING["clock_before_move"] = DYNAMIC_INFO["self_clock_times"][-1]
+    else:
+        MOVE_TIMING["clock_before_move"] = None
+    
     # Check if there is human interference
     if is_capslock_on():
         LOG += "Tried to make move {} and premove {}, but failed as caps lock is on. \n ".format(move_uci, premove)
@@ -879,6 +980,8 @@ def make_move(move_uci:str, premove:str=None):
         prob = own_time/25
     else:
         prob = 0.8
+    
+    main_move_start = time.time()
     if np.random.random() < prob:
         LOG += "Dragging move {} \n".format(move_uci)
         successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
@@ -887,12 +990,16 @@ def make_move(move_uci:str, premove:str=None):
         LOG += "Clicking move {} \n".format(move_uci)
         successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
         dragged = False
+    main_move_time = (time.time() - main_move_start) * 1000
+    
     if successful:
         LOG += "Made clicks for the move {} \n".format(move_uci)
     else:
         LOG += "Tried to make clicks for move {}, but made mouse slip \n".format(move_uci)
         return False
+    
     # If there is a premove
+    premove_time = 0
     if premove is not None:
         if dragged == True:
             # wait a bit for previous move to lock in
@@ -901,11 +1008,13 @@ def make_move(move_uci:str, premove:str=None):
         else:
             time.sleep(CLICK_MOVE_DELAY)
         from_x, from_y, to_x, to_y = find_clicks(premove)
+        premove_start = time.time()
         if np.random.random() < prob:
             successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
             dragged = True
         else:
             successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
+        premove_time = (time.time() - premove_start) * 1000
         if successful:
             LOG += "Made clicks for the premove {} \n".format(premove)
         else:
@@ -919,6 +1028,19 @@ def make_move(move_uci:str, premove:str=None):
         time.sleep(DRAG_MOVE_DELAY)
     else:
         time.sleep(CLICK_MOVE_DELAY)
+    
+    # Log move execution timing
+    total_move_time = (time.time() - move_start_time) * 1000
+    if premove is not None:
+        LOG += f"[PERF] Move execution: {total_move_time:.0f}ms total (main:{main_move_time:.0f}ms, premove:{premove_time:.0f}ms)\n"
+    else:
+        LOG += f"[PERF] Move execution: {total_move_time:.0f}ms (mouse:{main_move_time:.0f}ms)\n"
+    
+    # Record timing for realised move time comparison
+    MOVE_TIMING["move_execution_end_time"] = time.time()
+    MOVE_TIMING["mouse_time_ms"] = total_move_time
+    MOVE_TIMING["waiting_for_clock"] = True
+    
     return True
 
 def berserk():
