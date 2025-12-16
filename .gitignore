@@ -1,8 +1,18 @@
 # Ignore contents but keep folder structure
+# Legacy log directories (deprecated - use logs/ instead)
 Engine_logs/**/*
 Client_logs/**/*
 Error_files/**
+
+# New unified logs directory
+logs/sessions/**/*
+logs/latest
+
+# Debug output
 debug_detection_output/**/*
+
+# Offline screenshots
+**/offline_screenshots/**/*
 models/data/**
 models/model_weights/**
 models/model_results.txt

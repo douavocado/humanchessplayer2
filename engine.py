@@ -37,6 +37,7 @@ from common.board_information import (
     is_weird_move, is_under_mate_threat
             )
 from common.utils import flip_uci, patch_fens, check_safe_premove, extend_mate_score
+from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 # TODO: Intelligent premoves
 # TODO: 3-fold repetition logic
@@ -50,7 +51,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: str = os.path.join(os.getcwd(), 'Engine_logs',str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt'), opening_book_path:str = "assets/data/Opening_books/bullet.bin"):
+    def __init__(self, playing_level:int = 6, log_file: str = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin"):
         self.input_info = {
             "side": None,
             "fens": None,
@@ -63,8 +64,9 @@ class Engine:
             "last_moves": None,
                            }
         self.current_board = chess.Board()
-        self.log = ""
-        self.log_file = log_file
+        
+        # Logging - uses unified logging system via legacy adapter
+        self.log = LegacyLoggerAdapter(channel="engine")
         
         
         # setting up scorers for moves
@@ -106,11 +108,8 @@ class Engine:
         self.just_blundered = None
         
     def _write_log(self):
-        """ Writes down thinking into a log file for debugging. """
-        with open(self.log_file,'a') as log:
-            log.write(self.log)
-            log.close()
-        self.log = ""
+        """ Writes buffered log messages to the log file. """
+        self.log.write()
     
     def _decide_resign(self):
         """ The decision making function which decides whether to resign.

@@ -22,14 +22,117 @@ from common.custom_cursor import CustomCursor
 from engine import Engine
 from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY, RESOLUTION_SCALE
 from common.utils import patch_fens, check_safe_premove
+from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
                                            capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
                                            capture_result, compare_result_images, capture_rating)
 
+# Import dynamic button detection
+try:
+    from auto_calibration.button_detector import (
+        find_play_button, find_time_control_button, find_new_opponent_button,
+        ButtonDetector, QuickPairingDetector
+    )
+    DYNAMIC_BUTTON_DETECTION = True
+except ImportError:
+    DYNAMIC_BUTTON_DETECTION = False
+    print("⚠️  Dynamic button detection not available, using hardcoded positions")
+
 # import threading
 # from multiprocessing import Process, Manager
+
+
+def save_debug_screenshot(prefix: str, board_img=None, clock_imgs=None, extra_info=None):
+    """
+    Save comprehensive debug screenshots when errors occur.
+    
+    Uses the unified logging system's error directory when available,
+    falls back to Error_files/ for backwards compatibility.
+    
+    Args:
+        prefix: Error type prefix (e.g. "linking_move_error", "turn_detection_error")
+        board_img: The board image if available
+        clock_imgs: Dict with 'top' and 'bottom' clock images if available
+        extra_info: Dict with additional info to save (fens, positions, etc.)
+    
+    Returns:
+        List of saved filenames for logging
+    """
+    logger = get_logger()
+    saved_files = []
+    
+    # Use new logging system if available, otherwise fallback to legacy
+    if logger is not None:
+        # Save using unified logging system
+        try:
+            full_screen = SCREEN_CAPTURE.capture()
+            if full_screen is not None:
+                path = logger.save_error_image(f"{prefix}_fullscreen", full_screen[:,:,:3])
+                if path:
+                    saved_files.append(str(path))
+        except Exception:
+            pass
+        
+        if board_img is not None:
+            path = logger.save_error_image(f"{prefix}_board", board_img.astype(np.uint8))
+            if path:
+                saved_files.append(str(path))
+        
+        if clock_imgs is not None:
+            if 'top' in clock_imgs and clock_imgs['top'] is not None:
+                path = logger.save_error_image(f"{prefix}_top_clock", clock_imgs['top'])
+                if path:
+                    saved_files.append(str(path))
+            if 'bottom' in clock_imgs and clock_imgs['bottom'] is not None:
+                path = logger.save_error_image(f"{prefix}_bottom_clock", clock_imgs['bottom'])
+                if path:
+                    saved_files.append(str(path))
+        
+        if extra_info is not None:
+            path = logger.save_error_context(prefix, extra_info)
+            saved_files.append(str(path))
+    else:
+        # Fallback to legacy Error_files directory
+        timestamp = str(datetime.datetime.now()).replace(" ", "_").replace(":", "-")
+        base_name = f"{prefix}_{timestamp}"
+        
+        os.makedirs("Error_files", exist_ok=True)
+        
+        try:
+            full_screen = SCREEN_CAPTURE.capture()
+            if full_screen is not None:
+                full_path = os.path.join("Error_files", f"{base_name}_fullscreen.png")
+                cv2.imwrite(full_path, full_screen[:,:,:3])
+                saved_files.append(full_path)
+        except Exception:
+            pass
+        
+        if board_img is not None:
+            board_path = os.path.join("Error_files", f"{base_name}_board.png")
+            cv2.imwrite(board_path, board_img.astype(np.uint8))
+            saved_files.append(board_path)
+        
+        if clock_imgs is not None:
+            if 'top' in clock_imgs and clock_imgs['top'] is not None:
+                top_path = os.path.join("Error_files", f"{base_name}_top_clock.png")
+                cv2.imwrite(top_path, clock_imgs['top'])
+                saved_files.append(top_path)
+            if 'bottom' in clock_imgs and clock_imgs['bottom'] is not None:
+                bot_path = os.path.join("Error_files", f"{base_name}_bottom_clock.png")
+                cv2.imwrite(bot_path, clock_imgs['bottom'])
+                saved_files.append(bot_path)
+        
+        if extra_info is not None:
+            info_path = os.path.join("Error_files", f"{base_name}_info.txt")
+            with open(info_path, 'w') as f:
+                for key, value in extra_info.items():
+                    f.write(f"{key}: {value}\n")
+            saved_files.append(info_path)
+    
+    return saved_files
+
 
 # global variables
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
@@ -40,8 +143,9 @@ CLICK_MOVE_DELAY = 0.03
 
 CURSOR = CustomCursor() # mouse control object which simulates human-like movement with mouse
 
-LOG_FILE = os.path.join(os.getcwd(),"Client_logs",str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.txt')
-LOG = ""
+# Logging - uses unified logging system via legacy adapter for backwards compatibility
+# The actual log file is managed by SessionLogger (initialised in main.py)
+LOG = LegacyLoggerAdapter(channel="client")
      
 ENGINE = Engine(playing_level=DIFFICULTY)
 
@@ -380,12 +484,9 @@ def set_game(starting_time):
     PONDER_DIC = {}
 
 def write_log():
-    """ Writes down thinking into a log file for debugging. """
-    global LOG, LOG_FILE
-    with open(LOG_FILE,'a') as log:
-        log.write(LOG)
-        log.close()
-    LOG = ""
+    """ Writes buffered log messages to the log file. """
+    global LOG
+    LOG.write()
 
 def update_castling_rights(new_moves: list):
     """ Given moves or new moves found, update castling rights based on these moves. """
@@ -522,10 +623,22 @@ def update_dynamic_info_from_fullimage():
         LOG += f"[PERF] Slow scan: {total_scan_ms:.0f}ms (capture:{(capture_time-scan_start)*1000:.0f}, clock:{(clock_time-capture_time)*1000:.0f}, fen:{(fen_time-clock_time)*1000:.0f}, turn:{(turn_time-fen_time)*1000:.0f})\n"    
     
     if check_turn_res is None:
-        # then there was error, save the error in error files
-        error_filename = os.path.join("Error_files", "board_img_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-        LOG += "ERROR: Couldn't find turn from fen {} with bottom {}. Check {} for board_image. Trying to work out from last fen.\n".format(fen, bottom, error_filename)
-        cv2.imwrite(error_filename, board_img.astype(np.uint8))
+        # then there was error, save comprehensive debug files
+        debug_files = save_debug_screenshot(
+            "turn_detection_error",
+            board_img=board_img,
+            clock_imgs={'top': top_clock_img, 'bottom': bot_clock_img},
+            extra_info={
+                'detected_fen': fen,
+                'bottom_side': bottom,
+                'previous_fens': DYNAMIC_INFO["fens"][-3:] if len(DYNAMIC_INFO["fens"]) >= 3 else DYNAMIC_INFO["fens"],
+                'last_moves': DYNAMIC_INFO["last_moves"][-3:] if len(DYNAMIC_INFO["last_moves"]) >= 3 else DYNAMIC_INFO["last_moves"],
+                'opp_time_read': opp_time,
+                'our_time_read': our_time,
+            }
+        )
+        LOG += "ERROR: Couldn't find turn from fen {} with bottom {}. Debug files saved: {}. Trying to work out from last fen.\n".format(fen, bottom, debug_files)
+        
         fen_before = DYNAMIC_INFO["fens"][-1]
         last_board = chess.Board(fen_before)
         # trying 1 move ahead
@@ -590,7 +703,21 @@ def update_dynamic_info_from_fullimage():
             DYNAMIC_INFO["last_moves"].extend(last_moves)
             DYNAMIC_INFO["last_moves"] = DYNAMIC_INFO["last_moves"][-(FEN_NO_CAP-1):]
         else:
-            LOG += "ERROR: Couldn't find linking move between fens {} and {}. Defaulting to singular fen history and wiping last_move history. \n".format(prev_fen, now_fen)
+            # Save comprehensive debug info for linking move errors
+            debug_files = save_debug_screenshot(
+                "linking_move_error",
+                board_img=board_img,
+                clock_imgs={'top': top_clock_img, 'bottom': bot_clock_img},
+                extra_info={
+                    'prev_fen': prev_fen,
+                    'now_fen': now_fen,
+                    'all_tracked_fens': DYNAMIC_INFO["fens"],
+                    'last_moves_before_error': DYNAMIC_INFO["last_moves"],
+                    'playing_side': str(GAME_INFO.get("playing_side", "unknown")),
+                    'castling_rights': CASTLING_RIGHTS_FEN,
+                }
+            )
+            LOG += "ERROR: Couldn't find linking move between fens {} and {}. Debug files saved: {}. Defaulting to singular fen history and wiping last_move history. \n".format(prev_fen, now_fen, debug_files)
             last_moves = []
             DYNAMIC_INFO["fens"] = DYNAMIC_INFO["fens"][-1:]
             DYNAMIC_INFO["last_moves"] = []
@@ -610,9 +737,17 @@ def update_dynamic_info_from_fullimage():
             if opp_time is None:
                 opp_time = read_clock(capture_top_clock(state="start2"))
             if opp_time is None:
-                error_filename = os.path.join("Error_files", "top_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Couldn't read opponent time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
-                cv2.imwrite(error_filename, top_clock_img)
+                # Save comprehensive debug files for clock reading error
+                debug_files = save_debug_screenshot(
+                    "opp_clock_read_error",
+                    board_img=board_img,
+                    clock_imgs={'top': top_clock_img, 'bottom': bot_clock_img},
+                    extra_info={
+                        'current_fen': fen if 'fen' in dir() else 'not available',
+                        'last_known_opp_time': DYNAMIC_INFO["opp_clock_times"][-1] if DYNAMIC_INFO["opp_clock_times"] else None,
+                    }
+                )
+                LOG += "ERROR: Couldn't read opponent time, defaulting to last known clock time. Debug files: {}. \n".format(debug_files)
                 opp_time = DYNAMIC_INFO["opp_clock_times"][-1]
         DYNAMIC_INFO["opp_clock_times"].append(opp_time)
         DYNAMIC_INFO["opp_clock_times"] = DYNAMIC_INFO["opp_clock_times"][-FEN_NO_CAP:]
@@ -634,9 +769,17 @@ def update_dynamic_info_from_fullimage():
             if our_time is None:
                 our_time = read_clock(capture_bottom_clock(state="start2"))
             if our_time is None:
-                error_filename = os.path.join("Error_files", "bot_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Couldn't read our own time, defaulting to last known clock time. Saving image to {}. \n".format(error_filename)
-                cv2.imwrite(error_filename, bot_clock_img)
+                # Save comprehensive debug files for clock reading error
+                debug_files = save_debug_screenshot(
+                    "own_clock_read_error",
+                    board_img=board_img,
+                    clock_imgs={'top': top_clock_img, 'bottom': bot_clock_img},
+                    extra_info={
+                        'current_fen': fen if 'fen' in dir() else 'not available',
+                        'last_known_own_time': DYNAMIC_INFO["self_clock_times"][-1] if DYNAMIC_INFO["self_clock_times"] else None,
+                    }
+                )
+                LOG += "ERROR: Couldn't read our own time, defaulting to last known clock time. Debug files: {}. \n".format(debug_files)
                 our_time = DYNAMIC_INFO["self_clock_times"][-1]                
         DYNAMIC_INFO["self_clock_times"].append(our_time)
         DYNAMIC_INFO["self_clock_times"] = DYNAMIC_INFO["self_clock_times"][-FEN_NO_CAP:]
@@ -684,23 +827,39 @@ def check_our_turn():
     return board.turn == playing_side
 
 def check_game_end(arena=False):
-    """ Check whether the game has ended from the last scrape dic. """
-    # check via last board info
+    """ 
+    Check whether the game has ended.
+    
+    Uses multiple signals for robustness:
+    1. Board outcome (checkmate, stalemate, etc.) - most reliable
+    2. Result image comparison - uses calibrated coordinates with higher threshold
+    """
+    # Method 1: Check via board outcome (checkmate/stalemate)
     if len(DYNAMIC_INFO["fens"]) > 0:
         board = chess.Board(DYNAMIC_INFO["fens"][-1])
         if board.outcome() is not None:
             return True
     
-    # check via clock position
-    # return game_over_found()
-    # check via result image
-    result_img = capture_result(arena=arena)
-    if compare_result_images(result_img, cv2.imread("chessimage/blackwin_result.png")) > 0.7:
-        return True
-    elif compare_result_images(result_img, cv2.imread("chessimage/whitewin_result.png")) > 0.7:
-        return True
-    elif compare_result_images(result_img, cv2.imread("chessimage/draw_result.png")) > 0.7:
-        return True
+    # Method 2: Check via result image comparison
+    # Uses calibrated coordinates from auto-calibration config
+    # Higher threshold (0.85) to avoid false positives
+    try:
+        result_img = capture_result(arena=arena)
+        if result_img is not None and result_img.size > 0:
+            blackwin_ref = cv2.imread("chessimage/blackwin_result.png")
+            whitewin_ref = cv2.imread("chessimage/whitewin_result.png")
+            draw_ref = cv2.imread("chessimage/draw_result.png")
+            
+            if blackwin_ref is not None and compare_result_images(result_img, blackwin_ref) > 0.85:
+                return True
+            elif whitewin_ref is not None and compare_result_images(result_img, whitewin_ref) > 0.85:
+                return True
+            elif draw_ref is not None and compare_result_images(result_img, draw_ref) > 0.85:
+                return True
+    except Exception as e:
+        # Don't fail the game check if result image comparison fails
+        pass
+    
     return False
 
 def await_move(arena=False):
@@ -1085,27 +1244,98 @@ def resign():
     return True
 
 def new_game(time_control="1+0"):
+    """
+    Click through the UI to start a new game with the specified time control.
+    
+    Uses dynamic button detection when available, with fallback to hardcoded positions.
+    
+    Args:
+        time_control: Time control string like "1+0", "3+0", etc.
+    
+    Returns:
+        True if successful, False if caps lock prevents action.
+    """
     global LOG
     # can only execute if no human interference.
     if is_capslock_on():
         LOG += "Tried to start new game with time control {} but failed as caps lock is on. \n ".format(time_control)
         return False
     
-    play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
-    # pyautogui.click(play_button_x, play_button_y, button='left')
-    click_mouse(play_button_x, play_button_y, tolerance = 10, clicks=1, duration=np.random.uniform(0.3,0.7))
-    time.sleep(1.5)
-    if time_control == "1+0":
-        to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
+    # Try dynamic button detection first
+    if DYNAMIC_BUTTON_DETECTION:
+        LOG += "Using dynamic button detection for new game with time control {}. \n".format(time_control)
         
-        click_mouse(to_x, to_y, tolerance = 20, clicks=1, duration=np.random.uniform(0.3,0.7))
-        # pyautogui.click(to_x, to_y, button='left')
-    elif time_control == "3+0":
-        to_x, to_y = START_X + 5.7*STEP, START_Y + 0.7*STEP
+        # Step 1: Click the PLAY button
+        play_pos = find_play_button()
+        if play_pos is not None:
+            play_button_x, play_button_y = play_pos
+            LOG += "Found PLAY button at ({}, {}). \n".format(play_button_x, play_button_y)
+        else:
+            # Fallback to hardcoded position
+            LOG += "PLAY button not found dynamically, using fallback position. \n"
+            play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
         
-        click_mouse(to_x, to_y, tolerance = 20, clicks=1, duration=np.random.uniform(0.3,0.7))
+        click_mouse(play_button_x, play_button_y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
+        time.sleep(1.5)  # Wait for menu to appear
+        
+        # Step 2: Click the time control button
+        tc_pos = find_time_control_button(time_control)
+        if tc_pos is not None:
+            to_x, to_y = tc_pos
+            LOG += "Found time control {} button at ({}, {}). \n".format(time_control, to_x, to_y)
+            click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+        else:
+            # Fallback to hardcoded position for known time controls
+            LOG += "Time control {} button not found dynamically, trying fallback. \n".format(time_control)
+            _new_game_fallback_click(time_control)
+    else:
+        # Use hardcoded positions (original behaviour)
+        LOG += "Using hardcoded positions for new game with time control {}. \n".format(time_control)
+        play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
+        click_mouse(play_button_x, play_button_y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
+        time.sleep(1.5)
+        _new_game_fallback_click(time_control)
     
     return True
+
+
+def _new_game_fallback_click(time_control):
+    """
+    Fallback click positions for time controls when dynamic detection fails.
+    
+    Uses hardcoded positions relative to board coordinates.
+    """
+    if time_control == "1+0":
+        to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "2+1":
+        to_x, to_y = START_X + 3.7*STEP, START_Y + 0.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "3+0":
+        to_x, to_y = START_X + 5.7*STEP, START_Y + 0.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "3+2":
+        to_x, to_y = START_X + 1.7*STEP, START_Y + 1.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "5+0":
+        to_x, to_y = START_X + 3.7*STEP, START_Y + 1.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "5+3":
+        to_x, to_y = START_X + 5.7*STEP, START_Y + 1.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "10+0":
+        to_x, to_y = START_X + 1.7*STEP, START_Y + 2.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "10+5":
+        to_x, to_y = START_X + 3.7*STEP, START_Y + 2.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    elif time_control == "15+10":
+        to_x, to_y = START_X + 5.7*STEP, START_Y + 2.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    else:
+        # Default to 1+0 position
+        to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
+        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
 
 def find_clicks(move_uci):
     ''' Given a move in uci form, find the click from and click to positions. '''

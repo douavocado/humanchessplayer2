@@ -157,6 +157,13 @@ try:
     OPP_RATING_Y_BLACK = rating['opp_black']['y']
     OWN_RATING_Y_BLACK = rating['own_black']['y']
     
+    # Result region coordinates (for game end detection)
+    result_region = coords.get('result_region', {'x': 1480, 'y': 522, 'width': 50, 'height': 30})
+    RESULT_REGION_X = result_region['x']
+    RESULT_REGION_Y = result_region['y']
+    RESULT_REGION_WIDTH = result_region['width']
+    RESULT_REGION_HEIGHT = result_region['height']
+    
 except Exception as e:
     print(f"Warning: Error loading coordinates: {e}")
     print("Using fallback hardcoded coordinates")
@@ -174,6 +181,8 @@ except Exception as e:
     RATING_X, RATING_WIDTH, RATING_HEIGHT = 1755, 40, 24
     OPP_RATING_Y_WHITE, OWN_RATING_Y_WHITE = 458, 706
     OPP_RATING_Y_BLACK, OWN_RATING_Y_BLACK = 473, 691
+    RESULT_REGION_X, RESULT_REGION_Y = 1480, 522
+    RESULT_REGION_WIDTH, RESULT_REGION_HEIGHT = 50, 30
 
 w_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
 w_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
@@ -409,14 +418,25 @@ def read_clock(clock_image):
     
     if digit_positions is not None:
         # Use calibrated digit positions (as fractions of clock width)
-        d1_start = int(digit_positions['d1_start'] * img_width)
-        d1_end = int(digit_positions['d1_end'] * img_width)
-        d2_start = int(digit_positions['d2_start'] * img_width)
-        d2_end = int(digit_positions['d2_end'] * img_width)
-        d3_start = int(digit_positions['d3_start'] * img_width)
-        d3_end = int(digit_positions['d3_end'] * img_width)
-        d4_start = int(digit_positions['d4_start'] * img_width)
-        d4_end = int(digit_positions['d4_end'] * img_width)
+        # Calculate centers and use consistent width for all digits
+        # This prevents narrow digits like "1" from being stretched incorrectly
+        d1_center = (digit_positions['d1_start'] + digit_positions['d1_end']) / 2 * img_width
+        d2_center = (digit_positions['d2_start'] + digit_positions['d2_end']) / 2 * img_width
+        d3_center = (digit_positions['d3_start'] + digit_positions['d3_end']) / 2 * img_width
+        d4_center = (digit_positions['d4_start'] + digit_positions['d4_end']) / 2 * img_width
+        
+        # Use the widest digit region as the standard width (typically d1 for "0")
+        d1_width = (digit_positions['d1_end'] - digit_positions['d1_start']) * img_width
+        digit_half_width = max(d1_width / 2, img_width * 0.06)  # At least 6% of width
+        
+        d1_start = max(0, int(d1_center - digit_half_width))
+        d1_end = min(img_width, int(d1_center + digit_half_width))
+        d2_start = max(0, int(d2_center - digit_half_width))
+        d2_end = min(img_width, int(d2_center + digit_half_width))
+        d3_start = max(0, int(d3_center - digit_half_width))
+        d3_end = min(img_width, int(d3_center + digit_half_width))
+        d4_start = max(0, int(d4_center - digit_half_width))
+        d4_end = min(img_width, int(d4_center + digit_half_width))
     else:
         # Fall back to scaled positions based on original 147px width
         ORIGINAL_WIDTH = 147.0
@@ -456,53 +476,86 @@ def read_clock(clock_image):
         # error
         return None
 
+# Pre-computed highlight colours as a single numpy array for vectorized comparison
+# Shape: (num_colours, 3) - each row is a BGR colour
+_HIGHLIGHT_COLOURS = np.array([
+    # 4K Lichess green theme - last move highlights
+    [144, 151, 100],  # dark square highlight
+    [138, 147, 94],   # dark square highlight (variant)
+    [205, 209, 177],  # light square highlight
+    [189, 207, 174],  # light square highlight (variant)
+    # Premove highlight colours (greyish tint)
+    [147, 140, 135],  # premove on dark square
+    [170, 165, 160],  # premove on light square (estimated)
+    # Original 1080p colours (keep for backwards compatibility)
+    [59, 155, 143],
+    [145, 211, 205],
+    [60, 92, 95],
+    [133, 140, 147],
+], dtype=np.int16)  # int16 to handle subtraction without overflow
+
+_HIGHLIGHT_TOLERANCE = 10
+
+
+def _detect_highlights_at_offset(board_img, offset):
+    """Vectorized highlight detection at a specific pixel offset."""
+    h, w = board_img.shape[:2]
+    
+    # Compute sample coordinates for all 64 squares
+    cols = np.arange(8)
+    rows = np.arange(8)
+    sample_x = np.clip((cols * STEP + offset).astype(np.int32), 0, w - 1)
+    sample_y = np.clip((rows * STEP + offset).astype(np.int32), 0, h - 1)
+    
+    # Extract all 64 pixels at once
+    yy, xx = np.meshgrid(sample_y, sample_x, indexing='ij')
+    pixels = board_img[yy, xx].reshape(64, 3).astype(np.int16)
+    
+    # Vectorized comparison: (64, num_colours, 3)
+    diff = np.abs(pixels[:, np.newaxis, :] - _HIGHLIGHT_COLOURS[np.newaxis, :, :])
+    
+    # Check tolerance and return boolean mask
+    return np.any(np.all(diff <= _HIGHLIGHT_TOLERANCE, axis=2), axis=1)
+
+
 def detect_last_move_from_img(board_img):
     """
     Detect the last move by finding highlighted squares on the board.
     
     Returns list of square indices (0-63) that are highlighted.
+    
+    Optimized: Uses vectorized operations. Samples at multiple offsets
+    only if initial detection returns unusual results (0 or 1 square).
     """
-    epsilon = 5
-    detected = []
+    # Fast path: try offset 10 first (usually sufficient)
+    is_highlighted = _detect_highlights_at_offset(board_img, 10)
+    count = np.sum(is_highlighted)
     
-    # Highlight colours for different themes/resolutions (BGR format)
-    # Original 1080p colours:
-    #   [59, 155, 143], [145, 211, 205], [60, 92, 95], [133, 140, 147]
-    # 4K Lichess green theme colours:
-    #   [144, 151, 100] - highlight on dark square
-    #   [205, 209, 177] - highlight on light square
-    highlight_colours_bgr = [
-        # 4K colours
-        np.array([144, 151, 100]),  # dark square highlight
-        np.array([205, 209, 177]),  # light square highlight
-        # Original 1080p colours (keep for backwards compatibility)
-        np.array([59, 155, 143]),
-        np.array([145, 211, 205]),
-        np.array([60, 92, 95]),
-        np.array([133, 140, 147]),
-    ]
+    # If we found 2+ squares, we're done (normal case)
+    if count >= 2:
+        return np.where(is_highlighted)[0].tolist()
     
-    for square in range(64):
-        column_i = square % 8
-        row_i = square // 8
-        pixel_x = int(STEP * column_i + epsilon)
-        pixel_y = int(STEP * row_i + epsilon)
-        bgr = board_img[pixel_y, pixel_x, :]
-        
-        # Check if this pixel matches any highlight colour (with small tolerance)
-        for highlight_bgr in highlight_colours_bgr:
-            if np.allclose(bgr, highlight_bgr, atol=5):
-                detected.append(square)
-                break
+    # Fallback: try additional offsets and merge results
+    # This handles cases where offset 10 lands on piece graphics
+    for offset in [5, 15, 20]:
+        more = _detect_highlights_at_offset(board_img, offset)
+        is_highlighted = is_highlighted | more
+        if np.sum(is_highlighted) >= 2:
+            break
     
-    return detected
+    return np.where(is_highlighted)[0].tolist()
 
 def capture_result(arena=False):
-    if arena:
-        im = SCREEN_CAPTURE.capture((1581,519,50,30)).copy()
-    else:
-        im = SCREEN_CAPTURE.capture((1581,522,50,30)).copy()
-    img= im[:,:,:3]
+    """
+    Capture the result area of the screen to check for game end.
+    
+    Uses pre-loaded calibrated coordinates (RESULT_REGION_X/Y/WIDTH/HEIGHT).
+    These are loaded once at module initialization from the config.
+    """
+    # Use pre-loaded coordinates (loaded at module init, no per-call overhead)
+    im = SCREEN_CAPTURE.capture((RESULT_REGION_X, RESULT_REGION_Y, 
+                                  RESULT_REGION_WIDTH, RESULT_REGION_HEIGHT)).copy()
+    img = im[:,:,:3]
     return img
 
 def capture_board(shift=False):

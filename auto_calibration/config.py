@@ -46,7 +46,8 @@ class ChessConfig:
             'own_white': {'x': 1755, 'y': 706, 'width': 40, 'height': 24},
             'opp_black': {'x': 1755, 'y': 473, 'width': 40, 'height': 24},
             'own_black': {'x': 1755, 'y': 691, 'width': 40, 'height': 24}
-        }
+        },
+        'result_region': {'x': 1480, 'y': 522, 'width': 50, 'height': 30}
     }
     
     # Standard dimensions for UI elements
@@ -170,6 +171,16 @@ class ChessConfig:
         rating = coords.get('rating', self.FALLBACK_COORDINATES['rating'])
         r = rating.get(rating_type, self.FALLBACK_COORDINATES['rating'][rating_type])
         return r['x'], r['y'], r['width'], r['height']
+    
+    def get_result_region_position(self) -> Tuple[int, int, int, int]:
+        """
+        Get result region position as (x, y, width, height).
+        
+        This region shows the game result ("0-1", "1-0", "½-½") when game ends.
+        """
+        coords = self.get_coordinates()
+        result = coords.get('result_region', self.FALLBACK_COORDINATES['result_region'])
+        return result['x'], result['y'], result['width'], result['height']
     
     def get_step_size(self) -> int:
         """Get size of one chess square in pixels."""

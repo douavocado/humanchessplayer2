@@ -8,11 +8,13 @@ Created on Wed Jan  1 21:22:09 2025
 import time
 import sys
 import random
+import atexit
 
 import argparse
 
 # Import only the constants module first, delay other imports
 import common.constants as constants
+from common.logging import init_logging, get_logger, LogLevel
 
 parser = argparse.ArgumentParser(description="Setting game mode")
 parser.add_argument("-t", "--time", type=int, default=60,
@@ -39,7 +41,38 @@ parser.add_argument("--offline", help="Use offline screenshots instead of live c
                         action="store_true")
 parser.add_argument("--offline-dir", type=str, default="auto_calibration/offline_screenshots",
                     help="Directory containing offline screenshots (default: auto_calibration/offline_screenshots)")
+parser.add_argument("--log-level", type=str, default="INFO", 
+                    choices=["DEBUG", "PERF", "INFO", "WARN", "ERROR"],
+                    help="Minimum log level (default: INFO)")
+parser.add_argument("--verbose", "-v", action="store_true",
+                    help="Enable verbose console output")
 args = parser.parse_args()
+
+# =============================================================================
+# Initialise Unified Logging System
+# =============================================================================
+
+# Map string log level to enum
+LOG_LEVEL_MAP = {
+    "DEBUG": LogLevel.DEBUG,
+    "PERF": LogLevel.PERF,
+    "INFO": LogLevel.INFO,
+    "WARN": LogLevel.WARN,
+    "ERROR": LogLevel.ERROR,
+}
+log_level = LOG_LEVEL_MAP.get(args.log_level.upper(), LogLevel.INFO)
+
+# Initialise the logging system
+logger = init_logging(
+    client_level=log_level,
+    engine_level=log_level,
+    console_output=args.verbose
+)
+
+# Register cleanup on exit
+atexit.register(logger.close)
+
+print(f"📝 Logging to: {logger.session_dir}")
 
 # Set the values, using command line arguments if provided, otherwise use defaults from constants
 DIFFICULTY = args.difficulty if args.difficulty is not None else constants.DIFFICULTY
@@ -807,40 +840,83 @@ if args.debug or args.offline:
     )
     sys.exit()
 
+# Get the logger for game start/end tracking
+session_logger = get_logger()
+
 if args.arena == True:
     # in tournament mode
+    session_logger.client_info("Starting tournament arena mode")
+    game_num = 0
     while True:
         time.sleep(0.5)
         res = await_new_game(timeout=300)
         if res is not None:
+            game_num += 1
+            session_logger.start_game({
+                "Mode": "Arena",
+                "Game": game_num,
+                "Initial Time": f"{res}s",
+                "Berserk": args.berserk
+            })
             set_game(res)
             if args.berserk:
                 # beserk mode
                 berserk()
                 time.sleep(0.5)
             run_game(arena=True)
+            session_logger.end_game()
             print("Finished tournament game.")
             # go back to lobby. This can be done by clicking where the resign button is once
             time.sleep(random.randint(1,3))
             back_to_lobby()
 else:
-    if args.time == 60:
-        tc_str = "1+0"
-    elif args.time == 180:
-        tc_str = "3+0"
+    # Map time/increment combination to time control string
+    time_control_map = {
+        (60, 0): "1+0",
+        (120, 1): "2+1",
+        (180, 0): "3+0",
+        (180, 2): "3+2",
+        (300, 0): "5+0",
+        (300, 3): "5+3",
+        (600, 0): "10+0",
+        (600, 5): "10+5",
+        (900, 10): "15+10",
+    }
+    tc_key = (args.time, args.increment)
+    if tc_key in time_control_map:
+        tc_str = time_control_map[tc_key]
     else:
-        raise Exception("Time control not recognised: {}".format(args.time))
+        # Try to construct the time control string
+        minutes = args.time // 60
+        tc_str = f"{minutes}+{args.increment}"
+        print(f"Note: Using constructed time control string: {tc_str}")
+    
+    print(f"Time control: {tc_str}")
+    session_logger.client_info(f"Starting casual mode: {args.games} games at {tc_str}")
+    
     games = args.games
     for i in range(games):
         time.sleep(0.5)
         res = await_new_game(timeout=5)
         if res is not None:
+            session_logger.start_game({
+                "Mode": "Casual",
+                "Game": f"{i+1}/{games}",
+                "Time Control": tc_str,
+                "Initial Time": f"{res}s"
+            })
             set_game(res)
             run_game(arena=False)
+            session_logger.end_game()
             print("Finished game {}".format(i+1))
             if i < games-1:
                 new_game(tc_str)
         elif i < games-1:
+            session_logger.client_warn(f"Game {i+1} skipped, seeking again")
             print("Skipped game, trying to seek again.")
             new_game(tc_str)
+
+# Final cleanup
+session_logger.client_info("Session complete")
+session_logger.close()
 sys.exit()

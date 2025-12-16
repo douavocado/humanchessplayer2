@@ -1,21 +1,21 @@
 {
   "calibration_info": {
     "method": "offline_fitting",
-    "screenshots_used": 6,
+    "screenshots_used": 15,
     "board_confidence": 0.7218475849524579,
     "clock_states_detected": [
+      "play",
       "end1",
       "end2",
-      "play",
       "start1",
       "start2",
+      "play",
       "end1",
       "end2",
-      "play",
       "start1",
       "start2"
     ],
-    "timestamp": "2025-12-15T00:50:43.138639"
+    "timestamp": "2025-12-16T23:35:23.793032"
   },
   "coordinates": {
     "board": {
@@ -25,6 +25,12 @@
       "height": 1656
     },
     "bottom_clock": {
+      "play": {
+        "x": 2767,
+        "y": 1206,
+        "width": 214,
+        "height": 38
+      },
       "end1": {
         "x": 2767,
         "y": 1206,
@@ -34,12 +40,6 @@
       "end2": {
         "x": 2767,
         "y": 1206,
-        "width": 220,
-        "height": 38
-      },
-      "play": {
-        "x": 2767,
-        "y": 1160,
         "width": 220,
         "height": 38
       },
@@ -57,13 +57,19 @@
       },
       "end3": {
         "x": 2767,
-        "y": 1226,
-        "width": 220,
+        "y": 1272,
+        "width": 214,
         "height": 38,
         "estimated": true
       }
     },
     "top_clock": {
+      "play": {
+        "x": 2808,
+        "y": 20,
+        "width": 287,
+        "height": 85
+      },
       "end1": {
         "x": 2767,
         "y": 795,
@@ -73,12 +79,6 @@
       "end2": {
         "x": 2767,
         "y": 795,
-        "width": 219,
-        "height": 38
-      },
-      "play": {
-        "x": 2767,
-        "y": 841,
         "width": 219,
         "height": 38
       },
@@ -104,38 +104,44 @@
     "rating": {
       "opp_white": {
         "x": 3118,
-        "y": 888,
+        "y": 114,
         "width": 78,
         "height": 46
       },
       "own_white": {
         "x": 3118,
-        "y": 1103,
+        "y": 1149,
         "width": 78,
         "height": 46
       },
       "opp_black": {
         "x": 3118,
-        "y": 1103,
+        "y": 1149,
         "width": 78,
         "height": 46
       },
       "own_black": {
         "x": 3118,
-        "y": 888,
+        "y": 114,
         "width": 78,
         "height": 46
       }
+    },
+    "result_region": {
+      "x": 2884,
+      "y": 490,
+      "width": 97,
+      "height": 58
     }
   },
   "digit_positions": {
-    "d1_start": 0.06818181818181818,
-    "d1_end": 0.19545454545454546,
-    "d2_start": 0.22272727272727272,
-    "d2_end": 0.35,
-    "d3_start": 0.4590909090909091,
-    "d3_end": 0.5818181818181818,
-    "d4_start": 0.6090909090909091,
-    "d4_end": 0.7363636363636363
+    "d1_start": 0.0684931506849315,
+    "d1_end": 0.1917808219178082,
+    "d2_start": 0.2328767123287671,
+    "d2_end": 0.2968036529680365,
+    "d3_start": 0.45662100456621,
+    "d3_end": 0.5799086757990868,
+    "d4_start": 0.6118721461187214,
+    "d4_end": 0.7351598173515982
   }
 }

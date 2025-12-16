@@ -36,11 +36,14 @@ class CoordinateCalculator:
     REF_RATING_HEIGHT = 24
     REF_CLOCK_WIDTH = 147
     REF_CLOCK_HEIGHT = 44
+    REF_RESULT_WIDTH = 50
+    REF_RESULT_HEIGHT = 30
     
     # Offsets relative to clock X position at reference size (848px board)
     REF_NOTATION_X_OFFSET = 38  # From clock X
     REF_RATING_X_OFFSET = 180   # From clock X (rating is just right of player name)
     REF_CLOCK_GAP = 29          # Gap between board and clock
+    REF_RESULT_X_OFFSET = 60    # From clock X (result is centred in the panel)
     
     def __init__(self, board_detection: Optional[Dict] = None,
                  clock_detection: Optional[Dict] = None):
@@ -120,6 +123,9 @@ class CoordinateCalculator:
         
         # Calculate rating positions
         coordinates['rating'] = self._calculate_ratings(clock_x, self.clocks)
+        
+        # Calculate result region (for game end detection)
+        coordinates['result_region'] = self._calculate_result_region(clock_x, self.clocks)
         
         return coordinates
     
@@ -230,6 +236,62 @@ class CoordinateCalculator:
                 'width': rating_width,
                 'height': rating_height
             }
+        }
+    
+    def _calculate_result_region(self, clock_x: int, clock_detection: Optional[Dict]) -> Dict:
+        """
+        Calculate result region position (scaled).
+        
+        The result region shows "0-1", "1-0", or "½-½" when game ends.
+        It appears between the two clocks in the right panel, roughly
+        in the middle where the move notation usually is.
+        
+        Args:
+            clock_x: X position of clocks.
+            clock_detection: Clock detection result.
+        
+        Returns:
+            Result region coordinates.
+        """
+        result_x_offset = int(self.REF_RESULT_X_OFFSET * self.scale)
+        result_width = int(self.REF_RESULT_WIDTH * self.scale)
+        result_height = int(self.REF_RESULT_HEIGHT * self.scale)
+        
+        # Get clock Y positions to find the middle
+        if clock_detection:
+            top_clock = clock_detection.get('top_clock', {})
+            bottom_clock = clock_detection.get('bottom_clock', {})
+            
+            # Get bottom of top clock
+            if 'play' in top_clock:
+                top_clock_bottom = top_clock['play']['y'] + top_clock['play'].get('height', int(44 * self.scale))
+            elif 'end1' in top_clock:
+                top_clock_bottom = top_clock['end1']['y'] + top_clock['end1'].get('height', int(44 * self.scale))
+            else:
+                top_clock_bottom = int(468 * self.scale)  # Fallback
+            
+            # Get top of bottom clock
+            if 'play' in bottom_clock:
+                bottom_clock_top = bottom_clock['play']['y']
+            elif 'end1' in bottom_clock:
+                bottom_clock_top = bottom_clock['end1']['y']
+            else:
+                bottom_clock_top = int(742 * self.scale)  # Fallback
+        else:
+            # Use fallback positions
+            top_clock_bottom = int(468 * self.scale)
+            bottom_clock_top = int(742 * self.scale)
+        
+        # Result appears roughly 1/3 down from top clock to bottom clock
+        # (closer to the top, above the notation/move list area)
+        vertical_range = bottom_clock_top - top_clock_bottom
+        result_y = top_clock_bottom + int(vertical_range * 0.35)
+        
+        return {
+            'x': clock_x + result_x_offset,
+            'y': result_y,
+            'width': result_width,
+            'height': result_height
         }
     
     def _get_clock_y(self, clock_states: Dict) -> int:
