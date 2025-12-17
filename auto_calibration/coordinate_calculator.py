@@ -38,12 +38,19 @@ class CoordinateCalculator:
     REF_CLOCK_HEIGHT = 44
     REF_RESULT_WIDTH = 50
     REF_RESULT_HEIGHT = 30
+    REF_RESIGN_BUTTON_SIZE = 40  # Resign button is approximately square
     
     # Offsets relative to clock X position at reference size (848px board)
     REF_NOTATION_X_OFFSET = 38  # From clock X
     REF_RATING_X_OFFSET = 180   # From clock X (rating is just right of player name)
     REF_CLOCK_GAP = 29          # Gap between board and clock
     REF_RESULT_X_OFFSET = 60    # From clock X (result is centred in the panel)
+    
+    # Resign button position relative to notation
+    # The button row (takeback, draw, resign) is below the notation panel
+    # These values are for the reference 848px board size
+    REF_RESIGN_BUTTON_Y_OFFSET = 10  # Gap below notation panel to button row
+    REF_RESIGN_BUTTON_X_OFFSET = 85  # From notation X to resign button centre (rightmost of 3 buttons)
     
     def __init__(self, board_detection: Optional[Dict] = None,
                  clock_detection: Optional[Dict] = None):
@@ -126,6 +133,9 @@ class CoordinateCalculator:
         
         # Calculate result region (for game end detection)
         coordinates['result_region'] = self._calculate_result_region(clock_x, self.clocks)
+        
+        # Calculate resign button position (below notation panel)
+        coordinates['resign_button'] = self._calculate_resign_button(coordinates['notation'])
         
         return coordinates
     
@@ -292,6 +302,34 @@ class CoordinateCalculator:
             'y': result_y,
             'width': result_width,
             'height': result_height
+        }
+    
+    def _calculate_resign_button(self, notation: Dict) -> Dict:
+        """
+        Calculate resign button position (scaled).
+        
+        The resign button (flag icon) is below the notation panel,
+        in a row with takeback and draw buttons. It's the rightmost button.
+        
+        Args:
+            notation: Notation panel coordinates.
+        
+        Returns:
+            Resign button coordinates.
+        """
+        resign_size = int(self.REF_RESIGN_BUTTON_SIZE * self.scale)
+        resign_y_offset = int(self.REF_RESIGN_BUTTON_Y_OFFSET * self.scale)
+        resign_x_offset = int(self.REF_RESIGN_BUTTON_X_OFFSET * self.scale)
+        
+        # Resign button is below notation, offset to the right
+        resign_x = notation['x'] + resign_x_offset
+        resign_y = notation['y'] + notation['height'] + resign_y_offset
+        
+        return {
+            'x': resign_x,
+            'y': resign_y,
+            'width': resign_size,
+            'height': resign_size
         }
     
     def _get_clock_y(self, clock_states: Dict) -> int:

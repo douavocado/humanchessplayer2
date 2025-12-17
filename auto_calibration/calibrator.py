@@ -217,6 +217,11 @@ class Calibrator:
         
         print("✅ Coordinates calculated")
         
+        # Print resign button position if available
+        if 'resign_button' in coordinates:
+            rb = coordinates['resign_button']
+            print(f"   Resign button: ({rb['x']}, {rb['y']}) size={rb['width']}x{rb['height']}")
+        
         # Step 5: Visualise
         if visualise:
             print("\n" + "-" * 40)

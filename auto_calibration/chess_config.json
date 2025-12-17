@@ -15,7 +15,7 @@
       "start1",
       "start2"
     ],
-    "timestamp": "2025-12-16T23:35:23.793032"
+    "timestamp": "2025-12-17T23:33:59.489037"
   },
   "coordinates": {
     "board": {
@@ -65,10 +65,10 @@
     },
     "top_clock": {
       "play": {
-        "x": 2808,
-        "y": 20,
-        "width": 287,
-        "height": 85
+        "x": 2767,
+        "y": 795,
+        "width": 219,
+        "height": 38
       },
       "end1": {
         "x": 2767,
@@ -104,7 +104,7 @@
     "rating": {
       "opp_white": {
         "x": 3118,
-        "y": 114,
+        "y": 842,
         "width": 78,
         "height": 46
       },
@@ -122,16 +122,22 @@
       },
       "own_black": {
         "x": 3118,
-        "y": 114,
+        "y": 842,
         "width": 78,
         "height": 46
       }
     },
     "result_region": {
-      "x": 2950,
-      "y": 940,
-      "width": 60,
-      "height": 30
+      "x": 2884,
+      "y": 963,
+      "width": 97,
+      "height": 58
+    },
+    "resign_button": {
+      "x": 3006,
+      "y": 1157,
+      "width": 78,
+      "height": 78
     }
   },
   "digit_positions": {

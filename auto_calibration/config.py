@@ -47,7 +47,8 @@ class ChessConfig:
             'opp_black': {'x': 1755, 'y': 473, 'width': 40, 'height': 24},
             'own_black': {'x': 1755, 'y': 691, 'width': 40, 'height': 24}
         },
-        'result_region': {'x': 1480, 'y': 522, 'width': 50, 'height': 30}
+        'result_region': {'x': 1480, 'y': 522, 'width': 50, 'height': 30},
+        'resign_button': {'x': 1540, 'y': 640, 'width': 40, 'height': 40}
     }
     
     # Standard dimensions for UI elements
@@ -182,6 +183,20 @@ class ChessConfig:
         result = coords.get('result_region', self.FALLBACK_COORDINATES['result_region'])
         return result['x'], result['y'], result['width'], result['height']
     
+    def get_resign_button_position(self) -> Tuple[int, int]:
+        """
+        Get resign button centre position as (x, y).
+        
+        The resign button is the flag icon below the notation panel.
+        Returns the centre of the button for clicking.
+        """
+        coords = self.get_coordinates()
+        resign = coords.get('resign_button', self.FALLBACK_COORDINATES['resign_button'])
+        # Return centre of button
+        centre_x = resign['x'] + resign.get('width', 40) // 2
+        centre_y = resign['y'] + resign.get('height', 40) // 2
+        return centre_x, centre_y
+    
     def get_step_size(self) -> int:
         """Get size of one chess square in pixels."""
         _, _, step = self.get_board_info()
@@ -209,6 +224,61 @@ class ChessConfig:
             return self.config['digit_positions']
         return None
     
+    def get_template_dir(self) -> Path:
+        """
+        Get the directory containing extracted templates.
+        
+        Returns:
+            Path to templates directory
+        """
+        return Path(__file__).parent / "templates"
+    
+    def has_calibrated_templates(self) -> bool:
+        """
+        Check if we have calibrated templates available.
+        
+        Returns:
+            True if at least some templates exist
+        """
+        template_dir = self.get_template_dir()
+        if not template_dir.exists():
+            return False
+        
+        # Check for digit templates
+        digit_dir = template_dir / "digits"
+        if digit_dir.exists() and any(digit_dir.glob("*.png")):
+            return True
+        
+        # Check for piece templates
+        piece_dir = template_dir / "pieces"
+        if piece_dir.exists() and any(piece_dir.glob("*.png")):
+            return True
+        
+        return False
+    
+    def get_template_status(self) -> Dict:
+        """
+        Get detailed status of template extraction.
+        
+        Returns:
+            Dictionary with extraction progress
+        """
+        template_dir = self.get_template_dir()
+        progress_file = template_dir / "extraction_progress.json"
+        
+        if progress_file.exists():
+            try:
+                with open(progress_file, 'r') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        
+        return {
+            "digits": {str(i): False for i in range(10)},
+            "pieces": {p: False for p in "RNBQKPrnbqkp"},
+            "results": {"white_win": False, "black_win": False, "draw": False}
+        }
+    
     def print_status(self):
         """Print current configuration status."""
         if self.using_fallback:
@@ -222,6 +292,17 @@ class ChessConfig:
                 print(f"   Confidence: {info.get('board_confidence', 0):.1%}")
                 if 'clock_states_detected' in info:
                     print(f"   Clock states: {info['clock_states_detected']}")
+        
+        # Template status
+        if self.has_calibrated_templates():
+            status = self.get_template_status()
+            digits_done = sum(1 for v in status.get("digits", {}).values() if v)
+            pieces_done = sum(1 for v in status.get("pieces", {}).values() if v)
+            results_done = sum(1 for v in status.get("results", {}).values() if v)
+            print(f"📋 Templates: {digits_done}/10 digits, {pieces_done}/12 pieces, {results_done}/3 results")
+        else:
+            print("📋 No calibrated templates found")
+            print("   Run 'python -m auto_calibration.shadow_calibrator' during gameplay")
 
 
 def save_config(config_data: Dict, output_path: Optional[str] = None) -> str:

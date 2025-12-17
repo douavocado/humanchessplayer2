@@ -221,7 +221,7 @@ python -m auto_calibration.calibrator --live
 ```
 auto_calibration/
 ├── __init__.py               # Module init
-├── calibrator.py             # Main entry point
+├── calibrator.py             # Main entry point (coordinate calibration)
 ├── board_detector.py         # Board detection
 ├── clock_detector.py         # Clock detection
 ├── coordinate_calculator.py  # Derived coordinates
@@ -230,9 +230,16 @@ auto_calibration/
 ├── offline_fitter.py         # Offline fitting
 ├── screenshot_collector.py   # Screenshot helper
 ├── utils.py                  # Shared utilities
+├── template_extractor.py     # Template extraction core logic
+├── shadow_calibrator.py      # Passive template extraction
+├── interactive_calibrator.py # Manual template capture GUI
 ├── chess_config.json         # Generated configuration
 ├── calibration_screenshots/  # Saved screenshots
-└── calibration_outputs/      # Debug outputs
+├── calibration_outputs/      # Debug outputs
+└── templates/                # Extracted templates
+    ├── digits/               # Clock digit templates (0-9)
+    ├── pieces/               # Chess piece templates
+    └── results/              # Game result templates
 ```
 
 ## Performance
@@ -241,3 +248,77 @@ auto_calibration/
 - **Board detection**: Uses 8× downsampling for speed
 - **Clock detection**: 1D Y-sweep (not 2D grid search)
 - **Runtime overhead**: Zero (simple coordinate lookup)
+
+---
+
+## Template Calibration
+
+When switching to a new setup (different resolution, scaling, or theme), you may need to recalibrate **templates** for:
+- Clock digits (0-9)
+- Chess pieces
+- Game result labels (1-0, 0-1, ½-½)
+
+### Shadow Calibration (Recommended)
+
+The shadow calibrator runs passively during normal gameplay, automatically extracting templates as they appear:
+
+```bash
+# Run in background for 5 minutes while you play
+python -m auto_calibration.shadow_calibrator --duration 5
+
+# Check current template status
+python -m auto_calibration.shadow_calibrator --status
+
+# Reset and start fresh
+python -m auto_calibration.shadow_calibrator --reset all
+```
+
+**What it captures:**
+- **Pieces**: Extracted from the starting position when a new game begins
+- **Digits**: Captured as the clock counts down (one game typically covers most digits)
+- **Results**: Captured when games end (requires winning as white, as black, and drawing)
+
+### Interactive Calibration (Manual Override)
+
+For templates that shadow calibration cannot capture (e.g., specific game results), use the interactive tool:
+
+```bash
+# Guided mode - walks through all missing templates
+python -m auto_calibration.interactive_calibrator --guided
+
+# Capture specific templates
+python -m auto_calibration.interactive_calibrator --digit 7
+python -m auto_calibration.interactive_calibrator --result black_win
+python -m auto_calibration.interactive_calibrator --pieces
+```
+
+### Typical Calibration Workflow
+
+1. **Run coordinate calibration first** (if new setup):
+   ```bash
+   python -m auto_calibration.calibrator --live
+   ```
+
+2. **Start shadow calibration** and play a few games:
+   ```bash
+   python -m auto_calibration.shadow_calibrator --duration 10
+   ```
+
+3. **Check what's missing**:
+   ```bash
+   python -m auto_calibration.shadow_calibrator --status
+   ```
+
+4. **Use interactive mode** for any remaining templates:
+   ```bash
+   python -m auto_calibration.interactive_calibrator --guided
+   ```
+
+### Template Storage
+
+Extracted templates are stored in `auto_calibration/templates/`:
+- `digits/0.png` through `digits/9.png` - Clock digit templates
+- `pieces/w_rook.png`, `pieces/b_knight.png`, etc. - Chess piece templates  
+- `results/whitewin_result.png`, `blackwin_result.png`, `draw_result.png` - Result labels
+
+Progress is tracked in `templates/extraction_progress.json`.

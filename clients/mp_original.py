@@ -40,6 +40,14 @@ except ImportError:
     DYNAMIC_BUTTON_DETECTION = False
     print("⚠️  Dynamic button detection not available, using hardcoded positions")
 
+# Import calibration config for resign button position
+try:
+    from auto_calibration.config import get_config
+    CALIBRATION_CONFIG_AVAILABLE = True
+except ImportError:
+    CALIBRATION_CONFIG_AVAILABLE = False
+    print("⚠️  Calibration config not available, using hardcoded resign button position")
+
 # import threading
 # from multiprocessing import Process, Manager
 
@@ -203,17 +211,21 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     # 1 in 100 moves, we simulate a potential mouse slip
     successful = True
     if np.random.random() < 0.03:
-        tolerance = tolerance * 2
-        offset_x = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
-        offset_y = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
-        if np.abs(offset_x) > STEP/2 or np.abs(offset_y) > STEP/2:
+        # Mouse slip mode: allow larger offset but still keep within safe zone
+        slip_tolerance = tolerance * 1.5
+        offset_x = np.clip(np.random.randn()*slip_tolerance, - STEP/3, STEP/3)
+        offset_y = np.clip(np.random.randn()*slip_tolerance, - STEP/3, STEP/3)
+        if np.abs(offset_x) > STEP/3.5 or np.abs(offset_y) > STEP/3.5:
             successful = False
     else:
-        offset_x = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
-        offset_y = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
+        # Normal mode: keep clicks well within centre of square
+        # Use tighter clip to ensure we stay in safe zone (~30% of square from centre)
+        offset_x = np.clip(np.random.randn()*tolerance, - STEP/4, STEP/4)
+        offset_y = np.clip(np.random.randn()*tolerance, - STEP/4, STEP/4)
     
-    new_from_x = from_x + tolerance * (np.random.random() - 0.5)
-    new_from_y = from_y + tolerance * (np.random.random() - 0.5)
+    # From position: small random offset to appear human
+    new_from_x = from_x + tolerance * 0.5 * (np.random.random() - 0.5)
+    new_from_y = from_y + tolerance * 0.5 * (np.random.random() - 0.5)
     new_to_x = to_x + offset_x
     new_to_y = to_y + offset_y
     
@@ -234,6 +246,10 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     
     # Use quick_move_to for faster human-like curves
     CURSOR.quick_move_to([new_from_x, new_from_y], duration=duration_from, resolution_scale=RESOLUTION_SCALE)
+    
+    # Tiny pause to ensure cursor has settled before picking up piece
+    time.sleep(0.015 + 0.015 * random.random())
+    
     pyautogui.mouseDown()
     CURSOR.quick_move_to([new_to_x, new_to_y], duration=duration_to, resolution_scale=RESOLUTION_SCALE)
     pyautogui.mouseUp()
@@ -256,17 +272,21 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     # 1 in 100 moves, we simulate a potential mouse slip
     successful = True
     if np.random.random() < 0.03:
-        tolerance = tolerance * 2
-        offset_x = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
-        offset_y = np.clip(np.random.randn()*tolerance, - STEP/1.5, STEP/1.5)
-        if np.abs(offset_x) > STEP/2 or np.abs(offset_y) > STEP/2:
+        # Mouse slip mode: allow larger offset but still keep within safe zone
+        slip_tolerance = tolerance * 1.5
+        offset_x = np.clip(np.random.randn()*slip_tolerance, - STEP/3, STEP/3)
+        offset_y = np.clip(np.random.randn()*slip_tolerance, - STEP/3, STEP/3)
+        if np.abs(offset_x) > STEP/3.5 or np.abs(offset_y) > STEP/3.5:
             successful = False
     else:
-        offset_x = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
-        offset_y = np.clip(np.random.randn()*tolerance, - STEP/2.2, STEP/2.2)
+        # Normal mode: keep clicks well within centre of square
+        # Use tighter clip to ensure we stay in safe zone (~25% of square from centre)
+        offset_x = np.clip(np.random.randn()*tolerance, - STEP/4, STEP/4)
+        offset_y = np.clip(np.random.randn()*tolerance, - STEP/4, STEP/4)
     
-    new_from_x = from_x + tolerance * (np.random.random() - 0.5)
-    new_from_y = from_y + tolerance * (np.random.random() - 0.5)
+    # From position: small random offset to appear human
+    new_from_x = from_x + tolerance * 0.5 * (np.random.random() - 0.5)
+    new_from_y = from_y + tolerance * 0.5 * (np.random.random() - 0.5)
     new_to_x = to_x + offset_x
     new_to_y = to_y + offset_y
     
@@ -287,6 +307,11 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     # Use quick_move_to for faster human-like curves
     CURSOR.quick_move_to([new_from_x, new_from_y], duration=duration_from, resolution_scale=RESOLUTION_SCALE)
     pyautogui.click(button="left")
+    
+    # Small delay after first click to let Lichess register piece selection
+    # Random 25-50ms feels human and gives server time to respond
+    time.sleep(0.025 + 0.025 * random.random())
+    
     CURSOR.quick_move_to([new_to_x, new_to_y], duration=duration_to, resolution_scale=RESOLUTION_SCALE)
     pyautogui.click(button="left")
     
@@ -1160,11 +1185,11 @@ def make_move(move_uci:str, premove:str=None):
     main_move_start = time.time()
     if np.random.random() < prob:
         LOG += "Dragging move {} \n".format(move_uci)
-        successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
+        successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.12*STEP)
         dragged = True
     else:
         LOG += "Clicking move {} \n".format(move_uci)
-        successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance= 0.2*STEP)
+        successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0.12*STEP)
         dragged = False
     main_move_time = (time.time() - main_move_start) * 1000
     
@@ -1186,10 +1211,10 @@ def make_move(move_uci:str, premove:str=None):
         from_x, from_y, to_x, to_y = find_clicks(premove)
         premove_start = time.time()
         if np.random.random() < prob:
-            successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
+            successful = drag_mouse(from_x, from_y, to_x, to_y, tolerance=0.12*STEP)
             dragged = True
         else:
-            successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0.2*STEP)
+            successful = click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0.12*STEP)
         premove_time = (time.time() - premove_start) * 1000
         if successful:
             LOG += "Made clicks for the premove {} \n".format(premove)
@@ -1251,10 +1276,16 @@ def resign():
     if is_capslock_on():
         LOG += "Tried resign the game but failed as caps lock is on. \n "
         return False
-    resign_button_x, resign_button_y =  START_X + 10.5*STEP, START_Y + 4.8*STEP
-    # pyautogui.click(resign_button_x, resign_button_y, button='left')
-    # time.sleep(0.2)
-    # pyautogui.click(resign_button_x, resign_button_y, button='left')
+    
+    # Use calibrated resign button position if available
+    if CALIBRATION_CONFIG_AVAILABLE:
+        config = get_config()
+        resign_button_x, resign_button_y = config.get_resign_button_position()
+        LOG += f"Using calibrated resign button position: ({resign_button_x}, {resign_button_y})\n"
+    else:
+        # Fallback to hardcoded position
+        resign_button_x, resign_button_y = START_X + 10.5*STEP, START_Y + 4.8*STEP
+        LOG += f"Using hardcoded resign button position: ({resign_button_x}, {resign_button_y})\n"
     
     click_mouse(resign_button_x, resign_button_y, tolerance = 10, clicks=2, duration=np.random.uniform(0.3,0.7))
     
