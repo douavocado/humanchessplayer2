@@ -832,7 +832,9 @@ def check_game_end(arena=False):
     
     Uses multiple signals for robustness:
     1. Board outcome (checkmate, stalemate, etc.) - most reliable
-    2. Result image comparison - uses calibrated coordinates with higher threshold
+    2. Result image comparison - uses calibrated coordinates
+    3. Clock position check - fallback using end-state clock positions
+    4. Clock unreadable at play position - indicates UI state change
     """
     # Method 1: Check via board outcome (checkmate/stalemate)
     if len(DYNAMIC_INFO["fens"]) > 0:
@@ -842,7 +844,7 @@ def check_game_end(arena=False):
     
     # Method 2: Check via result image comparison
     # Uses calibrated coordinates from auto-calibration config
-    # Higher threshold (0.85) to avoid false positives
+    # Lowered threshold (0.70) to catch more variations in result display
     try:
         result_img = capture_result(arena=arena)
         if result_img is not None and result_img.size > 0:
@@ -850,14 +852,29 @@ def check_game_end(arena=False):
             whitewin_ref = cv2.imread("chessimage/whitewin_result.png")
             draw_ref = cv2.imread("chessimage/draw_result.png")
             
-            if blackwin_ref is not None and compare_result_images(result_img, blackwin_ref) > 0.85:
+            if blackwin_ref is not None and compare_result_images(result_img, blackwin_ref) > 0.70:
                 return True
-            elif whitewin_ref is not None and compare_result_images(result_img, whitewin_ref) > 0.85:
+            elif whitewin_ref is not None and compare_result_images(result_img, whitewin_ref) > 0.70:
                 return True
-            elif draw_ref is not None and compare_result_images(result_img, draw_ref) > 0.85:
+            elif draw_ref is not None and compare_result_images(result_img, draw_ref) > 0.70:
                 return True
     except Exception as e:
         # Don't fail the game check if result image comparison fails
+        pass
+    
+    # Method 3: Fallback - check if clock is readable at end positions but NOT at play position
+    # This catches cases where the UI has changed due to game ending
+    try:
+        # First check if we can read the clock at play position
+        play_clock = read_clock(capture_bottom_clock(state="play"))
+        
+        # If we CAN'T read the clock at play position, the game might have ended
+        # (UI overlay blocking the clock area)
+        if play_clock is None:
+            # Try reading at end positions to confirm
+            if game_over_found():
+                return True
+    except Exception as e:
         pass
     
     return False
