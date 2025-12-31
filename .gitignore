@@ -39,6 +39,25 @@ venv/
 .cursor/
 .roo/
 
+# Auto-calibration outputs and machine-specific profiles
+auto_calibration/calibration_debug/
+auto_calibration/calibration_outputs/
+auto_calibration/calibrations/*.json
+auto_calibration/templates/
+
+# Ephemeral debug and test images
+check_box.png
+debug_result_region.png
+find_result.png
+test_result_*.png
+assets/debug_overlay_*.png
+
+# Large model artifacts
+models/*.zip
+
+# Debug-specific notebooks
+auto_calibration/debug_calibration.ipynb
+
 *.pyc
 *.pyo
 *.pyd
