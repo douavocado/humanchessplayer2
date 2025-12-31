@@ -392,8 +392,25 @@ Examples:
                        help="Skip debug visualisation")
     parser.add_argument("--no-save", action="store_true",
                        help="Don't save configuration to file")
+
+    # Output selection
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--profile", type=str,
+                             help="Save calibration to a named profile (auto_calibration/calibrations/<profile>.json)")
+    output_group.add_argument("--output", type=str,
+                             help="Save calibration to an explicit JSON path")
     
     args = parser.parse_args()
+
+    def resolve_output_path() -> Optional[str]:
+        """Resolve output path for saving calibration based on args."""
+        if args.no_save:
+            return None
+        if getattr(args, "output", None):
+            return args.output
+        if getattr(args, "profile", None):
+            return str(Path(__file__).parent / "calibrations" / f"{args.profile}.json")
+        return None
     
     calibrator = Calibrator()
     config = None
@@ -404,6 +421,8 @@ Examples:
             return 0
         
         elif args.screenshot:
+            if not args.state:
+                parser.error("--state is required when using --screenshot")
             config = calibrator.run_offline(
                 args.screenshot,
                 args.state,
@@ -413,7 +432,13 @@ Examples:
         elif args.offline:
             # Use offline fitter for directory
             from .offline_fitter import fit_from_screenshots
-            config = fit_from_screenshots(args.offline, not args.no_save)
+            config = fit_from_screenshots(
+                args.offline,
+                not args.no_save,
+                output_path=resolve_output_path(),
+                profile_name=getattr(args, "profile", None),
+                visualise=not args.no_visualise
+            )
             return 0 if config else 1
         
         else:
@@ -434,7 +459,7 @@ Examples:
             print(f"Clock states detected: {len(info.get('clock_states_detected', []))}")
             
             if not args.no_save:
-                output_path = save_config(config)
+                output_path = save_config(config, output_path=resolve_output_path())
                 print(f"\n✅ Configuration saved to: {output_path}")
                 print("\nYour system will now use these calibrated coordinates.")
             

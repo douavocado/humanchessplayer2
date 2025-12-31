@@ -12,7 +12,6 @@ import cv2
 import time
 import numpy as np
 import chess
-import pytesseract
 import os
 import sys
 from datetime import datetime
@@ -26,7 +25,9 @@ try:
     chess_config = get_config()
     USE_CONFIG = True
     if not chess_config.is_using_fallback():
-        print("📍 Using auto-calibrated coordinates")
+        profile_name = chess_config.get_profile_name()
+        profile_str = f" (profile: {profile_name})" if profile_name else ""
+        print(f"📍 Using auto-calibrated coordinates{profile_str}")
     else:
         print("⚠️  No calibration file found, using fallback coordinates")
 except ImportError:
@@ -184,51 +185,153 @@ except Exception as e:
     RESULT_REGION_X, RESULT_REGION_Y = 1480, 522
     RESULT_REGION_WIDTH, RESULT_REGION_HEIGHT = 50, 30
 
-w_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-w_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-w_bishop = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_bishop.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-w_king= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_king.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-w_queen = remove_background_colours(cv2.resize(cv2.imread('chessimage/w_queen.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-w_pawn= remove_background_colours(cv2.resize(cv2.imread('chessimage/w_pawn.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+# =============================================================================
+# TEMPLATE LOADING - Profile-aware template loading
+# =============================================================================
 
-b_rook = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_rook.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-b_knight= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_knight.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-b_bishop = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_bishop.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-b_king= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_king.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-b_queen = remove_background_colours(cv2.resize(cv2.imread('chessimage/b_queen.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
-b_pawn= remove_background_colours(cv2.resize(cv2.imread('chessimage/b_pawn.png'), ( PIECE_STEP, PIECE_STEP ), interpolation = cv2.INTER_CUBIC )).astype(np.uint8)
+def _load_piece_template(piece_name: str, target_size: int) -> np.ndarray:
+    """
+    Load a piece template, preferring profile-specific templates over fallback.
+    
+    Args:
+        piece_name: Filename like 'w_rook.png'
+        target_size: Target size to resize to (PIECE_STEP)
+    
+    Returns:
+        Grayscale template array with background removed
+    """
+    # Try profile-specific template first
+    if USE_CONFIG and chess_config is not None:
+        template_dir = chess_config.get_template_dir()
+        profile_path = template_dir / "pieces" / piece_name
+        if profile_path.exists():
+            # Profile templates are already processed (grayscale with background removed
+            # and 5% inset applied during extraction), so load as grayscale directly
+            img = cv2.imread(str(profile_path), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                # Resize to target size if different
+                if img.shape[0] != target_size or img.shape[1] != target_size:
+                    img = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_AREA)
+                
+                # Add small blur to match piece processing
+                return cv2.GaussianBlur(img, (3, 3), 0)
+    
+    # Fall back to chessimage/ templates
+    fallback_path = f'chessimage/{piece_name}'
+    img = cv2.imread(fallback_path)
+    if img is not None:
+        img = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_CUBIC)
+        processed = remove_background_colours(img).astype(np.uint8)
+        
+        # Apply 5% inset to fallback as well for consistency
+        h, w = processed.shape[:2]
+        inset = 0.05
+        iy1, iy2 = int(h * inset), h - int(h * inset)
+        ix1, ix2 = int(w * inset), w - int(w * inset)
+        processed = processed[iy1:iy2, ix1:ix2]
+        
+        res = cv2.resize(processed, (target_size, target_size), interpolation=cv2.INTER_AREA)
+        return cv2.GaussianBlur(res, (3, 3), 0)
+    
+    # Last resort: return zeros
+    print(f"WARNING: Could not load piece template: {piece_name}")
+    return np.zeros((target_size, target_size), dtype=np.uint8)
+
+
+def _load_digit_template(digit: int) -> np.ndarray:
+    """
+    Load a digit template and ensure it's white on black binary.
+    
+    Profile templates are already processed (grayscale, white on black),
+    so we load them directly. Fallback templates need Otsu processing.
+    """
+    # Try profile-specific template first
+    if USE_CONFIG and chess_config is not None:
+        template_dir = chess_config.get_template_dir()
+        profile_path = template_dir / "digits" / f"{digit}.png"
+        if profile_path.exists():
+            # Profile templates are already processed - load as grayscale directly
+            img = cv2.imread(str(profile_path), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                # Ensure white on black (profile templates should already be correct,
+                # but check just in case)
+                if np.mean(img) > 127:
+                    img = 255 - img
+                return img
+    
+    # Fall back to chessimage/ templates (these need processing)
+    fallback_path = f'chessimage/{digit}.png'
+    img = cv2.imread(fallback_path)
+    if img is not None:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        if np.mean(thresh) > 127:
+            thresh = 255 - thresh
+        return thresh
+    
+    # Last resort: return zeros (44x30 is default digit size)
+    return np.zeros((44, 30), dtype=np.uint8)
+
+
+# Check if we have profile-specific templates
+_using_profile_templates = False
+if USE_CONFIG and chess_config is not None:
+    if chess_config.has_calibrated_templates():
+        template_dir = chess_config.get_template_dir()
+        print(f"📋 Loading templates from: {template_dir}")
+        _using_profile_templates = True
+    else:
+        print("📋 No profile templates found, using fallback chessimage/ templates")
+
+# Load piece templates
+w_rook = _load_piece_template('w_rook.png', PIECE_STEP)
+w_knight = _load_piece_template('w_knight.png', PIECE_STEP)
+w_bishop = _load_piece_template('w_bishop.png', PIECE_STEP)
+w_king = _load_piece_template('w_king.png', PIECE_STEP)
+w_queen = _load_piece_template('w_queen.png', PIECE_STEP)
+w_pawn = _load_piece_template('w_pawn.png', PIECE_STEP)
+
+b_rook = _load_piece_template('b_rook.png', PIECE_STEP)
+b_knight = _load_piece_template('b_knight.png', PIECE_STEP)
+b_bishop = _load_piece_template('b_bishop.png', PIECE_STEP)
+b_king = _load_piece_template('b_king.png', PIECE_STEP)
+b_queen = _load_piece_template('b_queen.png', PIECE_STEP)
+b_pawn = _load_piece_template('b_pawn.png', PIECE_STEP)
 
 ALL_PIECES = {'R': w_rook, 'N': w_knight, 'B': w_bishop, 'K': w_king, 'Q': w_queen, 'P': w_pawn,
               'r': b_rook, 'n': b_knight, 'b': b_bishop, 'k': b_king, 'q': b_queen, 'p': b_pawn,}
-PIECE_TEMPLATES = np.stack([w_rook, w_knight, w_bishop, w_king, w_queen, w_pawn, b_rook, b_knight, b_bishop, b_king, b_queen, b_pawn],axis=0)
+PIECE_TEMPLATES = np.stack([w_rook, w_knight, w_bishop, w_king, w_queen, w_pawn, b_rook, b_knight, b_bishop, b_king, b_queen, b_pawn], axis=0)
 
 INDEX_MAPPER = {0: "R", 1: "N", 2: "B", 3: "K", 4: "Q", 5: "P",
               6: "r", 7: "n", 8: "b", 9: "k", 10: "q", 11: "p",}
 
-one = remove_background_colours(cv2.imread('chessimage/1.png'), thresh=1.6).astype(np.uint8)
-two = remove_background_colours(cv2.imread('chessimage/2.png'),thresh=1.6).astype(np.uint8)
-three = remove_background_colours(cv2.imread('chessimage/3.png'),thresh=1.6).astype(np.uint8)
-four = remove_background_colours(cv2.imread('chessimage/4.png'),thresh=1.6).astype(np.uint8)
-five = remove_background_colours(cv2.imread('chessimage/5.png'),thresh=1.6).astype(np.uint8)
-six = remove_background_colours(cv2.imread('chessimage/6.png'),thresh=1.6).astype(np.uint8)
-seven = remove_background_colours(cv2.imread('chessimage/7.png'),thresh=1.6).astype(np.uint8)
-eight = remove_background_colours(cv2.imread('chessimage/8.png'),thresh=1.6).astype(np.uint8)
-nine = remove_background_colours(cv2.imread('chessimage/9.png'),thresh=1.6).astype(np.uint8)
-zero = remove_background_colours(cv2.imread('chessimage/0.png'),thresh=1.6).astype(np.uint8)
+# Load digit templates
+zero = _load_digit_template(0)
+one = _load_digit_template(1)
+two = _load_digit_template(2)
+three = _load_digit_template(3)
+four = _load_digit_template(4)
+five = _load_digit_template(5)
+six = _load_digit_template(6)
+seven = _load_digit_template(7)
+eight = _load_digit_template(8)
+nine = _load_digit_template(9)
 
 ALL_NUMBERS = {1: one, 2: two, 3: three, 4: four, 5: five, 6: six,
               7: seven, 8: eight, 9: nine, 0: zero}
 
-TEMPLATES = np.stack([zero,one,two,three,four,five,six,seven,eight,nine], axis=0)
+TEMPLATES = np.stack([zero, one, two, three, four, five, six, seven, eight, nine], axis=0)
 
 def multitemplate_multimatch(imgs, templates):
     """
-    Match multiple images against multiple templates using normalized cross-correlation.
-    Optimised version using float32.
+    Match multiple images against multiple templates using normalized cross-correlation
+    with brightness-aware piece colour detection.
     
     Args:
         imgs: NxWxH array of images to match
-        templates: MxWxH array of templates
+        templates: MxWxH array of templates (order: w_rook, w_knight, w_bishop, w_king, w_queen, w_pawn,
+                                                      b_rook, b_knight, b_bishop, b_king, b_queen, b_pawn)
     
     Returns:
         valid_squares: indices of squares with valid matches
@@ -256,13 +359,72 @@ def multitemplate_multimatch(imgs, templates):
     nums = (T_primes * I_primes).sum(axis=(-1, -2))  # MxN
     scores = nums / denoms
 
-    # Find best matches
-    threshold = 0.5
-    arg_maxes = scores.argmax(axis=0)  # shape N
-    maxes = scores.max(axis=0)
-    valid_squares = np.where(maxes > threshold)[0]
+    # --- Robust Piece Detection ---
+    # Use a small inset for brightness and empty detection to ignore edge artifacts
+    inset = int(w * 0.1)
+    I_crop = I[:, inset:-inset, inset:-inset]
+    n_pixels_crop = I_crop.shape[1] * I_crop.shape[2]
     
-    return valid_squares, arg_maxes
+    # Compute image brightness (non-zero pixels only)
+    I_flat = I_crop.reshape(I_crop.shape[0], -1)  # Nx(w_crop*h_crop)
+    I_nonzero_mask = I_flat > 1  # Very low threshold to catch dark black pieces
+    I_nonzero_counts = I_nonzero_mask.sum(axis=1)
+    
+    # Square is empty if it has very few non-zero pixels
+    is_empty = I_nonzero_counts < (n_pixels_crop * 0.015)
+    
+    I_nonzero_sums = (I_flat * I_nonzero_mask).sum(axis=1)
+    I_piece_brightness = I_nonzero_sums / I_nonzero_counts.clip(min=1)
+    
+    # --- Robust Piece Colour Detection ---
+    # On Lichess, black piece highlights are bright but have low density (fill ratio).
+    # White pieces are solid and have high density.
+    # Fill ratio = I_nonzero_counts / n_pixels_crop
+    fill_ratio = I_nonzero_counts / n_pixels_crop
+    
+    # A white piece (even a pawn) usually fills > 22% of the inset area.
+    # Black piece highlights usually fill < 20%.
+    is_white_piece = (I_piece_brightness > 160) & (fill_ratio > 0.22)
+    
+    # Special case: White pawns can be small. If it's bright and has a pawn-like density.
+    is_white_pawn_candidate = (I_piece_brightness > 160) & (fill_ratio > 0.15) & (fill_ratio <= 0.22)
+    
+    # Find best matches by shape
+    # arg_maxes = scores.argmax(axis=0)  # old way
+    # maxes = scores.max(axis=0)
+    
+    arg_maxes_adjusted = np.zeros(len(is_empty), dtype=np.int32)
+    maxes = np.zeros(len(is_empty), dtype=np.float32)
+    
+    for i in range(len(is_empty)):
+        if is_empty[i]:
+            arg_maxes_adjusted[i] = scores[:, i].argmax()
+            maxes[i] = scores[arg_maxes_adjusted[i], i]
+            continue
+            
+        # Determine color
+        # A match is actually white if the brightness/density says so
+        # OR if it's a very clear shape match to a white piece (special case for small pieces)
+        matched_white_idx = np.argmax(scores[0:6, i])
+        matched_white_score = scores[matched_white_idx, i]
+        
+        matched_black_idx = np.argmax(scores[6:12, i]) + 6
+        matched_black_score = scores[matched_black_idx, i]
+        
+        is_actually_white = is_white_piece[i] or (matched_white_idx == 5 and is_white_pawn_candidate[i])
+        
+        # Bias: If color detection is uncertain, prefer the better shape match
+        # But if color detection is strong, force the category
+        if is_actually_white:
+            arg_maxes_adjusted[i] = matched_white_idx
+            maxes[i] = matched_white_score
+        else:
+            arg_maxes_adjusted[i] = matched_black_idx
+            maxes[i] = matched_black_score
+    
+    valid_squares = np.where((maxes > 0.4) & ~is_empty)[0]
+    
+    return valid_squares, arg_maxes_adjusted
     
 
 def multitemplate_match_f(img, templates):
@@ -390,109 +552,168 @@ def compare_result_images(img1, img2, max_shift=3, threshold=0.95):
 
 def read_clock(clock_image):
     """
-    Read time from a clock image.
-    
-    Uses digit positions from calibration config if available,
-    otherwise falls back to scaled positions based on clock width.
+    Read time from a clock image using fast horizontal projection + template matching.
     """
-    if clock_image is None:
+    if clock_image is None or clock_image.size == 0:
         return None
+    
+    # Convert to grayscale
     if clock_image.ndim == 3:
-        image = remove_background_colours(clock_image, thresh=1.6).astype(np.uint8)
+        gray = cv2.cvtColor(clock_image, cv2.COLOR_BGR2GRAY)
     else:
-        image = clock_image.copy()
+        gray = clock_image.copy()
     
-    # Validate image dimensions
-    if image.size == 0 or image.ndim != 2:
+    # Use Otsu's thresholding to get a clean binary image
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Ensure white digits on black background
+    if np.mean(binary) > 127:
+        binary = 255 - binary
+    
+    # Trim vertical whitespace to isolate the digit row.
+    # This removes potential white lines from player info or board edges.
+    # We use a threshold on horizontal sums to find rows with significant content.
+    h_sums = np.sum(binary > 0, axis=1)
+    v_content = h_sums > (binary.shape[1] * 0.05) # At least 5% of row must be white
+    
+    if np.any(v_content):
+        # Find contiguous blocks of rows with content
+        import itertools
+        blocks = []
+        for key, group in itertools.groupby(enumerate(v_content), lambda x: x[1]):
+            if key:
+                g = list(group)
+                blocks.append((g[0][0], g[-1][0]))
+        
+        if blocks:
+            # Pick the tallest block (the digits)
+            v_start, v_end = max(blocks, key=lambda b: b[1] - b[0])
+            
+            # Add a tiny bit of padding back if possible
+            v_start = max(0, v_start - 2)
+            v_end = min(binary.shape[0], v_end + 2)
+            binary = binary[v_start:v_end, :]
+    
+    # Use horizontal projection to find digit regions
+    # This is much more robust than fixed coordinates
+    projection = np.max(binary, axis=0) > 0
+    
+    # Find continuous blocks of "on" pixels
+    regions = []
+    start = None
+    for i, val in enumerate(projection):
+        if val and start is None:
+            start = i
+        elif not val and start is not None:
+            if i - start > 2:  # Ignore tiny noise
+                regions.append((start, i))
+            start = None
+    if start is not None:
+        regions.append((start, len(projection)))
+        
+    if not regions:
         return None
-    
-    img_height, img_width = image.shape
-    
-    # Get template dimensions for resizing
-    template_h, template_w = TEMPLATES.shape[1:3]  # (height, width) from shape (10, H, W)
-    
-    # Try to get digit positions from config
-    digit_positions = None
-    if USE_CONFIG and chess_config is not None:
-        digit_positions = chess_config.get_digit_positions()
-    
-    if digit_positions is not None:
-        # Use calibrated digit positions (as fractions of clock width)
-        # Calculate centers and use consistent width for all digits
-        # This prevents narrow digits like "1" from being stretched incorrectly
-        d1_center = (digit_positions['d1_start'] + digit_positions['d1_end']) / 2 * img_width
-        d2_center = (digit_positions['d2_start'] + digit_positions['d2_end']) / 2 * img_width
-        d3_center = (digit_positions['d3_start'] + digit_positions['d3_end']) / 2 * img_width
-        d4_center = (digit_positions['d4_start'] + digit_positions['d4_end']) / 2 * img_width
         
-        # Use the widest digit region as the standard width (typically d1 for "0")
-        d1_width = (digit_positions['d1_end'] - digit_positions['d1_start']) * img_width
-        digit_half_width = max(d1_width / 2, img_width * 0.06)  # At least 6% of width
+    # Get templates dimensions
+    template_h, template_w = TEMPLATES.shape[1:3]
+    
+    digits = []
+    for r_start, r_end in regions:
+        region_img = binary[:, r_start:r_end]
         
-        d1_start = max(0, int(d1_center - digit_half_width))
-        d1_end = min(img_width, int(d1_center + digit_half_width))
-        d2_start = max(0, int(d2_center - digit_half_width))
-        d2_end = min(img_width, int(d2_center + digit_half_width))
-        d3_start = max(0, int(d3_center - digit_half_width))
-        d3_end = min(img_width, int(d3_center + digit_half_width))
-        d4_start = max(0, int(d4_center - digit_half_width))
-        d4_end = min(img_width, int(d4_center + digit_half_width))
-    else:
-        # Fall back to scaled positions based on original 147px width
-        ORIGINAL_WIDTH = 147.0
-        scale = img_width / ORIGINAL_WIDTH
-        d1_start, d1_end = 0, int(30 * scale)
-        d2_start, d2_end = int(34 * scale), int(64 * scale)
-        d3_start, d3_end = int(83 * scale), int(113 * scale)
-        d4_start, d4_end = int(117 * scale), min(int(147 * scale), img_width)
+        # Check if this region matches a digit
+        # Ignore colon/dots which are very narrow or very short
+        h_proj = np.max(region_img, axis=1) > 0
+        h_sum = np.sum(h_proj)
+        if h_sum < binary.shape[0] * 0.3 or (r_end - r_start) < 2:
+            continue
+            
+        # Match against templates
+        region_resized = cv2.resize(region_img, (template_w, template_h), interpolation=cv2.INTER_AREA)
+        digit = multitemplate_match_f(region_resized, TEMPLATES)
+        if digit is not None:
+            # Store digit and its center position
+            digits.append((digit, (r_start + r_end) / 2))
+            
+    if not digits:
+        return None
+        
+    # Sort digits by X position
+    digits.sort(key=lambda x: x[1])
     
-    # Extract digit regions
-    d1 = image[:, d1_start:d1_end]
-    d2 = image[:, d2_start:d2_end]
-    d3 = image[:, d3_start:d3_end]
-    d4 = image[:, d4_start:d4_end]
+    # Parse digits based on count and relative positions
+    vals = [d[0] for d in digits]
+    centers = [d[1] for d in digits]
     
-    # Validate extracted regions
-    for i, d in enumerate([d1, d2, d3, d4], 1):
-        if d.size == 0:
-            return None  # Invalid region
-    
-    # Resize each digit region to match template size
-    try:
-        d1 = cv2.resize(d1, (template_w, template_h), interpolation=cv2.INTER_AREA)
-        d2 = cv2.resize(d2, (template_w, template_h), interpolation=cv2.INTER_AREA)
-        d3 = cv2.resize(d3, (template_w, template_h), interpolation=cv2.INTER_AREA)
-        d4 = cv2.resize(d4, (template_w, template_h), interpolation=cv2.INTER_AREA)
-    except Exception as e:
-        return None  # Resize failed
+    # Find gaps to identify where the colon is
+    if len(vals) >= 4:
+        # Most common case: MM:SS or MM:SS.m
+        # We take the first 4 digits
+        return vals[0] * 600 + vals[1] * 60 + vals[2] * 10 + vals[3]
+    elif len(vals) == 3:
+        # Case: M:SS
+        return vals[0] * 60 + vals[1] * 10 + vals[2]
+    elif len(vals) == 2:
+        # Case: SS
+        return vals[0] * 10 + vals[1]
+    elif len(vals) == 1:
+        return vals[0]
+        
+    return None
 
-    digit_1 = multitemplate_match_f(d1, TEMPLATES)
-    digit_2 = multitemplate_match_f(d2, TEMPLATES)
-    digit_3 = multitemplate_match_f(d3, TEMPLATES)
-    digit_4 = multitemplate_match_f(d4, TEMPLATES)
-    if digit_1 is not None and digit_2 is not None and digit_3 is not None and digit_4 is not None:
-        return digit_1 * 600 + digit_2*60 + digit_3*10 + digit_4
-    else:
-        # error
-        return None
+# =============================================================================
+# HIGHLIGHT COLOUR DETECTION - Profile-aware colour matching
+# =============================================================================
+
+def _build_highlight_colours() -> np.ndarray:
+    """
+    Build the highlight colour array from profile config or use fallback.
+    
+    Returns:
+        Nx3 numpy array of highlight colours in BGR format.
+    """
+    colours = []
+    
+    # Try to get colours from profile config
+    if USE_CONFIG and chess_config is not None:
+        scheme = chess_config.get_colour_scheme()
+        
+        # Add highlight colours from the scheme
+        for key in ['highlight_light', 'highlight_dark', 'premove_light', 'premove_dark']:
+            if key in scheme:
+                base = scheme[key]
+                colours.append(base)
+                # Add variants for tolerance
+                for shift in [-5, 5, -10, 10]:
+                    variant = [max(0, min(255, c + shift)) for c in base]
+                    colours.append(variant)
+    
+    # Always include fallback colours for robustness
+    fallback_colours = [
+        # 4K Lichess green theme - last move highlights
+        [144, 151, 100],  # dark square highlight
+        [138, 147, 94],   # dark square highlight (variant)
+        [205, 209, 177],  # light square highlight
+        [189, 207, 174],  # light square highlight (variant)
+        # Premove highlight colours (greyish tint)
+        [147, 140, 135],  # premove on dark square
+        [170, 165, 160],  # premove on light square (estimated)
+        # Original 1080p colours (keep for backwards compatibility)
+        [59, 155, 143],
+        [145, 211, 205],
+        [60, 92, 95],
+        [133, 140, 147],
+    ]
+    
+    colours.extend(fallback_colours)
+    
+    return np.array(colours, dtype=np.int16)
+
 
 # Pre-computed highlight colours as a single numpy array for vectorized comparison
 # Shape: (num_colours, 3) - each row is a BGR colour
-_HIGHLIGHT_COLOURS = np.array([
-    # 4K Lichess green theme - last move highlights
-    [144, 151, 100],  # dark square highlight
-    [138, 147, 94],   # dark square highlight (variant)
-    [205, 209, 177],  # light square highlight
-    [189, 207, 174],  # light square highlight (variant)
-    # Premove highlight colours (greyish tint)
-    [147, 140, 135],  # premove on dark square
-    [170, 165, 160],  # premove on light square (estimated)
-    # Original 1080p colours (keep for backwards compatibility)
-    [59, 155, 143],
-    [145, 211, 205],
-    [60, 92, 95],
-    [133, 140, 147],
-], dtype=np.int16)  # int16 to handle subtraction without overflow
+_HIGHLIGHT_COLOURS = _build_highlight_colours()
 
 _HIGHLIGHT_TOLERANCE = 10
 
@@ -792,10 +1013,14 @@ def multitemplate_multimatch_cached(imgs, templates):
     """
     Match multiple images against multiple templates using pre-cached template statistics.
     This is ~20% faster than multitemplate_multimatch for repeated calls with same templates.
+    Includes brightness-aware piece colour detection.
     """
     T_primes, T_denoms = _get_template_cache(templates)
     
     I = imgs.astype(np.float32)
+    w, h = imgs.shape[-2:]
+    n_pixels = w * h
+    
     I_means = I.mean(axis=(1, 2), keepdims=True)
     I_primes = np.expand_dims(I - I_means, 0)  # 1xNxWxH
     
@@ -807,13 +1032,59 @@ def multitemplate_multimatch_cached(imgs, templates):
     nums = (T_primes * I_primes).sum(axis=(-1, -2))  # MxN
     scores = nums / denoms
     
-    # Find best matches
-    threshold = 0.5
-    arg_maxes = scores.argmax(axis=0)
-    maxes = scores.max(axis=0)
-    valid_squares = np.where(maxes > threshold)[0]
+    # --- Robust Piece Detection ---
+    # Use a small inset for brightness and empty detection to ignore edge artifacts
+    inset = int(w * 0.1)
+    I_crop = I[:, inset:-inset, inset:-inset]
+    n_pixels_crop = I_crop.shape[1] * I_crop.shape[2]
     
-    return valid_squares, arg_maxes
+    # Compute image brightness (non-zero pixels only)
+    I_flat = I_crop.reshape(I_crop.shape[0], -1)  # Nx(w_crop*h_crop)
+    I_nonzero_mask = I_flat > 1  # Very low threshold to catch dark black pieces
+    I_nonzero_counts = I_nonzero_mask.sum(axis=1)
+    
+    # Square is empty if it has very few non-zero pixels
+    is_empty = I_nonzero_counts < (n_pixels_crop * 0.02)
+    
+    I_nonzero_sums = (I_flat * I_nonzero_mask).sum(axis=1)
+    I_piece_brightness = I_nonzero_sums / I_nonzero_counts.clip(min=1)
+    
+    # Determine white vs black piece
+    # Lowered brightness threshold to 140 to account for blurring
+    # fill_ratio check helps distinguish solid white pieces from thin black highlights
+    fill_ratio = I_nonzero_counts / n_pixels_crop
+    is_white_piece = (I_piece_brightness > 140) & (fill_ratio > 0.20)
+    is_white_pawn_candidate = (I_piece_brightness > 140) & (fill_ratio > 0.12) & (fill_ratio <= 0.20)
+    
+    # Find best matches
+    arg_maxes_adjusted = np.zeros(len(is_empty), dtype=np.int32)
+    maxes = np.zeros(len(is_empty), dtype=np.float32)
+    
+    for i in range(len(is_empty)):
+        matched_white_idx = np.argmax(scores[0:6, i])
+        matched_white_score = scores[matched_white_idx, i]
+        
+        matched_black_idx = np.argmax(scores[6:12, i]) + 6
+        matched_black_score = scores[matched_black_idx, i]
+        
+        # Colour detection:
+        # 1. Primary check: brightness and density
+        # 2. Secondary check: if it's a white pawn candidate shape
+        # 3. Tertiary check: if the white shape match is significantly better than the black one
+        is_actually_white = is_white_piece[i] or \
+                           (matched_white_idx == 5 and is_white_pawn_candidate[i]) or \
+                           (matched_white_score > matched_black_score + 0.15)
+        
+        if is_actually_white:
+            arg_maxes_adjusted[i] = matched_white_idx
+            maxes[i] = matched_white_score
+        else:
+            arg_maxes_adjusted[i] = matched_black_idx
+            maxes[i] = matched_black_score
+    
+    valid_squares = np.where((maxes > 0.4) & ~is_empty)[0]
+    
+    return valid_squares, arg_maxes_adjusted
 
 def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bool=True):
     """
@@ -829,6 +1100,10 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
     """
     board_height, board_width = board_image.shape[:2]
     
+    # Use floating point steps to avoid rounding error accumulation
+    step_x = board_width / 8.0
+    step_y = board_height / 8.0
+    
     # Fast mode: downscale BEFORE background removal for maximum speedup
     if fast_mode and board_width > _TARGET_BOARD_SIZE:
         new_size = (_TARGET_BOARD_SIZE, _TARGET_BOARD_SIZE)
@@ -839,16 +1114,30 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
             image = remove_background_colours(image_small).astype(np.uint8)
         else:
             image = cv2.resize(board_image, new_size, interpolation=cv2.INTER_AREA)
-        
+            
         # Use smaller step for the downscaled image
-        step_small = _TARGET_BOARD_SIZE // 8
+        step_small = _TARGET_BOARD_SIZE / 8.0
         
         # Extract piece images from downscaled board
         images = []
-        for x in range(8):
-            for y in range(8):
-                piece = image[x*step_small:(x+1)*step_small, 
-                             y*step_small:(y+1)*step_small]
+        for r in range(8):
+            for c in range(8):
+                # Calculate coordinates with floating point precision
+                y1 = int(r * step_small)
+                y2 = int((r + 1) * step_small)
+                x1 = int(c * step_small)
+                x2 = int((c + 1) * step_small)
+                
+                piece = image[y1:y2, x1:x2]
+                
+                # Apply 5% inset to remove potential edge artifacts
+                h, w = piece.shape[:2]
+                inset = 0.05
+                iy1, iy2 = int(h * inset), h - int(h * inset)
+                ix1, ix2 = int(w * inset), w - int(w * inset)
+                piece = piece[iy1:iy2, ix1:ix2]
+                
+                piece = cv2.resize(piece, (int(step_small), int(step_small)))
                 images.append(piece)
         images = np.stack(images, axis=0)
         
@@ -862,8 +1151,26 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
         else:
             image = board_image.copy()
             
-        images = [image[x*STEP:x*STEP+PIECE_STEP, y*STEP:y*STEP+PIECE_STEP] 
-                  for x in range(8) for y in range(8)]
+        images = []
+        for r in range(8):
+            for c in range(8):
+                y1 = int(r * step_y)
+                y2 = int((r + 1) * step_y)
+                x1 = int(c * step_x)
+                x2 = int((c + 1) * step_x)
+                
+                piece = image[y1:y2, x1:x2]
+                
+                # Apply 5% inset to remove potential edge artifacts
+                h, w = piece.shape[:2]
+                inset = 0.05
+                iy1, iy2 = int(h * inset), h - int(h * inset)
+                ix1, ix2 = int(w * inset), w - int(w * inset)
+                piece = piece[iy1:iy2, ix1:ix2]
+                
+                piece = cv2.resize(piece, (PIECE_STEP, PIECE_STEP))
+                images.append(piece)
+                
         images = np.stack(images, axis=0)
         templates = PIECE_TEMPLATES
         valid_squares, argmaxes = multitemplate_multimatch(images, templates)
@@ -872,9 +1179,21 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
     for square in valid_squares:
         key = INDEX_MAPPER[argmaxes[square]]
         if bottom == "w":
+            # Image row 0 is rank 8, row 7 is rank 1
+            # images[0] is (r=0, c=0) which is a8 (square 56)
+            # In python-chess, squares are 0-63 (a1-h8)
+            # a1=0, b1=1, ..., h1=7, a2=8, ...
+            # images[r*8+c] corresponds to square: (7-r)*8 + c
+            # This is exactly square_mirror(square) if square is r*8+c
             output_square = chess.square_mirror(square)
         else:
-            output_square = chess.square_mirror(63-square)
+            # For black at bottom, board is rotated 180 degrees
+            # images[0] (r=0, c=0) is h1 (square 7)? No, it's a1! 
+            # If black is at bottom, a1 is top-left, h8 is bottom-right? 
+            # No, if black is at bottom, h8 is top-left, a1 is bottom-right.
+            # So images[0] is h8 (63), images[63] is a1 (0).
+            # This is just 63 - square_mirror(square)
+            output_square = 63 - chess.square_mirror(square)
         board.set_piece_at(output_square, chess.Piece.from_symbol(key))
     
     if turn is not None:

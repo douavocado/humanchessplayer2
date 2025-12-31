@@ -12,16 +12,24 @@ Useful for:
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 import json
 import re
 
-from .utils import load_image, get_screenshots_directory, remove_background_colours
+from .utils import (
+    load_image,
+    get_screenshots_directory,
+    remove_background_colours,
+    get_output_directory,
+    ensure_directory,
+)
 from .board_detector import BoardDetector
 from .clock_detector import ClockDetector
 from .coordinate_calculator import CoordinateCalculator
 from .visualiser import CalibrationVisualiser
 from .config import save_config
+from .template_extractor import TemplateExtractor
+from .colour_extractor import extract_colour_scheme
 
 
 def detect_digit_positions(clock_image: np.ndarray) -> Optional[Dict[str, float]]:
@@ -135,27 +143,41 @@ class OfflineFitter:
     
     Supports multiple screenshots with different game states,
     combining them into a single comprehensive configuration.
+    
+    Can also extract templates and colours for complete profile calibration.
     """
     
-    def __init__(self, screenshots_dir: Optional[Path] = None):
+    def __init__(self, screenshots_dir: Optional[Path] = None, profile_name: Optional[str] = None):
         """
         Initialise offline fitter.
         
         Args:
             screenshots_dir: Directory containing screenshots.
                            If None, uses default location.
+            profile_name: Name of the profile for template storage.
+                         If None, templates go to generic location.
         """
         if screenshots_dir is None:
             screenshots_dir = get_screenshots_directory()
         self.screenshots_dir = Path(screenshots_dir)
+        self.profile_name = profile_name
         
         self.board_detector = BoardDetector()
         self.clock_detector = ClockDetector()
         self.calculator = CoordinateCalculator()
+        
+        # Template extractor for the profile
+        if profile_name:
+            template_dir = Path(__file__).parent / "templates" / profile_name
+        else:
+            template_dir = Path(__file__).parent / "templates"
+        self.template_extractor = TemplateExtractor(template_dir)
     
     def fit_from_screenshots(self, 
                             screenshot_paths: Optional[List[str]] = None,
-                            state_hints: Optional[Dict[str, str]] = None) -> Optional[Dict]:
+                            state_hints: Optional[Dict[str, str]] = None,
+                            visualise: bool = False,
+                            output_root: Optional[Path] = None) -> Optional[Dict]:
         """
         Fit calibration from multiple screenshots.
         
@@ -164,10 +186,17 @@ class OfflineFitter:
                             If None, uses all images in screenshots_dir.
             state_hints: Optional mapping of filename to state hint.
                         e.g., {'screenshot_001.png': 'play', 'screenshot_002.png': 'start1'}
+            visualise: Whether to save visualisations per screenshot.
+            output_root: Optional root directory for visualisations.
         
         Returns:
             Complete calibration configuration, or None if failed.
         """
+        base_output_dir: Optional[Path] = None
+        if visualise:
+            base_output_dir = Path(output_root) if output_root else Path(get_output_directory())
+            ensure_directory(base_output_dir)
+        
         # Get screenshot paths
         if screenshot_paths is None:
             screenshot_paths = self._find_screenshots()
@@ -227,6 +256,20 @@ class OfflineFitter:
                 print(f"  Clocks detected: {clock_detection['detection_count']} positions")
                 if state_hint:
                     print(f"  State hint: {state_hint}")
+
+                # Optional visualisations per screenshot/state
+                if visualise and base_output_dir:
+                    # Build coordinates for overlays, using state_hint to relabel clocks
+                    coords_for_vis, relabelled_clocks = self._build_coordinates_for_visualisation(
+                        board_detection, clock_detection, state_hint
+                    )
+                    state_name = state_hint or "unknown"
+                    shot_dir = base_output_dir / state_name / Path(path).stem
+                    ensure_directory(shot_dir)
+                    visualiser = CalibrationVisualiser(shot_dir)
+                    # Pass relabelled clocks so visualiser shows correct state labels
+                    visualiser.visualise_all(image, board_detection, relabelled_clocks, coords_for_vis)
+                    print(f"  Visualisation saved to: {visualiser.get_output_dir()}")
             else:
                 print(f"  No clocks detected")
         
@@ -238,7 +281,106 @@ class OfflineFitter:
         combined = self._combine_detections(all_detections, board_detection)
         
         return combined
+
+    def _build_coordinates_for_visualisation(
+        self,
+        board_detection: Dict,
+        clock_detection: Optional[Dict],
+        state_hint: Optional[str] = None
+    ) -> Tuple[Optional[Dict], Optional[Dict]]:
+        """
+        Build coordinates for visual overlays without affecting the combined fit.
+        
+        If state_hint is provided, relabels the detected 'play' clocks to the
+        appropriate state and only includes states from that family.
+        
+        Returns:
+            (coordinates, relabelled_clock_detection) tuple
+        """
+        if board_detection is None:
+            return None, None
+
+        # Determine which state family we're in based on state_hint
+        if state_hint:
+            if state_hint.startswith('start'):
+                state_family = 'start'
+                family_states = ['start1', 'start2']
+            elif state_hint.startswith('end'):
+                state_family = 'end'
+                family_states = ['end1', 'end2', 'end3']
+            else:
+                state_family = 'play'
+                family_states = ['play']
+        else:
+            state_family = None
+            family_states = None
+
+        # If we have a state_hint, relabel detected 'play' clocks to that state
+        if state_hint and clock_detection:
+            relabelled_detection = {'detection_count': clock_detection.get('detection_count', 0)}
+            if 'clock_x' in clock_detection:
+                relabelled_detection['clock_x'] = clock_detection['clock_x']
+            
+            for clock_type in ['bottom_clock', 'top_clock']:
+                if clock_type in clock_detection:
+                    relabelled_detection[clock_type] = {}
+                    for state, coords in clock_detection[clock_type].items():
+                        # Relabel 'play' to the state_hint
+                        new_state = state_hint if state == 'play' else state
+                        relabelled_detection[clock_type][new_state] = coords
+            
+            clock_detection_to_use = relabelled_detection
+        else:
+            clock_detection_to_use = clock_detection
+
+        self.calculator.set_board(board_detection)
+        self.calculator.set_clocks(clock_detection_to_use)
+        coordinates = self.calculator.calculate_all()
+
+        # Only include clocks from the relevant state family
+        if family_states:
+            for clock_type in ['bottom_clock', 'top_clock']:
+                if clock_type in coordinates:
+                    # Filter to only family states
+                    filtered = {s: c for s, c in coordinates[clock_type].items() 
+                               if s in family_states}
+                    coordinates[clock_type] = filtered
+
+        return coordinates, clock_detection_to_use
     
+    def _load_ground_truth(self, screenshot_path: str) -> Dict[str, Any]:
+        """
+        Load ground truth data from a corresponding _fen.txt file.
+        Format:
+          Line 1: FEN
+          Line 2: top:SECONDS
+          Line 3: bottom:SECONDS
+          Line 4: result:white_win|black_win|draw (optional)
+        """
+        path = Path(screenshot_path)
+        gt_file = path.parent / f"{path.stem}_fen.txt"
+        
+        gt = {'fen': None, 'top_time': None, 'bottom_time': None, 'result': None}
+        
+        if gt_file.exists():
+            try:
+                lines = gt_file.read_text().splitlines()
+                if len(lines) >= 1:
+                    gt['fen'] = lines[0].strip()
+                
+                for line in lines[1:]:
+                    line = line.strip().lower()
+                    if line.startswith('top:'):
+                        gt['top_time'] = int(line.split(':')[1].strip())
+                    elif line.startswith('bottom:'):
+                        gt['bottom_time'] = int(line.split(':')[1].strip())
+                    elif line.startswith('result:'):
+                        gt['result'] = line.split(':')[1].strip()
+            except Exception as e:
+                print(f"  Warning: Error loading ground truth from {gt_file.name}: {e}")
+                
+        return gt
+
     def _find_screenshots(self) -> List[str]:
         """Find all screenshot files in the screenshots directory."""
         if not self.screenshots_dir.exists():
@@ -256,24 +398,25 @@ class OfflineFitter:
     def _extract_state_from_filename(self, filename: str) -> Optional[str]:
         """
         Extract game state hint from filename.
-        
-        Looks for patterns like:
-        - screenshot_play.png
-        - calibration_20250115_start1.png
-        - game_end_resign.png
         """
         states = ['play', 'start1', 'start2', 'end1', 'end2', 'end3',
-                  'start', 'end', 'resign', 'draw', 'stalemate', 'checkmate']
+                  'start', 'end', 'resign', 'draw', 'stalemate', 'checkmate',
+                  'white_win', 'black_win', 'whitewin', 'blackwin']
         
         filename_lower = filename.lower()
         
         for state in states:
             if state in filename_lower:
-                # Map generic states to specific ones
                 if state == 'start':
                     return 'start1'
-                elif state == 'end' or state in ['resign', 'draw', 'stalemate', 'checkmate']:
+                elif state in ['end', 'resign', 'stalemate', 'checkmate']:
                     return 'end1'
+                elif state in ['white_win', 'whitewin']:
+                    return 'white_win'
+                elif state in ['black_win', 'blackwin']:
+                    return 'black_win'
+                elif state == 'draw':
+                    return 'draw'
                 else:
                     return state
         
@@ -282,63 +425,120 @@ class OfflineFitter:
     def _combine_detections(self, detections: List[Dict],
                            board_detection: Dict) -> Dict:
         """
-        Combine multiple screenshot detections into single config.
-        
-        Args:
-            detections: List of detection results.
-            board_detection: Board detection to use.
-        
-        Returns:
-            Combined configuration dictionary.
+        Combine multiple screenshot detections into single config using
+        state-aware grouping (start*, play, end*).
         """
-        # Use calculator to get base coordinates
         self.calculator.set_board(board_detection)
-        
-        # Collect all clock positions
-        bottom_clocks = {}
-        top_clocks = {}
-        clock_x = None
-        
-        for detection in detections:
-            clocks = detection['clocks']
-            state_hint = detection['state_hint']
-            
-            if 'clock_x' in clocks and clock_x is None:
-                clock_x = clocks['clock_x']
-            
-            for clock_type, positions in [('bottom_clock', bottom_clocks), 
-                                          ('top_clock', top_clocks)]:
-                if clock_type in clocks:
-                    for state, coords in clocks[clock_type].items():
-                        # If we have a state hint, use it
-                        if state_hint and state == 'play':
-                            actual_state = state_hint
-                        else:
-                            actual_state = state
-                        
-                        # Keep the position with highest time value (most likely valid)
-                        if actual_state not in positions:
-                            positions[actual_state] = coords
-                        elif coords.get('time_value', 0) > positions[actual_state].get('time_value', 0):
-                            positions[actual_state] = coords
-        
-        # Set combined clocks
+
+        def collect_positions(clock_type: str, labels: List[str], k_clusters: int = 1):
+            """
+            Collect clock positions for a state family and optionally cluster them.
+            Labels length should match k_clusters when k_clusters > 1.
+            """
+            # Gather raw detections that match the state family
+            samples = []
+            for det in detections:
+                clocks = det['clocks']
+                hint = det.get('state_hint')
+                if clock_type not in clocks:
+                    continue
+                for state_name, coords in clocks[clock_type].items():
+                    actual_state = hint if hint and state_name == 'play' else state_name
+                    if any(actual_state.startswith(prefix.rstrip('123')) for prefix in labels):
+                        samples.append(coords)
+            if not samples:
+                return {}
+            if k_clusters == 1:
+                # Average all samples
+                x = int(np.mean([s['x'] for s in samples]))
+                y = int(np.mean([s['y'] for s in samples]))
+                w = int(np.mean([s.get('width', 147) for s in samples]))
+                h = int(np.mean([s.get('height', 44) for s in samples]))
+                # Apply vertical safety margin to final combined coordinates
+                # This ensures we don't chop digits due to slight variations in Lichess layout
+                v_margin = int(h * 0.1)
+                y_final = y - v_margin
+                h_final = h + v_margin * 2
+                
+                return {labels[0]: {'x': x, 'y': y_final, 'width': w, 'height': h_final}}
+            # Sort by y then split into k roughly equal groups (top to bottom)
+            samples_sorted = sorted(samples, key=lambda c: (c['y'], c['x']))
+            n = len(samples_sorted)
+            if n < k_clusters:
+                # Not enough samples; map what we have in order, leave others missing
+                clustered = {}
+                for i, sample in enumerate(samples_sorted):
+                    if i >= len(labels):
+                        break
+                    
+                    v_margin = int(sample.get('height', 44) * 0.1)
+                    clustered[labels[i]] = {
+                        'x': sample['x'],
+                        'y': sample['y'] - v_margin,
+                        'width': sample.get('width', 147),
+                        'height': sample.get('height', 44) + v_margin * 2,
+                    }
+                return clustered
+            # Split into k contiguous groups
+            clusters = []
+            size = n // k_clusters
+            remainder = n % k_clusters
+            start = 0
+            for i in range(k_clusters):
+                end = start + size + (1 if i < remainder else 0)
+                clusters.append(samples_sorted[start:end])
+                start = end
+            clustered = {}
+            for i, group in enumerate(clusters):
+                if i >= len(labels) or not group:
+                    continue
+                
+                h_avg = int(np.mean([g.get('height', 44) for g in group]))
+                v_margin = int(h_avg * 0.1)
+                
+                clustered[labels[i]] = {
+                    'x': int(np.mean([g['x'] for g in group])),
+                    'y': int(np.mean([g['y'] for g in group])) - v_margin,
+                    'width': int(np.mean([g.get('width', 147) for g in group])),
+                    'height': h_avg + v_margin * 2,
+                }
+            return clustered
+
+        def build_clock_dict(clock_type: str):
+            # Play: single average
+            play_pos = collect_positions(clock_type, ['play'], k_clusters=1)
+            # Start: two clusters
+            start_pos = collect_positions(clock_type, ['start1', 'start2'], k_clusters=2)
+            # End: three clusters
+            end_pos = collect_positions(clock_type, ['end1', 'end2', 'end3'], k_clusters=3)
+            combined = {}
+            combined.update(play_pos)
+            combined.update(start_pos)
+            combined.update(end_pos)
+            return combined
+
+        # Build clocks with grouping
+        bottom_clocks = build_clock_dict('bottom_clock')
+        top_clocks = build_clock_dict('top_clock')
+
+        clock_x_vals = []
+        for det in detections:
+            if 'clock_x' in det['clocks']:
+                clock_x_vals.append(det['clocks']['clock_x'])
+        clock_x = int(np.mean(clock_x_vals)) if clock_x_vals else (board_detection['x'] + board_detection['size'] + 29)
+
         combined_clocks = {
             'bottom_clock': bottom_clocks,
             'top_clock': top_clocks,
-            'clock_x': clock_x or (board_detection['x'] + board_detection['size'] + 29),
+            'clock_x': clock_x,
             'detection_count': len(bottom_clocks) + len(top_clocks)
         }
-        
+
         self.calculator.set_clocks(combined_clocks)
-        
-        # Calculate all coordinates
         coordinates = self.calculator.calculate_all()
-        
-        # Estimate any missing clock states
+
+        # Estimate missing states to fill gaps
         estimated_clocks = self.calculator.estimate_missing_clock_states(combined_clocks)
-        
-        # Merge estimated into coordinates
         for clock_type in ['bottom_clock', 'top_clock']:
             if clock_type in estimated_clocks:
                 if clock_type not in coordinates:
@@ -346,8 +546,7 @@ class OfflineFitter:
                 for state, coords in estimated_clocks[clock_type].items():
                     if state not in coordinates[clock_type]:
                         coordinates[clock_type][state] = coords
-        
-        # Build final config
+
         config = {
             'calibration_info': {
                 'method': 'offline_fitting',
@@ -357,17 +556,268 @@ class OfflineFitter:
             },
             'coordinates': coordinates
         }
-        
-        # Try to detect digit positions from the first valid clock
-        # This is stored as fractions so it works regardless of clock width
+
         digit_positions = self._detect_digit_positions_from_detections(detections, coordinates)
         if digit_positions:
             config['digit_positions'] = digit_positions
             print(f"✓ Digit positions calibrated")
         else:
             print("⚠ Could not calibrate digit positions, will use fallback")
+
+        board_width = board_detection.get('size', 848)
+        piece_size = board_width // 8
+        config['template_info'] = {
+            'piece_size': piece_size,
+            'digit_size': [30, 44],
+        }
+
+        return config
+    
+    def extract_templates_and_colours(
+        self,
+        detections: List[Dict],
+        board_detection: Dict,
+        config: Dict
+    ) -> Dict:
+        """
+        Extract piece templates, digit templates, and colour scheme from detections.
+        Collects multiple instances of each template and averages them with sub-pixel alignment.
+        """
+        print("\n📋 Extracting templates and colours...")
+        
+        board_x = board_detection['x']
+        board_y = board_detection['y']
+        board_size = board_detection['size']
+        step = board_size // 8
+        
+        # Buffers to collect multiple instances for averaging
+        piece_instances = {p: [] for p in "RNBQKPrnbqkp"}
+        digit_instances = {str(i): [] for i in range(10)}
+        result_instances = {'white_win': [], 'black_win': [], 'draw': []}
+        colour_scheme = None
+        
+        for detection in detections:
+            image = detection.get('image')
+            path = detection.get('path')
+            
+            if image is None or path is None:
+                continue
+            
+            # Load ground truth
+            gt = self._load_ground_truth(path)
+            fen = gt.get('fen')
+            state_hint = detection.get('state_hint', '')
+            
+            # Extract board region
+            board_img = image[board_y:board_y + board_size, board_x:board_x + board_size]
+            if board_img.size == 0:
+                continue
+            
+            # 1. Collect Piece Instances
+            if fen:
+                # Heuristic for bottom colour
+                bottom = 'w'
+                if 'bottom_b' in path.lower() or 'black_bottom' in path.lower():
+                    bottom = 'b'
+                
+                # Extract all pieces in this board (returns one per type found)
+                pieces = self.template_extractor.extract_pieces_from_fen(board_img, fen, bottom=bottom)
+                for piece, template in pieces.items():
+                    if piece in piece_instances:
+                        piece_instances[piece].append(template)
+            
+            # 2. Collect Digit Instances
+            digit_positions = config.get('digit_positions')
+            if digit_positions:
+                times = {'top_clock': gt.get('top_time'), 'bottom_clock': gt.get('bottom_time')}
+                for clock_type in ['bottom_clock', 'top_clock']:
+                    if clock_type in detection['clocks'] and times[clock_type] is not None:
+                        known_time = times[clock_type]
+                        # Use first state available for this clock type
+                        state = next(iter(detection['clocks'][clock_type]))
+                        c = detection['clocks'][clock_type][state]
+                        clock_img = image[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
+                        
+                        if clock_img.size > 0:
+                            digits = self.template_extractor.extract_digits_from_clock(
+                                clock_img, digit_positions, known_time
+                            )
+                            for val, template in digits.items():
+                                if str(val) in digit_instances:
+                                    digit_instances[str(val)].append(template)
+            
+            # 3. Collect Result Instances
+            # Determine result from:
+            # 1. Ground truth 'result' field
+            # 2. State hint (if it's already 'white_win', etc.)
+            # 3. FEN (if it's a checkmate/draw position)
+            result_type = gt.get('result')
+            
+            if not result_type:
+                if state_hint in result_instances:
+                    result_type = state_hint
+                elif fen:
+                    import chess
+                    try:
+                        board = chess.Board(fen)
+                        if board.is_game_over():
+                            res = board.result()
+                            if res == "1-0": result_type = 'white_win'
+                            elif res == "0-1": result_type = 'black_win'
+                            elif res == "1/2-1/2": result_type = 'draw'
+                    except:
+                        pass
+            
+            if result_type and 'result_region' in config['coordinates']:
+                r = config['coordinates']['result_region']
+                res_img = image[r['y']:r['y']+r['height'], r['x']:r['x']+r['width']]
+                if res_img.size > 0:
+                    result_instances[result_type].append(res_img)
+            
+            # 4. Extract Colour Scheme
+            if colour_scheme is None:
+                if 'start' in state_hint:
+                    colour_scheme = extract_colour_scheme(board_img, step=step)
+                    if colour_scheme:
+                        print(f"  ✓ Colour scheme extracted")
+
+        # --- Finalize Piece Templates (use first clean instance) ---
+        pieces_extracted = 0
+        print(f"  Finalizing pieces (selecting best instance from {sum(len(v) for v in piece_instances.values())} total)...")
+        for piece, instances in piece_instances.items():
+            if not instances:
+                continue
+            
+            # Use the first instance directly instead of averaging
+            # Averaging tends to blur templates when pieces come from different
+            # backgrounds (light/dark squares, highlighted/normal, etc.)
+            template = instances[0]
+            if template is not None:
+                if self.template_extractor.save_piece_template(piece, template, overwrite=True):
+                    pieces_extracted += 1
+
+        # --- Finalize Digit Templates (pick best instance) ---
+        digits_extracted = 0
+        print(f"  Finalizing digits (selecting best instance from {sum(len(v) for v in digit_instances.values())} total)...")
+        for digit_str, instances in digit_instances.items():
+            if not instances:
+                continue
+            
+            digit_val = int(digit_str)
+            
+            # Find the "best" instance. For digits, we want the one that is most complete.
+            # Trimming logic in extract_digits_from_clock means the widest image 
+            # (before resizing) is likely the most complete one.
+            # But since they are all resized to 30x44, we check which one has the 
+            # highest pixel density (most white pixels), which often indicates a full digit.
+            best_instance = instances[0]
+            max_density = 0
+            for inst in instances:
+                density = np.sum(inst > 127)
+                if density > max_density:
+                    max_density = density
+                    best_instance = inst
+            
+            if best_instance is not None:
+                if self.template_extractor.save_digit_template(digit_val, best_instance, overwrite=True):
+                    digits_extracted += 1
+
+        # --- Fill in missing digits from fallbacks ---
+        missing_digits = [i for i in range(10) if not self.template_extractor.progress["digits"][str(i)]]
+        if missing_digits:
+            print(f"  Generating {len(missing_digits)} missing digits ({', '.join(map(str, missing_digits))}) from fallbacks...")
+            for digit in missing_digits:
+                if self.template_extractor.generate_digit_from_fallback(digit):
+                    digits_extracted += 1
+
+        # --- Finalize Result Templates (Align & Average) ---
+        results_extracted = 0
+        print(f"  Finalizing results (averaging multiple instances)...")
+        for res_type, instances in result_instances.items():
+            if not instances:
+                continue
+            
+            # Result templates are in color (BGR)
+            # Need to align and average color images
+            if len(instances) == 1:
+                avg_template = instances[0]
+            else:
+                # Basic averaging for color images (no sub-pixel alignment for now to keep it simple,
+                # but result region is usually very stable)
+                stacked = np.stack(instances, axis=0)
+                avg_template = np.median(stacked, axis=0).astype(np.uint8)
+            
+            if self.template_extractor.save_result_template(res_type, avg_template, overwrite=True):
+                results_extracted += 1
+        
+        # Add colour scheme to config
+        if colour_scheme:
+            config['colour_scheme'] = colour_scheme
+        else:
+            print("  ⚠ Could not extract colour scheme, will use fallback")
+        
+        # Update template info
+        if 'template_info' not in config:
+            config['template_info'] = {}
+        config['template_info']['extracted_from'] = str(self.screenshots_dir)
+        config['template_info']['pieces_extracted'] = pieces_extracted
+        config['template_info']['digits_extracted'] = digits_extracted
+        config['template_info']['results_extracted'] = results_extracted
+        
+        print(f"\n{self.template_extractor.get_completion_summary()}")
         
         return config
+    
+    def _extract_digit_templates(self, detections: List[Dict], config: Dict) -> int:
+        """
+        Extract digit templates from clock images using ground truth times.
+        """
+        digit_positions = config.get('digit_positions')
+        if not digit_positions:
+            return 0
+        
+        extracted = 0
+        
+        for detection in detections:
+            image = detection.get('image')
+            clocks = detection.get('clocks', {})
+            path = detection.get('path')
+            
+            if image is None or path is None:
+                continue
+                
+            # Load ground truth for this specific screenshot
+            gt = self._load_ground_truth(path)
+            
+            # Use times from ground truth if available
+            times = {
+                'top_clock': gt.get('top_time'),
+                'bottom_clock': gt.get('bottom_time')
+            }
+            
+            # Extract clock region and digits
+            for clock_type in ['bottom_clock', 'top_clock']:
+                if clock_type not in clocks or times[clock_type] is None:
+                    continue
+                
+                known_time = times[clock_type]
+                
+                for state, clock_coords in clocks[clock_type].items():
+                    x = clock_coords.get('x', 0)
+                    y = clock_coords.get('y', 0)
+                    w = clock_coords.get('width', 220)
+                    h = clock_coords.get('height', 40)
+                    
+                    clock_img = image[y:y+h, x:x+w]
+                    if clock_img.size == 0:
+                        continue
+                    
+                    count = self.template_extractor.extract_digits_from_known_time(
+                        clock_img, digit_positions, known_time, overwrite=True
+                    )
+                    extracted += count
+        
+        return extracted
     
     def _detect_digit_positions_from_detections(self, detections: List[Dict],
                                                  coordinates: Dict) -> Optional[Dict]:
@@ -500,31 +950,83 @@ class OfflineFitter:
         return config
 
 
-def fit_from_screenshots(screenshots_dir: Optional[str] = None,
-                        save_to_config: bool = True) -> Optional[Dict]:
+def fit_from_screenshots(
+    screenshots_dir: Optional[str] = None,
+    save_to_config: bool = True,
+    output_path: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    extract_all: bool = False,
+    visualise: bool = False,
+    output_root: Optional[str] = None
+) -> Optional[Dict]:
     """
     Convenience function to fit from screenshots directory.
     
     Args:
         screenshots_dir: Directory with screenshots.
         save_to_config: Whether to save result to chess_config.json.
+        output_path: Optional output file path. If None, uses default.
+        profile_name: Name of the profile (for template storage).
+        extract_all: If True, also extract templates and colours.
+        visualise: Whether to save visualisations per screenshot.
+        output_root: Optional root directory for visualisations.
     
     Returns:
         Configuration dictionary, or None if failed.
     """
-    fitter = OfflineFitter(Path(screenshots_dir) if screenshots_dir else None)
-    config = fitter.fit_from_screenshots()
+    fitter = OfflineFitter(
+        Path(screenshots_dir) if screenshots_dir else None,
+        profile_name=profile_name
+    )
+    config = fitter.fit_from_screenshots(
+        visualise=visualise,
+        output_root=Path(output_root) if output_root else None
+    )
+    
+    if config and extract_all:
+        # Re-process to get detections for template extraction
+        # This is a bit redundant but keeps the API clean
+        screenshot_paths = fitter._find_screenshots()
+        
+        detections = []
+        board_detection = None
+        
+        for path in screenshot_paths:
+            image = load_image(path)
+            if image is None:
+                continue
+            
+            if board_detection is None:
+                board_detection = fitter.board_detector.detect(image)
+            
+            if board_detection:
+                fitter.clock_detector.set_board(board_detection)
+                clock_detection = fitter.clock_detector.detect(image)
+                
+                if clock_detection:
+                    state_hint = fitter._extract_state_from_filename(Path(path).name)
+                    detections.append({
+                        'path': path,
+                        'image': image,
+                        'board': board_detection,
+                        'clocks': clock_detection,
+                        'state_hint': state_hint
+                    })
+        
+        if detections and board_detection:
+            config = fitter.extract_templates_and_colours(detections, board_detection, config)
     
     if config and save_to_config:
-        output_path = save_config(config)
-        print(f"\nConfiguration saved to: {output_path}")
+        saved_path = save_config(config, output_path=output_path)
+        print(f"\nConfiguration saved to: {saved_path}")
     
     return config
 
 
 def fit_from_single(screenshot_path: str,
                    state_hint: Optional[str] = None,
-                   save_to_config: bool = True) -> Optional[Dict]:
+                   save_to_config: bool = True,
+                   output_path: Optional[str] = None) -> Optional[Dict]:
     """
     Convenience function to fit from single screenshot.
     
@@ -540,8 +1042,8 @@ def fit_from_single(screenshot_path: str,
     config = fitter.fit_from_single_screenshot(screenshot_path, state_hint)
     
     if config and save_to_config:
-        output_path = save_config(config)
-        print(f"\nConfiguration saved to: {output_path}")
+        saved_path = save_config(config, output_path=output_path)
+        print(f"\nConfiguration saved to: {saved_path}")
     
     return config
 
@@ -549,18 +1051,52 @@ def fit_from_single(screenshot_path: str,
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Offline calibration fitter")
+    parser = argparse.ArgumentParser(
+        description="Offline calibration fitter - fits coordinates, extracts templates and colours"
+    )
     parser.add_argument("--dir", type=str, help="Screenshots directory")
     parser.add_argument("--file", type=str, help="Single screenshot file")
-    parser.add_argument("--state", type=str, help="State hint for single file")
+    parser.add_argument("--state", type=str, help="State hint for single file (required when using --file)")
     parser.add_argument("--no-save", action="store_true", help="Don't save to config")
+    parser.add_argument("--extract-all", action="store_true",
+                       help="Extract templates and colours in addition to coordinates")
+
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--profile", type=str,
+                             help="Save calibration to a named profile (auto_calibration/calibrations/<profile>.json)")
+    output_group.add_argument("--output", type=str,
+                             help="Save calibration to an explicit JSON path")
     
     args = parser.parse_args()
+
+    resolved_output: Optional[str] = None
+    profile_name: Optional[str] = None
+    
+    if not args.no_save:
+        if getattr(args, "output", None):
+            resolved_output = args.output
+        elif getattr(args, "profile", None):
+            profile_name = args.profile
+            resolved_output = str(Path(__file__).parent / "calibrations" / f"{args.profile}.json")
     
     if args.file:
-        fit_from_single(args.file, args.state, not args.no_save)
+        if not args.state:
+            parser.error("--state is required when using --file")
+        fit_from_single(args.file, args.state, not args.no_save, output_path=resolved_output)
     elif args.dir:
-        fit_from_screenshots(args.dir, not args.no_save)
+        fit_from_screenshots(
+            args.dir,
+            not args.no_save,
+            output_path=resolved_output,
+            profile_name=profile_name,
+            extract_all=args.extract_all
+        )
     else:
         # Use default screenshots directory
-        fit_from_screenshots(None, not args.no_save)
+        fit_from_screenshots(
+            None,
+            not args.no_save,
+            output_path=resolved_output,
+            profile_name=profile_name,
+            extract_all=args.extract_all
+        )

@@ -183,23 +183,38 @@ class ClockDetector:
             'detection_method': 'text'
         }
         
+        # Apply vertical padding and enforce minimum height to avoid chopping digits
+        # Lichess digits need some breathing room for robust OCR
+        target_height = int(REFERENCE_CLOCK_HEIGHT * self.scale)
+        v_padding = int(4 * self.scale)  # Add 4 pixels of padding top/bottom
+        
         if top_clock:
+            # Shift Y up by padding, increase height to target + extra padding
+            # This ensures we don't chop the bottom of the top clock
+            new_h = max(top_clock['height'] + v_padding * 2, target_height)
+            new_y = top_clock['y'] - (new_h - top_clock['height']) // 2
+            
             result['top_clock'] = {
                 'play': {
                     'x': top_clock['x'],
-                    'y': top_clock['y'],
+                    'y': new_y,
                     'width': top_clock['width'],
-                    'height': top_clock['height']
+                    'height': new_h
                 }
             }
         
         if bottom_clock:
+            # Shift Y up by padding, increase height to target + extra padding
+            # This ensures we don't chop the top of the bottom clock
+            new_h = max(bottom_clock['height'] + v_padding * 2, target_height)
+            new_y = bottom_clock['y'] - (new_h - bottom_clock['height']) // 2
+            
             result['bottom_clock'] = {
                 'play': {
                     'x': bottom_clock['x'],
-                    'y': bottom_clock['y'],
+                    'y': new_y,
                     'width': bottom_clock['width'],
-                    'height': bottom_clock['height']
+                    'height': new_h
                 }
             }
         

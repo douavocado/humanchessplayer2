@@ -97,8 +97,10 @@ class BoardDetector:
                 return None
             grid_score = self._verify_grid_pattern(image, refined)
         
-        # Build result
-        x, y, size = refined['x'], refined['y'], refined['size']
+        # Step 4: Snap board size to exact multiple of 8
+        snapped = self._snap_to_grid(image, refined)
+        
+        x, y, size = snapped['x'], snapped['y'], snapped['size']
         
         result = {
             'x': x,
@@ -292,6 +294,143 @@ class BoardDetector:
             'size': (rw + rh) // 2
         }
     
+    def _snap_to_grid(self, image: np.ndarray, detection: Dict) -> Dict:
+        """
+        Snap board detection to exact 8x8 grid by finding precise square boundaries.
+        
+        Uses edge detection to find the actual grid lines and snaps the board
+        size to an exact multiple of 8.
+        
+        Args:
+            image: Full resolution image.
+            detection: Initial detection result.
+        
+        Returns:
+            Refined detection with size divisible by 8.
+        """
+        x, y, size = detection['x'], detection['y'], detection['size']
+        
+        # Calculate current step (may be fractional)
+        approx_step = size / 8.0
+        
+        # Round to nearest integer step
+        step = round(approx_step)
+        
+        # New size is exactly 8 * step
+        new_size = step * 8
+        
+        # Adjust x, y to centre the snapped board on the original detection
+        size_diff = size - new_size
+        new_x = x + size_diff // 2
+        new_y = y + size_diff // 2
+        
+        # Try to refine further using edge detection on the board region
+        refined = self._refine_boundaries_with_edges(image, new_x, new_y, new_size, step)
+        if refined is not None:
+            return refined
+        
+        return {
+            'x': new_x,
+            'y': new_y,
+            'size': new_size
+        }
+    
+    def _refine_boundaries_with_edges(self, image: np.ndarray, x: int, y: int, 
+                                       size: int, step: int) -> Optional[Dict]:
+        """
+        Refine board boundaries by detecting edges at the grid lines.
+        
+        Looks for strong vertical edges at columns 0 and 8 (left/right edges)
+        and horizontal edges at rows 0 and 8 (top/bottom edges).
+        
+        Args:
+            image: Full resolution image.
+            x, y: Top-left corner of board.
+            size: Current board size.
+            step: Square step size.
+        
+        Returns:
+            Refined detection or None if refinement fails.
+        """
+        img_h, img_w = image.shape[:2]
+        
+        # Extract a slightly larger region around the board
+        padding = step // 2
+        x1 = max(0, x - padding)
+        y1 = max(0, y - padding)
+        x2 = min(img_w, x + size + padding)
+        y2 = min(img_h, y + size + padding)
+        
+        region = image[y1:y2, x1:x2]
+        if region.size == 0:
+            return None
+        
+        # Convert to grayscale and detect edges
+        gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+        
+        # Use Sobel for directional edge detection
+        sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        
+        # Look for strong vertical edges (left and right boundaries)
+        # Sum absolute vertical edge strength across each column
+        vert_edge_strength = np.abs(sobel_x).sum(axis=0)
+        
+        # Look for strong horizontal edges (top and bottom boundaries)
+        horiz_edge_strength = np.abs(sobel_y).sum(axis=1)
+        
+        # Expected positions in the region
+        expected_left = padding
+        expected_right = padding + size
+        expected_top = padding
+        expected_bottom = padding + size
+        
+        # Search for actual edges within a small window around expected positions
+        search_range = step // 4
+        
+        def find_best_edge(strength_array, expected_pos, search_range):
+            """Find the position with maximum edge strength near expected."""
+            start = max(0, expected_pos - search_range)
+            end = min(len(strength_array), expected_pos + search_range + 1)
+            if start >= end:
+                return expected_pos
+            window = strength_array[start:end]
+            best_offset = np.argmax(window)
+            return start + best_offset
+        
+        # Find refined boundaries
+        left = find_best_edge(vert_edge_strength, expected_left, search_range)
+        right = find_best_edge(vert_edge_strength, expected_right, search_range)
+        top = find_best_edge(horiz_edge_strength, expected_top, search_range)
+        bottom = find_best_edge(horiz_edge_strength, expected_bottom, search_range)
+        
+        # Calculate new size from detected boundaries
+        detected_width = right - left
+        detected_height = bottom - top
+        
+        # Average and snap to multiple of 8
+        avg_size = (detected_width + detected_height) // 2
+        refined_step = round(avg_size / 8)
+        refined_size = refined_step * 8
+        
+        # Use detected left/top as the anchor, adjust slightly if needed
+        new_x = x1 + left
+        new_y = y1 + top
+        
+        # Verify the new detection makes sense
+        if refined_size < self.MIN_BOARD_SIZE:
+            return None
+        
+        if abs(refined_size - size) > step:
+            # Refinement changed size too much, probably unreliable
+            return None
+        
+        return {
+            'x': new_x,
+            'y': new_y,
+            'size': refined_size
+        }
+
     def _verify_grid_pattern(self, image: np.ndarray, detection: Dict) -> float:
         """
         Verify that the detected region contains an 8x8 alternating grid pattern.

@@ -36,15 +36,15 @@ class CoordinateCalculator:
     REF_RATING_HEIGHT = 24
     REF_CLOCK_WIDTH = 147
     REF_CLOCK_HEIGHT = 44
-    REF_RESULT_WIDTH = 50
-    REF_RESULT_HEIGHT = 30
+    REF_RESULT_WIDTH = 90
+    REF_RESULT_HEIGHT = 35
     REF_RESIGN_BUTTON_SIZE = 40  # Resign button is approximately square
     
     # Offsets relative to clock X position at reference size (848px board)
     REF_NOTATION_X_OFFSET = 38  # From clock X
     REF_RATING_X_OFFSET = 180   # From clock X (rating is just right of player name)
     REF_CLOCK_GAP = 29          # Gap between board and clock
-    REF_RESULT_X_OFFSET = 60    # From clock X (result is centred in the panel)
+    REF_RESULT_X_OFFSET = 155   # From clock X (result is in the right panel)
     
     # Resign button position relative to notation
     # The button row (takeback, draw, resign) is below the notation panel
@@ -292,10 +292,10 @@ class CoordinateCalculator:
             top_clock_bottom = int(468 * self.scale)
             bottom_clock_top = int(742 * self.scale)
         
-        # Result appears roughly 1/3 down from top clock to bottom clock
+        # Result appears roughly 1/4 down from top clock to bottom clock
         # (closer to the top, above the notation/move list area)
         vertical_range = bottom_clock_top - top_clock_bottom
-        result_y = top_clock_bottom + int(vertical_range * 0.35)
+        result_y = top_clock_bottom + int(vertical_range * 0.2)
         
         return {
             'x': clock_x + result_x_offset,

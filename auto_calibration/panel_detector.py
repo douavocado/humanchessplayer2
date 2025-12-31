@@ -197,6 +197,13 @@ class ClockTextDetector:
             if bw < min_width or bh < min_height:
                 continue
             
+            # Add vertical padding to text blocks to ensure full digit coverage.
+            # Tight bounding boxes often chop the very top or bottom of digits.
+            # We add 15% of the height as padding top and bottom.
+            v_padding = int(bh * 0.15)
+            y = max(0, y - v_padding)
+            bh = bh + v_padding * 2
+            
             aspect = bw / bh if bh > 0 else 0
             area = bw * bh
             

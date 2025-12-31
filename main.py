@@ -9,6 +9,7 @@ import time
 import sys
 import random
 import atexit
+import os
 
 import argparse
 
@@ -46,6 +47,13 @@ parser.add_argument("--log-level", type=str, default="INFO",
                     help="Minimum log level (default: INFO)")
 parser.add_argument("--verbose", "-v", action="store_true",
                     help="Enable verbose console output")
+
+# Calibration selection (for multi-setup machines)
+calib_group = parser.add_mutually_exclusive_group()
+calib_group.add_argument("--calibration-file", type=str,
+                    help="Path to a calibration JSON file to use (overrides default chess_config.json)")
+calib_group.add_argument("--calibration-profile", type=str,
+                    help="Named calibration profile to use (auto_calibration/calibrations/<profile>.json)")
 args = parser.parse_args()
 
 # =============================================================================
@@ -83,6 +91,15 @@ MOUSE_QUICKNESS = args.mouse_quickness if args.mouse_quickness is not None else 
 constants.DIFFICULTY = DIFFICULTY
 constants.QUICKNESS = QUICKNESS
 constants.MOUSE_QUICKNESS = MOUSE_QUICKNESS
+
+# Configure which calibration file should be used BEFORE importing gameplay modules.
+# This is picked up by auto_calibration.config.get_config() and thus by chessimage/image_scrape_utils.
+if getattr(args, "calibration_file", None):
+    os.environ["HCP_CALIBRATION_FILE"] = args.calibration_file
+    os.environ.pop("HCP_CALIBRATION_PROFILE", None)
+elif getattr(args, "calibration_profile", None):
+    os.environ["HCP_CALIBRATION_PROFILE"] = args.calibration_profile
+    os.environ.pop("HCP_CALIBRATION_FILE", None)
 
 # Now import mp_original after constants are set
 from clients.mp_original import run_game, await_new_game, set_game, new_game, back_to_lobby, berserk

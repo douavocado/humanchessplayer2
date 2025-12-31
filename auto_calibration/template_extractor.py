@@ -73,6 +73,49 @@ class TemplateExtractor:
         # Track extraction progress
         self.progress = self._load_progress()
     
+    def align_and_average(self, images: List[np.ndarray], padding: int = 4) -> Optional[np.ndarray]:
+        """
+        Align a list of images to the first one and return their median.
+        Handles X/Y offsets by finding the best shift via cross-correlation.
+        """
+        if not images:
+            return None
+        if len(images) == 1:
+            return images[0]
+
+        # Use the first image as the reference anchor
+        ref = images[0].astype(np.float32)
+        h, w = ref.shape
+        aligned_images = [ref]
+
+        # Pad the reference to allow for shifts during template matching
+        ref_padded = cv2.copyMakeBorder(ref, padding, padding, padding, padding, 
+                                      cv2.BORDER_CONSTANT, value=0)
+
+        for i in range(1, len(images)):
+            img = images[i].astype(np.float32)
+            
+            # Find the best shift (dx, dy) relative to reference
+            res = cv2.matchTemplate(ref_padded, img, cv2.TM_CCOEFF_NORMED)
+            _, _, _, max_loc = cv2.minMaxLoc(res)
+            
+            # max_loc is (x, y) in the result map. 
+            # (padding, padding) corresponds to zero shift.
+            dx = max_loc[0] - padding
+            dy = max_loc[1] - padding
+            
+            # Shift image to align with reference
+            M = np.float32([[1, 0, -dx], [0, 1, -dy]])
+            aligned = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, 
+                                   borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            aligned_images.append(aligned)
+
+        # Median is more robust than mean against artifacts/outliers
+        stacked = np.stack(aligned_images, axis=0)
+        averaged = np.median(stacked, axis=0).astype(np.uint8)
+        
+        return averaged
+
     def _load_progress(self) -> Dict:
         """Load extraction progress from file."""
         progress_file = self.template_dir / "extraction_progress.json"
@@ -152,35 +195,67 @@ class TemplateExtractor:
     ) -> Dict[int, np.ndarray]:
         """
         Extract digit templates from a clock image.
-        
-        Args:
-            clock_img: BGR image of the clock region
-            digit_positions: Dictionary with d1_start, d1_end, d2_start, etc.
-                            as fractions of clock width
-            known_time: If provided, the known time in seconds (e.g., 180 for 3:00)
-                       This allows us to label the extracted digits correctly.
-        
-        Returns:
-            Dictionary mapping digit value (0-9) to template image
         """
         if clock_img is None or clock_img.size == 0:
             return {}
         
-        # Process image
+        # Process image - clocks are better handled with binary thresholding
         if clock_img.ndim == 3:
-            processed = remove_background_colours(clock_img, thresh=1.6)
+            gray = cv2.cvtColor(clock_img, cv2.COLOR_BGR2GRAY)
         else:
-            processed = clock_img.copy()
+            gray = clock_img.copy()
+            
+        # Use Otsu's thresholding to get a clean binary image
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, processed = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # Ensure white digits on black background
+        if np.mean(processed) > 127:
+            processed = 255 - processed
         
         h, w = processed.shape[:2]
         
-        # Extract digit regions using calibrated positions
+        # Use a generous width to ensure we capture full digits even if 
+        # calibration was slightly off or narrow.
+        extraction_width = 0.16
+        
+        # Extract digit regions using uniform width centred on calibrated positions
         def get_digit_region(start_key: str, end_key: str) -> np.ndarray:
-            start = int(digit_positions[start_key] * w)
-            end = int(digit_positions[end_key] * w)
-            region = processed[:, start:end]
-            if region.size == 0:
+            if start_key not in digit_positions or end_key not in digit_positions:
                 return None
+                
+            start_frac = digit_positions[start_key]
+            end_frac = digit_positions[end_key]
+            
+            # Calculate centre and use uniform width
+            centre = (start_frac + end_frac) / 2
+            half_width = extraction_width / 2
+            
+            start = int(max(0, centre - half_width) * w)
+            end = int(min(1.0, centre + half_width) * w)
+            
+            region = processed[:, start:end]
+            if region is None or region.size == 0:
+                return None
+            
+            # Trim horizontal and vertical whitespace to isolate the digit.
+            # Use a threshold to ignore noise.
+            
+            # Find non-zero pixel boundaries
+            non_zero = np.where(region > 50)
+            if non_zero[0].size > 0 and non_zero[1].size > 0:
+                y_min, y_max = np.min(non_zero[0]), np.max(non_zero[0])
+                x_min, x_max = np.min(non_zero[1]), np.max(non_zero[1])
+                
+                # Add 1 pixel of breathing room if possible
+                y_min = max(0, y_min - 1)
+                y_max = min(region.shape[0] - 1, y_max + 1)
+                x_min = max(0, x_min - 1)
+                x_max = min(region.shape[1] - 1, x_max + 1)
+                
+                if y_max > y_min and x_max > x_min:
+                    region = region[y_min:y_max+1, x_min:x_max+1]
+
             # Resize to standard template size
             return cv2.resize(region, DIGIT_TEMPLATE_SIZE, interpolation=cv2.INTER_AREA)
         
@@ -215,14 +290,6 @@ class TemplateExtractor:
     def save_digit_template(self, digit: int, template: np.ndarray, overwrite: bool = False) -> bool:
         """
         Save a digit template to disk.
-        
-        Args:
-            digit: The digit value (0-9)
-            template: Grayscale template image
-            overwrite: If True, overwrite existing template
-        
-        Returns:
-            True if saved successfully
         """
         if not 0 <= digit <= 9:
             return False
@@ -243,6 +310,45 @@ class TemplateExtractor:
         self.progress["digits"][str(digit)] = True
         self._save_progress()
         return True
+
+    def generate_digit_from_fallback(self, digit: int, overwrite: bool = False) -> bool:
+        """
+        Create a profile-specific digit template from the generic fallback image.
+        Applies standard processing (Otsu, trimming, centering) to match the
+        visual style of other calibrated digits.
+        """
+        fallback_path = Path(__file__).parent.parent / "chessimage" / f"{digit}.png"
+        if not fallback_path.exists():
+            return False
+            
+        img = cv2.imread(str(fallback_path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return False
+            
+        # Apply same processing as extract_digits_from_clock
+        blur = cv2.GaussianBlur(img, (3, 3), 0)
+        _, processed = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Ensure white on black
+        if np.mean(processed) > 127:
+            processed = 255 - processed
+            
+        # Robust trimming to isolate the digit
+        non_zero = np.where(processed > 50)
+        if non_zero[0].size > 0 and non_zero[1].size > 0:
+            y_min, y_max = np.min(non_zero[0]), np.max(non_zero[0])
+            x_min, x_max = np.min(non_zero[1]), np.max(non_zero[1])
+            
+            # Add 1 pixel of breathing room
+            y_min = max(0, y_min - 1)
+            y_max = min(processed.shape[0] - 1, y_max + 1)
+            x_min = max(0, x_min - 1)
+            x_max = min(processed.shape[1] - 1, x_max + 1)
+            
+            if y_max > y_min and x_max > x_min:
+                processed = processed[y_min:y_max+1, x_min:x_max+1]
+                
+        return self.save_digit_template(digit, processed, overwrite=overwrite)
     
     def load_digit_templates(self) -> Optional[np.ndarray]:
         """
@@ -275,6 +381,85 @@ class TemplateExtractor:
     # Piece Extraction
     # -------------------------------------------------------------------------
     
+    def extract_pieces_from_fen(
+        self,
+        board_img: np.ndarray,
+        fen: str,
+        bottom: str = 'w'
+    ) -> Dict[str, np.ndarray]:
+        """
+        Extract piece templates from any board position using a ground truth FEN.
+        
+        Args:
+            board_img: BGR image of the chess board (8x8 squares)
+            fen: Ground truth FEN string
+            bottom: 'w' if white is at bottom, 'b' if black
+            
+        Returns:
+            Dictionary mapping piece symbol to template image
+        """
+        import chess
+        if board_img is None or board_img.size == 0:
+            return {}
+            
+        try:
+            board = chess.Board(fen)
+        except Exception as e:
+            print(f"Error parsing FEN for piece extraction: {e}")
+            return {}
+            
+        h, w = board_img.shape[:2]
+        # Use floating-point step to match get_fen_from_image behaviour
+        step_x = w / 8.0
+        step_y = h / 8.0
+        
+        # Process image to remove background colours
+        processed = remove_background_colours(board_img)
+        
+        extracted = {}
+        
+        for square in chess.SQUARES:
+            piece = board.piece_at(square)
+            if piece is None:
+                continue
+                
+            symbol = piece.symbol()
+            if symbol in extracted:
+                continue  # Already have this piece type
+                
+            # Convert chess square (0-63) to board coordinates (row, col)
+            # a1 (0) is bottom-left, h8 (63) is top-right
+            if bottom == 'w':
+                # Rank 1 is row 7, Rank 8 is row 0
+                row = 7 - chess.square_rank(square)
+                col = chess.square_file(square)
+            else:
+                # Rank 1 is row 0, Rank 8 is row 7
+                row = chess.square_rank(square)
+                col = 7 - chess.square_file(square)
+            
+            # Use floating-point coordinates then convert to int
+            y1, y2 = int(row * step_y), int((row + 1) * step_y)
+            x1, x2 = int(col * step_x), int((col + 1) * step_x)
+            
+            # Extract square
+            region = processed[y1:y2, x1:x2]
+            if region.size == 0:
+                continue
+            
+            # Apply 5% inset to match how squares are processed during matching
+            rh, rw = region.shape[:2]
+            inset = 0.05
+            iy1, iy2 = int(rh * inset), rh - int(rh * inset)
+            ix1, ix2 = int(rw * inset), rw - int(rw * inset)
+            region = region[iy1:iy2, ix1:ix2]
+            
+            if region.size > 0:
+                extracted[symbol] = cv2.resize(region, (PIECE_TEMPLATE_SIZE[0], PIECE_TEMPLATE_SIZE[1]), 
+                                              interpolation=cv2.INTER_AREA)
+                
+        return extracted
+
     def extract_pieces_from_starting_position(
         self,
         board_img: np.ndarray,
@@ -300,16 +485,33 @@ class TemplateExtractor:
             return {}
         
         h, w = board_img.shape[:2]
-        step = w // 8
+        # Use floating-point step to match get_fen_from_image behaviour
+        step_x = w / 8.0
+        step_y = h / 8.0
         
         # Process image to remove background colours
         processed = remove_background_colours(board_img)
         
         def get_square(row: int, col: int) -> np.ndarray:
             """Extract a square from the board."""
-            y1, y2 = row * step, (row + 1) * step
-            x1, x2 = col * step, (col + 1) * step
+            # Use floating-point coordinates then convert to int
+            y1, y2 = int(row * step_y), int((row + 1) * step_y)
+            x1, x2 = int(col * step_x), int((col + 1) * step_x)
             region = processed[y1:y2, x1:x2]
+            
+            if region.size == 0:
+                return np.zeros((PIECE_TEMPLATE_SIZE[1], PIECE_TEMPLATE_SIZE[0]), dtype=np.uint8)
+            
+            # Apply 5% inset to match how squares are processed during matching
+            rh, rw = region.shape[:2]
+            inset = 0.05
+            iy1, iy2 = int(rh * inset), rh - int(rh * inset)
+            ix1, ix2 = int(rw * inset), rw - int(rw * inset)
+            region = region[iy1:iy2, ix1:ix2]
+            
+            if region.size == 0:
+                return np.zeros((PIECE_TEMPLATE_SIZE[1], PIECE_TEMPLATE_SIZE[0]), dtype=np.uint8)
+            
             # Resize to standard template size
             return cv2.resize(region, (PIECE_TEMPLATE_SIZE[0], PIECE_TEMPLATE_SIZE[1]), 
                             interpolation=cv2.INTER_AREA)

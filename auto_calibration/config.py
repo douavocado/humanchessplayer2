@@ -7,6 +7,7 @@ and falls back to hardcoded values if no configuration exists.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 from datetime import datetime
@@ -21,6 +22,12 @@ class ChessConfig:
     
     # Default configuration file name
     DEFAULT_CONFIG_FILE = "chess_config.json"
+
+    # Environment variables for selecting an alternative calibration
+    # - HCP_CALIBRATION_FILE: explicit path (absolute or relative) to a calibration JSON
+    # - HCP_CALIBRATION_PROFILE: profile name resolved to auto_calibration/calibrations/{profile}.json
+    ENV_CALIBRATION_FILE = "HCP_CALIBRATION_FILE"
+    ENV_CALIBRATION_PROFILE = "HCP_CALIBRATION_PROFILE"
     
     # Fallback coordinates (for when no config exists)
     FALLBACK_COORDINATES = {
@@ -59,6 +66,16 @@ class ChessConfig:
     RATING_WIDTH = 40
     RATING_HEIGHT = 24
     
+    # Default colour scheme (Lichess green theme - BGR format)
+    FALLBACK_COLOUR_SCHEME = {
+        'light_square': [214, 235, 238],      # Cream/beige
+        'dark_square': [86, 150, 118],         # Green
+        'highlight_light': [177, 209, 205],    # Light square with last move highlight
+        'highlight_dark': [100, 151, 144],     # Dark square with last move highlight
+        'premove_light': [160, 165, 170],      # Premove on light square
+        'premove_dark': [135, 140, 147],       # Premove on dark square
+    }
+    
     def __init__(self, config_file: Optional[str] = None):
         """
         Initialise configuration loader.
@@ -69,7 +86,29 @@ class ChessConfig:
         self.config_file = config_file or self.DEFAULT_CONFIG_FILE
         self.config: Optional[Dict] = None
         self.using_fallback = True
+        self._profile_name: Optional[str] = None
         self._load_config()
+    
+    def get_profile_name(self) -> Optional[str]:
+        """
+        Get the name of the current profile.
+        
+        Extracts from config file path (e.g., 'calibrations/laptop.json' -> 'laptop').
+        
+        Returns:
+            Profile name string, or None if using default/fallback.
+        """
+        if self._profile_name:
+            return self._profile_name
+        
+        if self.config_file and self.config_file != self.DEFAULT_CONFIG_FILE:
+            # Extract profile name from path like 'calibrations/laptop.json'
+            path = Path(self.config_file)
+            if path.stem and path.stem != 'chess_config':
+                self._profile_name = path.stem
+                return self._profile_name
+        
+        return None
     
     def _load_config(self) -> bool:
         """
@@ -226,39 +265,120 @@ class ChessConfig:
     
     def get_template_dir(self) -> Path:
         """
-        Get the directory containing extracted templates.
+        Get the directory containing extracted templates for the current profile.
+        
+        Returns profile-specific directory if a profile is active,
+        otherwise returns the generic templates directory.
         
         Returns:
             Path to templates directory
         """
-        return Path(__file__).parent / "templates"
+        base_template_dir = Path(__file__).parent / "templates"
+        
+        profile = self.get_profile_name()
+        if profile:
+            profile_template_dir = base_template_dir / profile
+            if profile_template_dir.exists():
+                return profile_template_dir
+        
+        return base_template_dir
+    
+    def get_colour_scheme(self) -> Dict:
+        """
+        Get the colour scheme for board detection.
+        
+        Returns colours in BGR format for OpenCV compatibility.
+        
+        Returns:
+            Dictionary with keys: light_square, dark_square, highlight_light,
+            highlight_dark, premove_light, premove_dark
+        """
+        if self.config and 'colour_scheme' in self.config:
+            return self.config['colour_scheme']
+        return self.FALLBACK_COLOUR_SCHEME.copy()
+    
+    def get_highlight_colours(self) -> list:
+        """
+        Get all highlight colours as a list for move detection.
+        
+        Returns:
+            List of BGR colour tuples that indicate last move highlights.
+        """
+        scheme = self.get_colour_scheme()
+        colours = [
+            scheme.get('highlight_light', self.FALLBACK_COLOUR_SCHEME['highlight_light']),
+            scheme.get('highlight_dark', self.FALLBACK_COLOUR_SCHEME['highlight_dark']),
+            scheme.get('premove_light', self.FALLBACK_COLOUR_SCHEME['premove_light']),
+            scheme.get('premove_dark', self.FALLBACK_COLOUR_SCHEME['premove_dark']),
+        ]
+        return colours
+    
+    def get_piece_template_size(self) -> int:
+        """
+        Get the native piece template size for this profile.
+        
+        Returns:
+            Piece size in pixels (width = height for square pieces)
+        """
+        if self.config and 'template_info' in self.config:
+            return self.config['template_info'].get('piece_size', 106)
+        
+        # Calculate from board size
+        coords = self.get_coordinates()
+        board = coords.get('board', {})
+        board_width = board.get('width', 848)
+        return board_width // 8
     
     def has_calibrated_templates(self) -> bool:
         """
-        Check if we have calibrated templates available.
+        Check if we have calibrated templates available for the current profile.
+        
+        Requires ALL piece templates (12) and ALL digit templates (10) to be present.
         
         Returns:
-            True if at least some templates exist
+            True if complete templates exist
         """
         template_dir = self.get_template_dir()
         if not template_dir.exists():
             return False
         
-        # Check for digit templates
+        # Check for all digit templates (0-9)
         digit_dir = template_dir / "digits"
-        if digit_dir.exists() and any(digit_dir.glob("*.png")):
-            return True
+        if not digit_dir.exists():
+            return False
+        digits_found = len(list(digit_dir.glob("*.png")))
         
-        # Check for piece templates
+        # Check for all piece templates (12 pieces)
         piece_dir = template_dir / "pieces"
-        if piece_dir.exists() and any(piece_dir.glob("*.png")):
-            return True
+        if not piece_dir.exists():
+            return False
+        pieces_found = len(list(piece_dir.glob("*.png")))
         
-        return False
+        # Require at least partial templates
+        return digits_found >= 1 and pieces_found >= 12
+    
+    def has_complete_templates(self) -> bool:
+        """
+        Check if we have COMPLETE templates (all digits and all pieces).
+        
+        Returns:
+            True only if all 10 digits and 12 pieces are present.
+        """
+        template_dir = self.get_template_dir()
+        if not template_dir.exists():
+            return False
+        
+        digit_dir = template_dir / "digits"
+        piece_dir = template_dir / "pieces"
+        
+        digits_found = len(list(digit_dir.glob("*.png"))) if digit_dir.exists() else 0
+        pieces_found = len(list(piece_dir.glob("*.png"))) if piece_dir.exists() else 0
+        
+        return digits_found >= 10 and pieces_found >= 12
     
     def get_template_status(self) -> Dict:
         """
-        Get detailed status of template extraction.
+        Get detailed status of template extraction for the current profile.
         
         Returns:
             Dictionary with extraction progress
@@ -273,36 +393,68 @@ class ChessConfig:
             except Exception:
                 pass
         
-        return {
+        # Build status from what files actually exist
+        status = {
             "digits": {str(i): False for i in range(10)},
             "pieces": {p: False for p in "RNBQKPrnbqkp"},
             "results": {"white_win": False, "black_win": False, "draw": False}
         }
+        
+        # Check actual files
+        digit_dir = template_dir / "digits"
+        if digit_dir.exists():
+            for i in range(10):
+                if (digit_dir / f"{i}.png").exists():
+                    status["digits"][str(i)] = True
+        
+        piece_dir = template_dir / "pieces"
+        if piece_dir.exists():
+            piece_files = {
+                'R': 'w_rook.png', 'N': 'w_knight.png', 'B': 'w_bishop.png',
+                'Q': 'w_queen.png', 'K': 'w_king.png', 'P': 'w_pawn.png',
+                'r': 'b_rook.png', 'n': 'b_knight.png', 'b': 'b_bishop.png',
+                'q': 'b_queen.png', 'k': 'b_king.png', 'p': 'b_pawn.png'
+            }
+            for piece, filename in piece_files.items():
+                if (piece_dir / filename).exists():
+                    status["pieces"][piece] = True
+        
+        return status
     
     def print_status(self):
         """Print current configuration status."""
+        profile = self.get_profile_name()
+        
         if self.using_fallback:
             print("📍 Using fallback coordinates (no config file found)")
             print("   Run 'python -m auto_calibration.calibrator --live' to calibrate")
         else:
             info = self.get_calibration_info()
             if info:
-                print("📍 Using auto-calibrated coordinates")
+                profile_str = f" (profile: {profile})" if profile else ""
+                print(f"📍 Using auto-calibrated coordinates{profile_str}")
                 print(f"   Calibrated: {info.get('timestamp', 'Unknown')}")
                 print(f"   Confidence: {info.get('board_confidence', 0):.1%}")
                 if 'clock_states_detected' in info:
                     print(f"   Clock states: {info['clock_states_detected']}")
         
         # Template status
+        template_dir = self.get_template_dir()
         if self.has_calibrated_templates():
             status = self.get_template_status()
             digits_done = sum(1 for v in status.get("digits", {}).values() if v)
             pieces_done = sum(1 for v in status.get("pieces", {}).values() if v)
             results_done = sum(1 for v in status.get("results", {}).values() if v)
-            print(f"📋 Templates: {digits_done}/10 digits, {pieces_done}/12 pieces, {results_done}/3 results")
+            print(f"📋 Templates ({template_dir.name}): {digits_done}/10 digits, {pieces_done}/12 pieces, {results_done}/3 results")
         else:
-            print("📋 No calibrated templates found")
-            print("   Run 'python -m auto_calibration.shadow_calibrator' during gameplay")
+            print(f"📋 No calibrated templates found in {template_dir}")
+            print("   Run 'python -m auto_calibration.offline_fitter --dir <screenshots_dir> --profile <name> --extract-all'")
+        
+        # Colour scheme status
+        if self.config and 'colour_scheme' in self.config:
+            print("🎨 Colour scheme: Calibrated")
+        else:
+            print("🎨 Colour scheme: Using fallback (may cause detection issues)")
 
 
 def save_config(config_data: Dict, output_path: Optional[str] = None) -> str:
@@ -362,16 +514,65 @@ def _convert_to_native_types(obj: Any) -> Any:
 _global_config: Optional[ChessConfig] = None
 
 
+def _resolve_selected_config_file() -> str:
+    """
+    Resolve the selected config file from environment variables.
+
+    Returns:
+        A config file string suitable for ChessConfig(config_file=...).
+        This can be a filename, relative path, or absolute path.
+    """
+    explicit = os.getenv(ChessConfig.ENV_CALIBRATION_FILE)
+    if explicit:
+        return explicit
+
+    profile = os.getenv(ChessConfig.ENV_CALIBRATION_PROFILE)
+    if profile:
+        # Stored under auto_calibration/calibrations/{profile}.json by default.
+        return str(Path("calibrations") / f"{profile}.json")
+
+    return ChessConfig.DEFAULT_CONFIG_FILE
+
+
+def select_config(*, config_file: Optional[str] = None, profile: Optional[str] = None) -> ChessConfig:
+    """
+    Select which calibration config file should be used globally.
+
+    This is mainly a convenience wrapper around environment-variable selection,
+    and it forces the global config singleton to reload.
+    """
+    if config_file and profile:
+        raise ValueError("Provide only one of config_file or profile")
+
+    # Update env vars so downstream imports (e.g. chessimage/image_scrape_utils.py)
+    # can pick the selection up at import-time.
+    if config_file is not None:
+        os.environ[ChessConfig.ENV_CALIBRATION_FILE] = config_file
+        os.environ.pop(ChessConfig.ENV_CALIBRATION_PROFILE, None)
+    elif profile is not None:
+        os.environ[ChessConfig.ENV_CALIBRATION_PROFILE] = profile
+        os.environ.pop(ChessConfig.ENV_CALIBRATION_FILE, None)
+    else:
+        # Reset to default behaviour
+        os.environ.pop(ChessConfig.ENV_CALIBRATION_FILE, None)
+        os.environ.pop(ChessConfig.ENV_CALIBRATION_PROFILE, None)
+
+    return reload_config()
+
+
 def get_config() -> ChessConfig:
     """Get the global configuration instance."""
     global _global_config
-    if _global_config is None:
-        _global_config = ChessConfig()
+    desired_file = _resolve_selected_config_file()
+
+    # Recreate the singleton if it hasn't been created yet, or if selection changed.
+    if _global_config is None or getattr(_global_config, "config_file", None) != desired_file:
+        _global_config = ChessConfig(config_file=desired_file)
     return _global_config
 
 
 def reload_config() -> ChessConfig:
     """Reload the global configuration from file."""
     global _global_config
-    _global_config = ChessConfig()
+    _global_config = ChessConfig(config_file=_resolve_selected_config_file())
     return _global_config
