@@ -679,36 +679,39 @@ def _build_highlight_colours() -> np.ndarray:
     if USE_CONFIG and chess_config is not None:
         scheme = chess_config.get_colour_scheme()
         
-        # Add highlight colours from the scheme
-        for key in ['highlight_light', 'highlight_dark', 'premove_light', 'premove_dark']:
+        # Add ONLY last move highlight colours (premoves can cause false positives)
+        for key in ['highlight_light', 'highlight_dark']:
             if key in scheme:
                 base = scheme[key]
                 colours.append(base)
-                # Add variants for tolerance
-                for shift in [-5, 5, -10, 10]:
+                # Add slight variants for tolerance
+                for shift in [-3, 3, -6, 6]:
                     variant = [max(0, min(255, c + shift)) for c in base]
                     colours.append(variant)
     
-    # Always include fallback colours for robustness
+    # Always include fallback last-move highlights for robustness
     fallback_colours = [
         # 4K Lichess green theme - last move highlights
         [144, 151, 100],  # dark square highlight
         [138, 147, 94],   # dark square highlight (variant)
         [205, 209, 177],  # light square highlight
         [189, 207, 174],  # light square highlight (variant)
-        # Premove highlight colours (greyish tint)
-        [147, 140, 135],  # premove on dark square
-        [170, 165, 160],  # premove on light square (estimated)
-        # Original 1080p colours (keep for backwards compatibility)
+        # Original 1080p colours (teal/blue)
         [59, 155, 143],
         [145, 211, 205],
         [60, 92, 95],
-        [133, 140, 147],
     ]
     
     colours.extend(fallback_colours)
     
     return np.array(colours, dtype=np.int16)
+
+
+# Exported function to allow refreshing highlight colours if config changes
+def refresh_highlight_colours():
+    """Update the global highlight colours array."""
+    global _HIGHLIGHT_COLOURS
+    _HIGHLIGHT_COLOURS = _build_highlight_colours()
 
 
 # Pre-computed highlight colours as a single numpy array for vectorized comparison
@@ -725,18 +728,43 @@ def _detect_highlights_at_offset(board_img, offset):
     # Compute sample coordinates for all 64 squares
     cols = np.arange(8)
     rows = np.arange(8)
-    sample_x = np.clip((cols * STEP + offset).astype(np.int32), 0, w - 1)
-    sample_y = np.clip((rows * STEP + offset).astype(np.int32), 0, h - 1)
     
-    # Extract all 64 pixels at once
-    yy, xx = np.meshgrid(sample_y, sample_x, indexing='ij')
-    pixels = board_img[yy, xx].reshape(64, 3).astype(np.int16)
+    # Sample at 9 different locations within each square for robustness
+    # (Center, 4 corners, and 4 mid-edges)
+    offsets = [
+        (offset, offset), # top-left
+        (STEP - offset, offset), # top-right
+        (offset, STEP - offset), # bottom-left
+        (STEP - offset, STEP - offset), # bottom-right
+        (STEP // 2, STEP // 2), # center
+        (STEP // 2, offset), # top-middle
+        (STEP // 2, STEP - offset), # bottom-middle
+        (offset, STEP // 2), # left-middle
+        (STEP - offset, STEP // 2) # right-middle
+    ]
     
-    # Vectorized comparison: (64, num_colours, 3)
-    diff = np.abs(pixels[:, np.newaxis, :] - _HIGHLIGHT_COLOURS[np.newaxis, :, :])
+    combined_res = None
     
-    # Check tolerance and return boolean mask
-    return np.any(np.all(diff <= _HIGHLIGHT_TOLERANCE, axis=2), axis=1)
+    for ox, oy in offsets:
+        sample_x = np.clip((cols * STEP + ox).astype(np.int32), 0, w - 1)
+        sample_y = np.clip((rows * STEP + oy).astype(np.int32), 0, h - 1)
+        
+        # Extract all 64 pixels at once
+        yy, xx = np.meshgrid(sample_y, sample_x, indexing='ij')
+        pixels = board_img[yy, xx].reshape(64, 3).astype(np.int16)
+        
+        # Vectorized comparison: (64, num_colours, 3)
+        diff = np.abs(pixels[:, np.newaxis, :] - _HIGHLIGHT_COLOURS[np.newaxis, :, :])
+        
+        # Check tolerance and return boolean mask
+        res = np.any(np.all(diff <= _HIGHLIGHT_TOLERANCE, axis=2), axis=1)
+        
+        if combined_res is None:
+            combined_res = res
+        else:
+            combined_res = combined_res | res
+            
+    return combined_res
 
 
 def detect_last_move_from_img(board_img):
@@ -745,24 +773,11 @@ def detect_last_move_from_img(board_img):
     
     Returns list of square indices (0-63) that are highlighted.
     
-    Optimized: Uses vectorized operations. Samples at multiple offsets
-    only if initial detection returns unusual results (0 or 1 square).
+    Optimized: Uses vectorized operations. Samples at multiple points
+    within each square for robustness against piece graphics.
     """
-    # Fast path: try offset 10 first (usually sufficient)
+    # Sample at offset 10 (10 pixels from edges/center)
     is_highlighted = _detect_highlights_at_offset(board_img, 10)
-    count = np.sum(is_highlighted)
-    
-    # If we found 2+ squares, we're done (normal case)
-    if count >= 2:
-        return np.where(is_highlighted)[0].tolist()
-    
-    # Fallback: try additional offsets and merge results
-    # This handles cases where offset 10 lands on piece graphics
-    for offset in [5, 15, 20]:
-        more = _detect_highlights_at_offset(board_img, offset)
-        is_highlighted = is_highlighted | more
-        if np.sum(is_highlighted) >= 2:
-            break
     
     return np.where(is_highlighted)[0].tolist()
 

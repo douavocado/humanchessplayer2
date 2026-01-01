@@ -13,24 +13,35 @@ from typing import Dict, List, Optional, Tuple
 from collections import Counter
 
 
-def extract_colour_scheme(board_img: np.ndarray, step: Optional[int] = None) -> Dict:
+def extract_colour_scheme(
+    board_img: np.ndarray, 
+    step: Optional[int] = None, 
+    fen: Optional[str] = None, 
+    bottom: str = 'w',
+    highlighted_squares: Optional[List[int]] = None
+) -> Dict:
     """
     Extract the colour scheme from a chess board image.
     
     Samples colours from known empty squares on a starting position to get
     accurate light and dark square colours. Also detects highlight colours
-    by looking for deviations from the base colours.
+    by looking for deviations from the base colours, or by using provided
+    ground truth highlighted squares.
     
     Args:
         board_img: BGR image of the chess board (should be 8x8 squares).
         step: Size of one square in pixels. If None, calculated from image.
+        fen: Optional FEN to identify empty squares for more robust extraction.
+        bottom: 'w' if white is at the bottom, 'b' if black. Used with fen.
+        highlighted_squares: Optional list of square indices (0-63) that are 
+                            known to be highlighted (ground truth).
     
     Returns:
         Dictionary with colour scheme in BGR format:
         - light_square: [B, G, R]
         - dark_square: [B, G, R]
-        - highlight_light: [B, G, R] (estimated)
-        - highlight_dark: [B, G, R] (estimated)
+        - highlight_light: [B, G, R] (extracted or estimated)
+        - highlight_dark: [B, G, R] (extracted or estimated)
         - premove_light: [B, G, R] (estimated)
         - premove_dark: [B, G, R] (estimated)
     """
@@ -41,63 +52,164 @@ def extract_colour_scheme(board_img: np.ndarray, step: Optional[int] = None) -> 
     if step is None:
         step = w // 8
     
-    # Define which squares are empty in starting position
-    # Rows 2-5 (indices 2, 3, 4, 5) are empty
-    # Light squares: (row + col) % 2 == 1 when viewing from white's perspective
-    # Dark squares: (row + col) % 2 == 0
-    
+    # 1. Extract base square colours
     light_samples = []
     dark_samples = []
     
-    for row in range(2, 6):  # Empty rows
-        for col in range(8):
-            # Sample from centre of square to avoid edges
-            cx = col * step + step // 2
-            cy = row * step + step // 2
-            
-            # Sample a small region around the centre
-            margin = step // 6
-            region = board_img[cy - margin:cy + margin, cx - margin:cx + margin]
-            
-            if region.size > 0:
-                avg_colour = region.mean(axis=(0, 1)).astype(int).tolist()
-                
-                # Determine if light or dark square
-                # In image coordinates: row 0 is at top (rank 8), col 0 is left (a-file)
-                # a8 (row=0, col=0) is a light square
-                # So (row + col) % 2 == 0 means LIGHT square
-                is_light = (row + col) % 2 == 0
-                
-                if is_light:
-                    light_samples.append(avg_colour)
-                else:
-                    dark_samples.append(avg_colour)
+    # helper to convert square index to image (row, col)
+    def sq_to_img_coords(sq):
+        if bottom == 'w':
+            row = 7 - (sq // 8)
+            col = sq % 8
+        else:
+            row = sq // 8
+            col = 7 - (sq % 8)
+        return row, col
+
+    # If FEN is provided, we can use all empty squares
+    if fen:
+        import chess
+        try:
+            board = chess.Board(fen)
+            for sq in range(64):
+                # Don't sample from squares we know are highlighted
+                if highlighted_squares and sq in highlighted_squares:
+                    continue
+                    
+                if board.piece_at(sq) is None:
+                    row, col = sq_to_img_coords(sq)
+                    
+                    cx = col * step + step // 2
+                    cy = row * step + step // 2
+                    
+                    margin = step // 6
+                    region = board_img[cy - margin:cy + margin, cx - margin:cx + margin]
+                    
+                    if region.size > 0:
+                        avg_colour = region.mean(axis=(0, 1)).astype(int).tolist()
+                        is_light = (row + col) % 2 == 0
+                        if is_light:
+                            light_samples.append(avg_colour)
+                        else:
+                            dark_samples.append(avg_colour)
+        except Exception:
+            pass
+
+    # If no FEN or FEN sampling failed, fall back to standard start position sampling
+    if not light_samples or not dark_samples:
+        for row in range(2, 6):  # Empty rows in start pos
+            for col in range(8):
+                cx = col * step + step // 2
+                cy = row * step + step // 2
+                margin = step // 6
+                region = board_img[cy - margin:cy + margin, cx - margin:cx + margin]
+                if region.size > 0:
+                    avg_colour = region.mean(axis=(0, 1)).astype(int).tolist()
+                    is_light = (row + col) % 2 == 0
+                    if is_light:
+                        light_samples.append(avg_colour)
+                    else:
+                        dark_samples.append(avg_colour)
     
     if not light_samples or not dark_samples:
-        return {}
+        # Last resort: adaptive detection
+        adaptive = detect_board_colours_adaptive(board_img)
+        if adaptive:
+            light_square = adaptive['light_square']
+            dark_square = adaptive['dark_square']
+        else:
+            return {}
+    else:
+        # Average the samples
+        light_square = np.mean(light_samples, axis=0).astype(int).tolist()
+        dark_square = np.mean(dark_samples, axis=0).astype(int).tolist()
     
-    # Average the samples
-    light_square = np.mean(light_samples, axis=0).astype(int).tolist()
-    dark_square = np.mean(dark_samples, axis=0).astype(int).tolist()
+    # 2. Extract highlight colours
+    highlight_light = None
+    highlight_dark = None
     
-    # Estimate highlight colours
-    # Lichess highlights shift colours towards yellow/green
-    # We approximate by adjusting the base colours
-    highlight_light = _estimate_highlight_colour(light_square, is_light=True)
-    highlight_dark = _estimate_highlight_colour(dark_square, is_light=False)
-    
+    # A. If we have ground truth highlighted squares, use them directly
+    if highlighted_squares:
+        h_light_samples = []
+        h_dark_samples = []
+        
+        for sq in highlighted_squares:
+            row, col = sq_to_img_coords(sq)
+            
+            # Sample near corners to avoid pieces in the middle
+            # (Top-left, top-right, bottom-left, bottom-right)
+            margin = step // 8
+            corner_offsets = [
+                (margin, margin),
+                (step - margin, margin),
+                (margin, step - margin),
+                (step - margin, step - margin)
+            ]
+            
+            square_samples = []
+            for ox, oy in corner_offsets:
+                px = col * step + ox
+                py = row * step + oy
+                # Sample a small region around each corner
+                r_margin = 2
+                region = board_img[max(0, py-r_margin):min(board_img.shape[0], py+r_margin), 
+                                   max(0, px-r_margin):min(board_img.shape[1], px+r_margin)]
+                if region.size > 0:
+                    square_samples.append(region.mean(axis=(0, 1)))
+            
+            if square_samples:
+                # Use the sample that is MOST likely to be a highlight (not a piece)
+                # For Lichess highlights, this is usually the most colorful/saturated or simply the brightest
+                # for light squares, darkest for dark squares.
+                # Let's just average them for now, but corners are much safer than center.
+                avg_colour = np.mean(square_samples, axis=0).astype(int).tolist()
+                is_light = (row + col) % 2 == 0
+                if is_light:
+                    h_light_samples.append(avg_colour)
+                else:
+                    h_dark_samples.append(avg_colour)
+        
+        if h_light_samples:
+            highlight_light = np.mean(h_light_samples, axis=0).astype(int).tolist()
+        if h_dark_samples:
+            highlight_dark = np.mean(h_dark_samples, axis=0).astype(int).tolist()
+
+    # B. If no ground truth, look for highlight candidates in empty squares (outliers)
+    if highlight_light is None or highlight_dark is None:
+        def find_best_highlight(samples, base_col):
+            if not samples: return None
+            base = np.array(base_col)
+            dists = [np.sqrt(np.sum((np.array(s) - base)**2)) for s in samples]
+            candidates = [(s, d) for s, d in zip(samples, dists) if d > 25]
+            if not candidates: return None
+            candidates.sort(key=lambda x: x[1], reverse=True)
+            for s, d in candidates:
+                if s[0] < base_col[0] - 5: # Blue should decrease
+                    return s
+            return candidates[0][0]
+
+        if highlight_light is None:
+            highlight_light = find_best_highlight(light_samples, light_square)
+        if highlight_dark is None:
+            highlight_dark = find_best_highlight(dark_samples, dark_square)
+
     # Estimate premove colours (greyish tint)
     premove_light = _estimate_premove_colour(light_square)
     premove_dark = _estimate_premove_colour(dark_square)
     
-    return {
+    res = {
         'light_square': light_square,
         'dark_square': dark_square,
-        'highlight_light': highlight_light,
-        'highlight_dark': highlight_dark,
         'premove_light': premove_light,
         'premove_dark': premove_dark,
     }
+    
+    if highlight_light is not None:
+        res['highlight_light'] = highlight_light
+    if highlight_dark is not None:
+        res['highlight_dark'] = highlight_dark
+        
+    return res
 
 
 def _estimate_highlight_colour(base_colour: List[int], is_light: bool) -> List[int]:

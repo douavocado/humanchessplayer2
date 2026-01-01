@@ -427,7 +427,7 @@ class ChessConfig:
         
         if self.using_fallback:
             print("📍 Using fallback coordinates (no config file found)")
-            print("   Run 'python -m auto_calibration.calibrator --live' to calibrate")
+            print("   Run 'python -m auto_calibration.offline_fitter --dir <path>' to calibrate")
         else:
             info = self.get_calibration_info()
             if info:

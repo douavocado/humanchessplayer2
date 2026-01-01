@@ -356,11 +356,12 @@ class OfflineFitter:
           Line 2: top:SECONDS
           Line 3: bottom:SECONDS
           Line 4: result:white_win|black_win|draw (optional)
+          Line 5: move:e2e4 (optional)
         """
         path = Path(screenshot_path)
         gt_file = path.parent / f"{path.stem}_fen.txt"
         
-        gt = {'fen': None, 'top_time': None, 'bottom_time': None, 'result': None}
+        gt = {'fen': None, 'top_time': None, 'bottom_time': None, 'result': None, 'move': None, 'side': None}
         
         if gt_file.exists():
             try:
@@ -376,6 +377,10 @@ class OfflineFitter:
                         gt['bottom_time'] = int(line.split(':')[1].strip())
                     elif line.startswith('result:'):
                         gt['result'] = line.split(':')[1].strip()
+                    elif line.startswith('move:'):
+                        gt['move'] = line.split(':')[1].strip()
+                    elif line.startswith('side:'):
+                        gt['side'] = line.split(':')[1].strip()
             except Exception as e:
                 print(f"  Warning: Error loading ground truth from {gt_file.name}: {e}")
                 
@@ -594,7 +599,9 @@ class OfflineFitter:
         piece_instances = {p: [] for p in "RNBQKPrnbqkp"}
         digit_instances = {str(i): [] for i in range(10)}
         result_instances = {'white_win': [], 'black_win': [], 'draw': []}
-        colour_scheme = None
+        
+        # Buffer for colour schemes from different frames
+        colour_schemes = []
         
         for detection in detections:
             image = detection.get('image')
@@ -606,6 +613,7 @@ class OfflineFitter:
             # Load ground truth
             gt = self._load_ground_truth(path)
             fen = gt.get('fen')
+            gt_move = gt.get('move')
             state_hint = detection.get('state_hint', '')
             
             # Extract board region
@@ -614,12 +622,8 @@ class OfflineFitter:
                 continue
             
             # 1. Collect Piece Instances
+            bottom = gt.get('side', 'w')
             if fen:
-                # Heuristic for bottom colour
-                bottom = 'w'
-                if 'bottom_b' in path.lower() or 'black_bottom' in path.lower():
-                    bottom = 'b'
-                
                 # Extract all pieces in this board (returns one per type found)
                 pieces = self.template_extractor.extract_pieces_from_fen(board_img, fen, bottom=bottom)
                 for piece, template in pieces.items():
@@ -675,11 +679,53 @@ class OfflineFitter:
                     result_instances[result_type].append(res_img)
             
             # 4. Extract Colour Scheme
-            if colour_scheme is None:
-                if 'start' in state_hint:
-                    colour_scheme = extract_colour_scheme(board_img, step=step)
-                    if colour_scheme:
-                        print(f"  ✓ Colour scheme extracted")
+            # Use FEN and ground truth move if available for precise sampling
+            highlighted_squares = None
+            if gt_move:
+                import chess
+                try:
+                    move = chess.Move.from_uci(gt_move)
+                    highlighted_squares = [move.from_square, move.to_square]
+                except Exception:
+                    pass
+            
+            current_scheme = extract_colour_scheme(
+                board_img, step=step, fen=fen, bottom=bottom, 
+                highlighted_squares=highlighted_squares
+            )
+            if current_scheme:
+                colour_schemes.append(current_scheme)
+
+        # --- Finalize Colour Scheme (Average across frames) ---
+        if colour_schemes:
+            final_scheme = {}
+            
+            # Base colours: average all
+            for key in ['light_square', 'dark_square', 'premove_light', 'premove_dark']:
+                vals = [s[key] for s in colour_schemes if key in s]
+                if vals:
+                    final_scheme[key] = np.mean(vals, axis=0).astype(int).tolist()
+            
+            # Highlights: prefer extracted over estimated
+            from .colour_extractor import _estimate_highlight_colour
+            for key in ['highlight_light', 'highlight_dark']:
+                # Find "real" highlights (those that were actually extracted)
+                real_highlights = [s[key] for s in colour_schemes if key in s]
+                
+                if real_highlights:
+                    final_scheme[key] = np.mean(real_highlights, axis=0).astype(int).tolist()
+                    print(f"  ✓ {key} extracted from {len(real_highlights)} frames")
+                else:
+                    # Fallback to estimate based on the finalized base colour
+                    is_light = (key == 'highlight_light')
+                    base_colour = final_scheme['light_square'] if is_light else final_scheme['dark_square']
+                    final_scheme[key] = _estimate_highlight_colour(base_colour, is_light=is_light)
+                    print(f"  ⚠ {key} estimated (no highlights found in any frame)")
+            
+            config['colour_scheme'] = final_scheme
+            print(f"  ✓ Colour scheme finalized (from {len(colour_schemes)} frames)")
+        else:
+            print("  ⚠ Could not extract colour scheme, will use fallback")
 
         # --- Finalize Piece Templates (use first clean instance) ---
         pieces_extracted = 0
@@ -749,12 +795,6 @@ class OfflineFitter:
             
             if self.template_extractor.save_result_template(res_type, avg_template, overwrite=True):
                 results_extracted += 1
-        
-        # Add colour scheme to config
-        if colour_scheme:
-            config['colour_scheme'] = colour_scheme
-        else:
-            print("  ⚠ Could not extract colour scheme, will use fallback")
         
         # Update template info
         if 'template_info' not in config:
@@ -1026,7 +1066,8 @@ def fit_from_screenshots(
 def fit_from_single(screenshot_path: str,
                    state_hint: Optional[str] = None,
                    save_to_config: bool = True,
-                   output_path: Optional[str] = None) -> Optional[Dict]:
+                   output_path: Optional[str] = None,
+                   visualise: bool = True) -> Optional[Dict]:
     """
     Convenience function to fit from single screenshot.
     
@@ -1034,12 +1075,14 @@ def fit_from_single(screenshot_path: str,
         screenshot_path: Path to screenshot.
         state_hint: Optional state hint.
         save_to_config: Whether to save result to chess_config.json.
+        output_path: Optional output file path.
+        visualise: Whether to create debug visualisations.
     
     Returns:
         Configuration dictionary, or None if failed.
     """
     fitter = OfflineFitter()
-    config = fitter.fit_from_single_screenshot(screenshot_path, state_hint)
+    config = fitter.fit_from_single_screenshot(screenshot_path, state_hint, visualise=visualise)
     
     if config and save_to_config:
         saved_path = save_config(config, output_path=output_path)
@@ -1060,6 +1103,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-save", action="store_true", help="Don't save to config")
     parser.add_argument("--extract-all", action="store_true",
                        help="Extract templates and colours in addition to coordinates")
+    parser.add_argument("--visualise", "--visualize", action="store_true",
+                       help="Save debug visualisations in calibration_outputs/")
 
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument("--profile", type=str,
@@ -1082,14 +1127,21 @@ if __name__ == "__main__":
     if args.file:
         if not args.state:
             parser.error("--state is required when using --file")
-        fit_from_single(args.file, args.state, not args.no_save, output_path=resolved_output)
+        fit_from_single(
+            args.file, 
+            args.state, 
+            not args.no_save, 
+            output_path=resolved_output,
+            visualise=args.visualise
+        )
     elif args.dir:
         fit_from_screenshots(
             args.dir,
             not args.no_save,
             output_path=resolved_output,
             profile_name=profile_name,
-            extract_all=args.extract_all
+            extract_all=args.extract_all,
+            visualise=args.visualise
         )
     else:
         # Use default screenshots directory
@@ -1098,5 +1150,6 @@ if __name__ == "__main__":
             not args.no_save,
             output_path=resolved_output,
             profile_name=profile_name,
-            extract_all=args.extract_all
+            extract_all=args.extract_all,
+            visualise=args.visualise
         )

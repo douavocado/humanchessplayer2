@@ -17,6 +17,7 @@ Usage:
 import argparse
 import os
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -47,9 +48,9 @@ def extract_state_from_filename(filename: str) -> Optional[str]:
 def load_ground_truth(screenshot_path: Path) -> dict:
     """
     Load ground truth data from corresponding _fen.txt file.
-    Returns dict with 'fen', 'top_time', 'bottom_time', and 'result'.
+    Returns dict with 'fen', 'top_time', 'bottom_time', 'result', and 'side'.
     """
-    res = {'fen': None, 'top_time': None, 'bottom_time': None, 'result': None}
+    res = {'fen': None, 'top_time': None, 'bottom_time': None, 'result': None, 'side': None}
     fen_file = screenshot_path.parent / f"{screenshot_path.stem}_fen.txt"
     if fen_file.exists():
         content = fen_file.read_text().strip()
@@ -66,6 +67,8 @@ def load_ground_truth(screenshot_path: Path) -> dict:
                     except: pass
                 elif line.startswith('result:'):
                     res['result'] = line.split(':')[1].strip()
+                elif line.startswith('side:'):
+                    res['side'] = line.split(':')[1].strip()
     return res
 
 
@@ -76,7 +79,7 @@ def extract_board_position(fen: str) -> str:
 
 def compare_board_positions(detected: str, ground_truth: str) -> dict:
     """
-    Compare two board positions (FEN board part only).
+    Compare two FENs (board part and turn).
     Returns dict with match statistics.
     """
     import chess
@@ -84,11 +87,24 @@ def compare_board_positions(detected: str, ground_truth: str) -> dict:
     detected_pos = extract_board_position(detected)
     gt_pos = extract_board_position(ground_truth)
     
+    detected_parts = detected.split()
+    gt_parts = ground_truth.split()
+    
+    detected_turn = detected_parts[1] if len(detected_parts) > 1 else 'w'
+    gt_turn = gt_parts[1] if len(gt_parts) > 1 else 'w'
+    
     try:
         detected_board = chess.Board(detected_pos + " w - - 0 1")
         gt_board = chess.Board(gt_pos + " w - - 0 1")
     except Exception:
-        return {'valid': False, 'correct': 0, 'total': 64, 'accuracy': 0.0, 'errors': []}
+        return {
+            'valid': False, 
+            'correct': 0, 
+            'total': 64, 
+            'accuracy': 0.0, 
+            'errors': [],
+            'turn_correct': False
+        }
     
     correct = 0
     errors = []
@@ -115,7 +131,8 @@ def compare_board_positions(detected: str, ground_truth: str) -> dict:
         'correct': correct,
         'total': 64,
         'accuracy': correct / 64 * 100,
-        'errors': errors
+        'errors': errors,
+        'turn_correct': (detected_turn == gt_turn)
     }
 
 
@@ -129,14 +146,21 @@ def load_dependencies(profile: Optional[str]):
     from chessimage.image_scrape_utils import (
         get_fen_from_image, read_clock, PIECE_TEMPLATES, STEP, PIECE_STEP,
         remove_background_colours, template_match_f, w_rook, INDEX_MAPPER,
-        TEMPLATES, multitemplate_match_f, compare_result_images
+        TEMPLATES, multitemplate_match_f, compare_result_images,
+        check_turn_from_last_moved, detect_last_move_from_img, refresh_highlight_colours
     )
     import cv2
     import numpy as np
+    import chess
+    
+    # Refresh highlight colours after setting profile env
+    refresh_highlight_colours()
+    
     return (ChessConfig, load_image, get_fen_from_image, read_clock,
             PIECE_TEMPLATES, STEP, PIECE_STEP, remove_background_colours,
             template_match_f, w_rook, INDEX_MAPPER, TEMPLATES,
-            multitemplate_match_f, compare_result_images, cv2, np)
+            multitemplate_match_f, compare_result_images,
+            check_turn_from_last_moved, detect_last_move_from_img, cv2, np, chess)
 
 
 def iter_screenshots(root: Path) -> List[Path]:
@@ -152,8 +176,9 @@ def main():
                         help="Calibration profile name (e.g., laptop).")
     parser.add_argument("--bottom", "-b", type=str, default="auto", choices=["w", "b", "auto"],
                         help="Bottom colour for FEN extraction. 'auto' detects from bottom-left corner.")
-    parser.add_argument("--fast", action="store_true",
-                        help="Use fast_mode for FEN extraction.")
+    parser.add_argument("--no-fast", dest="fast", action="store_false",
+                        help="Disable fast_mode for FEN extraction (production uses fast_mode=True).")
+    parser.set_defaults(fast=True)
     parser.add_argument("--debug", "-d", action="store_true",
                         help="Save debug images showing board crop and template info.")
     parser.add_argument("--create-new", action="store_true",
@@ -169,7 +194,8 @@ def main():
     (ChessConfig, load_image, get_fen_from_image, read_clock,
      PIECE_TEMPLATES, STEP, PIECE_STEP, remove_background_colours,
      template_match_f, w_rook, INDEX_MAPPER, TEMPLATES,
-     multitemplate_match_f, compare_result_images, cv2, np) = load_dependencies(args.profile)
+     multitemplate_match_f, compare_result_images,
+     check_turn_from_last_moved, detect_last_move_from_img, cv2, np, chess) = load_dependencies(args.profile)
     
     # Load result templates if profile is provided
     result_templates = None
@@ -453,6 +479,13 @@ def main():
     all_comparisons = []
     clock_results = {'bottom': 0, 'top': 0, 'total': 0}
     result_stats = {'correct': 0, 'total_with_gt': 0, 'detected_total': 0}
+    turn_stats = {'correct': 0, 'total': 0}
+    side_stats = {'correct': 0, 'total': 0}
+    
+    # Performance profiling
+    prof_fen = []
+    prof_clock = []
+    prof_turn = []
     
     for shot in shots:
         state_hint = extract_state_from_filename(shot.name) or "play"
@@ -496,42 +529,143 @@ def main():
         gt_fen = gt_data['fen']
         gt_top = gt_data['top_time']
         gt_bot = gt_data['bottom_time']
+        gt_side = gt_data['side']
 
         # Determine bottom colour
-        if args.bottom == 'auto' and gt_fen:
-            # Try both orientations and pick the one that matches ground truth best
-            fen_w = get_fen_from_image(board_img, bottom='w', fast_mode=args.fast)
-            fen_b = get_fen_from_image(board_img, bottom='b', fast_mode=args.fast)
-            
-            comp_w = compare_board_positions(fen_w, gt_fen)
-            comp_b = compare_board_positions(fen_b, gt_fen)
-            
-            # Debug: show both orientations
-            if args.debug:
-                print(f"    DEBUG: bottom='w' -> {comp_w['accuracy']:.1f}% ({comp_w['correct']}/64)")
-                print(f"    DEBUG: bottom='b' -> {comp_b['accuracy']:.1f}% ({comp_b['correct']}/64)")
-            
-            if comp_w['accuracy'] >= comp_b['accuracy']:
-                fen = fen_w
-                detected_bottom = 'w'
-                comparison = comp_w
+        if args.bottom == 'auto' and (gt_side or gt_fen):
+            if gt_side:
+                # If ground truth side is provided, use it directly
+                detected_bottom = gt_side
+                
+                t0 = time.time()
+                fen = get_fen_from_image(board_img, bottom=detected_bottom, fast_mode=args.fast)
+                prof_fen.append((time.time() - t0) * 1000)
+                
+                t0 = time.time()
+                check_turn_res = check_turn_from_last_moved(fen, board_img, detected_bottom)
+                prof_turn.append((time.time() - t0) * 1000)
+                
+                if check_turn_res is False:
+                    b = chess.Board(fen)
+                    b.turn = chess.BLACK
+                    fen = b.fen()
+                
+                comparison = None
+                if gt_fen:
+                    comparison = compare_board_positions(fen, gt_fen)
+                
+                if args.debug:
+                    print(f"    DEBUG: Using Ground Truth Side: {detected_bottom}")
+                    if comparison:
+                        print(f"    DEBUG: FEN Accuracy with GT side: {comparison['accuracy']:.1f}%")
             else:
-                fen = fen_b
-                detected_bottom = 'b'
-                comparison = comp_b
+                # Try both orientations and pick the one that matches ground truth best
+                # Orientation 'w'
+                t0 = time.time()
+                fen_w = get_fen_from_image(board_img, bottom='w', fast_mode=args.fast)
+                prof_fen.append((time.time() - t0) * 1000)
+                
+                t0 = time.time()
+                check_turn_res_w = check_turn_from_last_moved(fen_w, board_img, 'w')
+                prof_turn.append((time.time() - t0) * 1000)
+                
+                if check_turn_res_w is False:
+                    b = chess.Board(fen_w)
+                    b.turn = chess.BLACK
+                    fen_w = b.fen()
+                
+                # Orientation 'b'
+                t0 = time.time()
+                fen_b = get_fen_from_image(board_img, bottom='b', fast_mode=args.fast)
+                prof_fen.append((time.time() - t0) * 1000)
+                
+                t0 = time.time()
+                check_turn_res_b = check_turn_from_last_moved(fen_b, board_img, 'b')
+                prof_turn.append((time.time() - t0) * 1000)
+                
+                if check_turn_res_b is False:
+                    b = chess.Board(fen_b)
+                    b.turn = chess.BLACK
+                    fen_b = b.fen()
+                
+                comp_w = compare_board_positions(fen_w, gt_fen)
+                comp_b = compare_board_positions(fen_b, gt_fen)
+                
+                # Debug: show both orientations
+                if args.debug:
+                    def get_sq_names(indices, bottom):
+                        names = []
+                        for idx in indices:
+                            if bottom == "w":
+                                sq = chess.square_mirror(idx)
+                            else:
+                                sq = chess.square_mirror(63 - idx)
+                            names.append(chess.square_name(sq))
+                        return names
+
+                    # Get highlighted squares (same for both orientations as it depends on board_img)
+                    highlights = detect_last_move_from_img(board_img)
+                    h_w = get_sq_names(highlights, 'w')
+                    h_b = get_sq_names(highlights, 'b')
+                    
+                    print(f"    DEBUG: Highlights: indices={highlights}, STEP={STEP}, board_img.shape={board_img.shape}")
+                    print(f"    DEBUG: bottom='w' -> {comp_w['accuracy']:.1f}% ({comp_w['correct']}/64), turn_correct={comp_w['turn_correct']}, highlights={h_w}")
+                    print(f"    DEBUG: bottom='b' -> {comp_b['accuracy']:.1f}% ({comp_b['correct']}/64), turn_correct={comp_b['turn_correct']}, highlights={h_b}")
+                
+                if comp_w['accuracy'] >= comp_b['accuracy']:
+                    fen = fen_w
+                    detected_bottom = 'w'
+                    comparison = comp_w
+                else:
+                    fen = fen_b
+                    detected_bottom = 'b'
+                    comparison = comp_b
         else:
             if args.bottom == 'auto':
                 detected_bottom = detect_bottom_colour(board_img)
             else:
                 detected_bottom = args.bottom
             
+            t0 = time.time()
             fen = get_fen_from_image(board_img, bottom=detected_bottom, fast_mode=args.fast)
+            prof_fen.append((time.time() - t0) * 1000)
+            
+            t0 = time.time()
+            check_turn_res = check_turn_from_last_moved(fen, board_img, detected_bottom)
+            prof_turn.append((time.time() - t0) * 1000)
+            
+            if args.debug:
+                highlights = detect_last_move_from_img(board_img)
+                names = []
+                for idx in highlights:
+                    if detected_bottom == "w":
+                        sq = chess.square_mirror(idx)
+                    else:
+                        sq = chess.square_mirror(63 - idx)
+                    names.append(chess.square_name(sq))
+                print(f"    DEBUG: Turn detection (bottom='{detected_bottom}'): highlights={names}")
+            
+            if check_turn_res is False:
+                b = chess.Board(fen)
+                b.turn = chess.BLACK
+                fen = b.fen()
+            
             comparison = None
             if gt_fen:
                 comparison = compare_board_positions(fen, gt_fen)
         
+        # Track side accuracy
+        if gt_side:
+            side_stats['total'] += 1
+            if detected_bottom == gt_side:
+                side_stats['correct'] += 1
+        
         if gt_fen:
             all_comparisons.append({'name': shot.name, 'comparison': comparison, 'gt_fen': gt_fen})
+            if comparison and comparison['valid']:
+                turn_stats['total'] += 1
+                if comparison['turn_correct']:
+                    turn_stats['correct'] += 1
             
         # Misclassified square debugging
         if args.debug and comparison and comparison['errors']:
@@ -628,8 +762,18 @@ def main():
 
         bot_clock_img = crop_clock('bottom_clock')
         top_clock_img = crop_clock('top_clock')
-        bot_time = read_clock(bot_clock_img) if bot_clock_img is not None else None
-        top_time = read_clock(top_clock_img) if top_clock_img is not None else None
+        
+        bot_time = None
+        if bot_clock_img is not None:
+            t0 = time.time()
+            bot_time = read_clock(bot_clock_img)
+            prof_clock.append((time.time() - t0) * 1000)
+            
+        top_time = None
+        if top_clock_img is not None:
+            t0 = time.time()
+            top_time = read_clock(top_clock_img)
+            prof_clock.append((time.time() - t0) * 1000)
 
         if args.debug and debug_dir:
             shot_debug_dir = debug_dir / shot.stem
@@ -704,7 +848,8 @@ def main():
                 acc = comparison['accuracy']
                 correct = comparison['correct']
                 status = "✅" if acc == 100 else "⚠️" if acc >= 80 else "❌"
-                print(f"  Accuracy: {status} {correct}/64 squares ({acc:.1f}%)")
+                turn_status = "✅" if comparison['turn_correct'] else "❌"
+                print(f"  Accuracy: {status} {correct}/64 squares ({acc:.1f}%), Turn: {turn_status}")
                 if comparison['errors'] and acc < 100:
                     # Show first 10 errors
                     errs = [f"{e['name']}:{e['gt']}->{e['det']}" for e in comparison['errors'][:10]]
@@ -739,6 +884,16 @@ def main():
         print(f"  Good (80-99%):    {good}/{len(all_comparisons)}")
         print(f"  Bad (<80%):       {bad}/{len(all_comparisons)}")
     
+    if side_stats['total'] > 0:
+        side_acc = side_stats['correct'] / side_stats['total'] * 100
+        print(f"Side detection (Orientation):")
+        print(f"  Accuracy:         {side_stats['correct']}/{side_stats['total']} correct ({side_acc:.1f}%)")
+    
+    if turn_stats['total'] > 0:
+        turn_acc = turn_stats['correct'] / turn_stats['total'] * 100
+        print(f"Turn detection:")
+        print(f"  Accuracy:         {turn_stats['correct']}/{turn_stats['total']} correct ({turn_acc:.1f}%)")
+    
     if clock_results['total'] > 0:
         print(f"Clock detection:")
         print(f"  Bottom clocks:    {clock_results['bottom']}/{clock_results['total']} detected", end="")
@@ -763,6 +918,18 @@ def main():
             print(f"  Accuracy:         {result_stats['correct']}/{result_stats['total_with_gt']} correct ({acc:.1f}%)")
         else:
             print("  Accuracy:         N/A (no ground truth)")
+
+    if prof_fen or prof_clock:
+        print(f"Performance (production-identical functions):")
+        if prof_fen:
+            avg_fen = sum(prof_fen) / len(prof_fen)
+            print(f"  FEN Extraction:   avg={avg_fen:.1f}ms, min={min(prof_fen):.1f}ms, max={max(prof_fen):.1f}ms ({len(prof_fen)} calls)")
+        if prof_turn:
+            avg_turn = sum(prof_turn) / len(prof_turn)
+            print(f"  Turn Detection:   avg={avg_turn:.1f}ms, min={min(prof_turn):.1f}ms, max={max(prof_turn):.1f}ms ({len(prof_turn)} calls)")
+        if prof_clock:
+            avg_clock = sum(prof_clock) / len(prof_clock)
+            print(f"  Clock OCR:        avg={avg_clock:.1f}ms, min={min(prof_clock):.1f}ms, max={max(prof_clock):.1f}ms ({len(prof_clock)} calls)")
 
     if args.create_new and debug_dir:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
