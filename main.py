@@ -866,23 +866,27 @@ if args.arena == True:
     game_num = 0
     while True:
         time.sleep(0.5)
-        res = await_new_game(timeout=300)
+        res = await_new_game(timeout=300, expected_time=args.time if args.time > 0 else None)
         if res is not None:
-            game_num += 1
             session_logger.start_game({
                 "Mode": "Arena",
-                "Game": game_num,
+                "Game": game_num + 1,
                 "Initial Time": f"{res}s",
                 "Berserk": args.berserk
             })
-            set_game(res)
-            if args.berserk:
-                # beserk mode
-                berserk()
-                time.sleep(0.5)
-            run_game(arena=True)
-            session_logger.end_game()
-            print("Finished tournament game.")
+            if set_game(res):
+                game_num += 1
+                if args.berserk:
+                    # beserk mode
+                    berserk()
+                    time.sleep(0.5)
+                run_game(arena=True)
+                session_logger.end_game()
+                print("Finished tournament game.")
+            else:
+                session_logger.client_error("Tournament game setup failed")
+                session_logger.end_game()
+            
             # go back to lobby. This can be done by clicking where the resign button is once
             time.sleep(random.randint(1,3))
             back_to_lobby()
@@ -914,7 +918,7 @@ else:
     games = args.games
     for i in range(games):
         time.sleep(0.5)
-        res = await_new_game(timeout=5)
+        res = await_new_game(timeout=5, expected_time=args.time)
         if res is not None:
             session_logger.start_game({
                 "Mode": "Casual",
@@ -922,12 +926,18 @@ else:
                 "Time Control": tc_str,
                 "Initial Time": f"{res}s"
             })
-            set_game(res)
-            run_game(arena=False)
-            session_logger.end_game()
-            print("Finished game {}".format(i+1))
-            if i < games-1:
-                new_game(tc_str)
+            if set_game(res):
+                run_game(arena=False)
+                session_logger.end_game()
+                print("Finished game {}".format(i+1))
+                if i < games-1:
+                    new_game(tc_str)
+            else:
+                session_logger.client_error("Game setup failed, skipping game")
+                print("Game setup failed, skipping.")
+                session_logger.end_game()
+                if i < games-1:
+                    new_game(tc_str)
         elif i < games-1:
             session_logger.client_warn(f"Game {i+1} skipped, seeking again")
             print("Skipped game, trying to seek again.")

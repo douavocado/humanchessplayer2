@@ -369,19 +369,63 @@ def get_move_change(image, bottom='w'):
     else:
         return [detected[0]+detected[1], detected[1] + detected[0]]
 
-def new_game_found():
+def new_game_found(expected_time=None):
     """ Uses screenshot to detect whether we have started new game.
     
-        Returns None if not, else returns our starting initial time in seconds.
+    Args:
+        expected_time: Optional expected initial time in seconds to validate against.
+        
+    Returns None if not, else returns our starting initial time in seconds.
     """
     # try to read bot clock for start position. if none is found, then haven't started the game
-    res = read_clock(capture_bottom_clock(state="start1"))
-    if res is not None:
-        return res
-    
-    res2 = read_clock(capture_bottom_clock(state="start2"))
-    if res2 is not None:
-        return res2
+    for state in ["start1", "start2"]:
+        res, details = read_clock(capture_bottom_clock(state=state), return_details=True)
+        if res is not None:
+            # Fix 4: Vertical offset awareness
+            # In 'start' states, the digits should be roughly vertically centered in the crop.
+            # If they are significantly shifted, it might be the 'play' clock being seen.
+            v_center = details.get('v_center', 0)
+            orig_h = details.get('original_height', 66)
+            v_error = abs(v_center - orig_h / 2)
+            
+            if v_error > orig_h * 0.1: # Tightened to 10% off-center
+                continue
+                
+            # Fix 1: Validate against expected time
+            if expected_time is not None:
+                # Accept if within 10% of expected time, and NOT 0
+                if res == 0 or abs(res - expected_time) > max(10, expected_time * 0.1):
+                    continue
+            elif res == 0:
+                # Always ignore 0 as a starting time
+                continue
+            
+            # Fix 2: Starting Board Verification (The "Strict" Check)
+            # If we found a valid clock, verify the board is actually at start
+            board_img = capture_board()
+            if GAME_INFO["playing_side"] == chess.WHITE:
+                bottom = "w"
+            else:
+                # If side not yet known, try 'w' first as it's most common
+                # find_initial_side will be called properly in set_game
+                bottom = "w"
+                
+            # Use fast_mode=True for minimal impact
+            # We just need to see if the board part matches a starting setup
+            try:
+                test_fen = get_fen_from_image(board_img, bottom=bottom, fast_mode=True)
+                test_board = chess.Board(test_fen)
+                # Check if it's the starting position (ignoring turn/castling/clocks)
+                if test_board.board_fen() != chess.STARTING_BOARD_FEN:
+                    # Could be we are playing as black, try other orientation
+                    test_fen_b = get_fen_from_image(board_img, bottom="b", fast_mode=True)
+                    if chess.Board(test_fen_b).board_fen() != chess.STARTING_BOARD_FEN:
+                        continue # Not a starting board in either orientation
+            except:
+                continue
+                
+            return res
+            
     return None # either returns None, no clock found
 
 def game_over_found():
@@ -400,10 +444,10 @@ def game_over_found():
         return True
     return False
 
-def await_new_game(timeout=60):
+def await_new_game(timeout=60, expected_time=None):
     time_start = time.time()
     while time.time() - time_start < timeout:
-        res = new_game_found()
+        res = new_game_found(expected_time=expected_time)
         if res is not None:
             sound_file = "assets/audio/new_game_found.mp3"
             os.system("mpg123 -q " + sound_file)
@@ -439,7 +483,12 @@ def set_game(starting_time):
     GAME_INFO["opp_initial_time"] = starting_time
     
     # find out our side
-    GAME_INFO["playing_side"] = find_initial_side()
+    side = find_initial_side()
+    if side is None:
+        LOG += "ERROR: Could not detect playing side. Board might be obscured or setup failed. Aborting game setup. \n"
+        return False
+        
+    GAME_INFO["playing_side"] = side
     if GAME_INFO["playing_side"] == chess.WHITE:
         bottom = "w"
     else:
@@ -507,6 +556,7 @@ def set_game(starting_time):
     LOG += "Game information updated to: {} \n".format(GAME_INFO)
     # reset ponder positions
     PONDER_DIC = {}
+    return True
 
 def write_log():
     """ Writes buffered log messages to the log file. """

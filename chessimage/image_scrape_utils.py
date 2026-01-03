@@ -13,6 +13,7 @@ import time
 import numpy as np
 import chess
 import os
+import pytesseract
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -550,12 +551,14 @@ def compare_result_images(img1, img2, max_shift=3, threshold=0.95):
     
     return best_score
 
-def read_clock(clock_image):
+def read_clock(clock_image, return_details=False):
     """
     Read time from a clock image using fast horizontal projection + template matching.
+    
+    If return_details is True, returns (time_in_seconds, details_dict)
     """
     if clock_image is None or clock_image.size == 0:
-        return None
+        return (None, {}) if return_details else None
     
     # Convert to grayscale
     if clock_image.ndim == 3:
@@ -571,30 +574,10 @@ def read_clock(clock_image):
     if np.mean(binary) > 127:
         binary = 255 - binary
     
-    # Trim vertical whitespace to isolate the digit row.
-    # This removes potential white lines from player info or board edges.
-    # We use a threshold on horizontal sums to find rows with significant content.
-    h_sums = np.sum(binary > 0, axis=1)
-    v_content = h_sums > (binary.shape[1] * 0.05) # At least 5% of row must be white
-    
-    if np.any(v_content):
-        # Find contiguous blocks of rows with content
-        import itertools
-        blocks = []
-        for key, group in itertools.groupby(enumerate(v_content), lambda x: x[1]):
-            if key:
-                g = list(group)
-                blocks.append((g[0][0], g[-1][0]))
-        
-        if blocks:
-            # Pick the tallest block (the digits)
-            v_start, v_end = max(blocks, key=lambda b: b[1] - b[0])
-            
-            # Add a tiny bit of padding back if possible
-            v_start = max(0, v_start - 2)
-            v_end = min(binary.shape[0], v_end + 2)
-            binary = binary[v_start:v_end, :]
-    
+    original_height = binary.shape[0]
+    v_center = original_height / 2
+    detected_v_center = v_center
+
     # Use horizontal projection to find digit regions
     # This is much more robust than fixed coordinates
     projection = np.max(binary, axis=0) > 0
@@ -613,7 +596,7 @@ def read_clock(clock_image):
         regions.append((start, len(projection)))
         
     if not regions:
-        return None
+        return (None, {}) if return_details else None
         
     # Get templates dimensions
     template_h, template_w = TEMPLATES.shape[1:3]
@@ -637,7 +620,7 @@ def read_clock(clock_image):
             digits.append((digit, (r_start + r_end) / 2))
             
     if not digits:
-        return None
+        return (None, {}) if return_details else None
         
     # Sort digits by X position
     digits.sort(key=lambda x: x[1])
@@ -647,20 +630,23 @@ def read_clock(clock_image):
     centers = [d[1] for d in digits]
     
     # Find gaps to identify where the colon is
+    res = None
     if len(vals) >= 4:
         # Most common case: MM:SS or MM:SS.m
         # We take the first 4 digits
-        return vals[0] * 600 + vals[1] * 60 + vals[2] * 10 + vals[3]
+        res = vals[0] * 600 + vals[1] * 60 + vals[2] * 10 + vals[3]
     elif len(vals) == 3:
         # Case: M:SS
-        return vals[0] * 60 + vals[1] * 10 + vals[2]
+        res = vals[0] * 60 + vals[1] * 10 + vals[2]
     elif len(vals) == 2:
         # Case: SS
-        return vals[0] * 10 + vals[1]
+        res = vals[0] * 10 + vals[1]
     elif len(vals) == 1:
-        return vals[0]
+        res = vals[0]
         
-    return None
+    if return_details:
+        return res, {'v_center': v_center, 'original_height': original_height}
+    return res
 
 # =============================================================================
 # HIGHLIGHT COLOUR DETECTION - Profile-aware colour matching
@@ -975,11 +961,29 @@ def check_fen_last_move_bottom(fen, board_img, proposed_bottom):
         return False
 
 def find_initial_side():
-    # check bottom left square for a white rook
+    """
+    Detect which side we are playing by checking the bottom-left square (a1/h8).
+    
+    Returns:
+        chess.WHITE (True) if white rook found
+        chess.BLACK (False) if black rook found
+        None if neither found (potential error/popup)
+    """
+    # check bottom left square for a rook
     a1_img = SCREEN_CAPTURE.capture((int(START_X),int(START_Y + 7*STEP), PIECE_STEP, PIECE_STEP))
-    a1_img = np.expand_dims(remove_background_colours(a1_img[:,:,:3]),0).astype(np.uint8)
-    template = w_rook
-    return (template_match_f(a1_img, template) > 0.7).item()
+    a1_processed = np.expand_dims(remove_background_colours(a1_img[:,:,:3]),0).astype(np.uint8)
+    
+    # Check for white rook
+    white_score = template_match_f(a1_processed, w_rook).item()
+    if white_score > 0.75:
+        return chess.WHITE
+        
+    # Check for black rook
+    black_score = template_match_f(a1_processed, b_rook).item()
+    if black_score > 0.75:
+        return chess.BLACK
+        
+    return None
 
 # Target size for fast processing (roughly 1080p equivalent)
 _TARGET_BOARD_SIZE = 824  # 103 pixels per square * 8

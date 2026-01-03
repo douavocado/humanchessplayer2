@@ -185,6 +185,8 @@ def main():
                         help="Save results in a timestamped folder instead of just 'latest'.")
     parser.add_argument("--limit", "-l", type=int, default=None,
                         help="Limit to first N screenshots.")
+    parser.add_argument("--time", "-t", type=int, default=None,
+                        help="Expected time control in seconds (e.g. 60 for 1+0). Used for false start testing.")
     args = parser.parse_args()
 
     screenshots_dir = Path(args.screenshots)
@@ -481,6 +483,13 @@ def main():
     result_stats = {'correct': 0, 'total_with_gt': 0, 'detected_total': 0}
     turn_stats = {'correct': 0, 'total': 0}
     side_stats = {'correct': 0, 'total': 0}
+    
+    # Cross-state detection statistics (False Positives)
+    # A False Positive is when a 'play' image triggers a 'start' or 'end' detection
+    fp_stats = {
+        'false_starts': 0, 'total_non_start': 0,
+        'false_ends': 0, 'total_non_end': 0
+    }
     
     # Performance profiling
     prof_fen = []
@@ -806,6 +815,70 @@ def main():
             clock_results.setdefault('top_with_gt', 0)
             clock_results['top_with_gt'] += 1
             if top_time == gt_top: clock_results['top_correct'] += 1
+            
+        # --- Cross-state Detection (False Positive) Testing ---
+        # Mimic new_game_found logic from clients/mp_original.py
+        is_actual_start = state_hint in ['start1', 'start2']
+        is_actual_end = 'end' in state_hint
+        
+        # 1. Test for False Starts
+        detected_false_start = False
+        if not is_actual_start:
+            fp_stats['total_non_start'] += 1
+            for start_state in ['start1', 'start2']:
+                if 'bottom_clock' in coords and start_state in coords['bottom_clock']:
+                    c = coords['bottom_clock'][start_state]
+                    crop = img[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
+                    # Use the new read_clock with details
+                    res, details = read_clock(crop, return_details=True)
+                    if res is not None:
+                        # Fix 4: Vertical offset awareness
+                        v_center = details.get('v_center', 0)
+                        orig_h = details.get('original_height', 66)
+                        v_error = abs(v_center - orig_h / 2)
+                        
+                        v_valid = v_error <= orig_h * 0.1 # Tightened to 10%
+                        
+                        # Fix 1: Validate against expected time
+                        time_valid = True
+                        if args.time is not None:
+                            if res == 0 or abs(res - args.time) > max(10, args.time * 0.1):
+                                time_valid = False
+                        elif res == 0:
+                            time_valid = False
+                        
+                        # Fix 2: Board Verification
+                        board_valid = False
+                        if v_valid and time_valid:
+                            # If clock passed, check if board is at starting position
+                            # Try both orientations
+                            for b_side in ['w', 'b']:
+                                try:
+                                    f = get_fen_from_image(board_img, bottom=b_side, fast_mode=True)
+                                    if chess.Board(f).board_fen() == chess.STARTING_BOARD_FEN:
+                                        board_valid = True
+                                        break
+                                except:
+                                    pass
+                            
+                        if v_valid and time_valid and board_valid:
+                            detected_false_start = True
+                            fp_stats['false_starts'] += 1
+                            break
+        
+        # 2. Test for False Ends (Game Over)
+        detected_false_end = False
+        if not is_actual_end:
+            fp_stats['total_non_end'] += 1
+            for end_state in ['end1', 'end2', 'end3']:
+                if 'bottom_clock' in coords and end_state in coords['bottom_clock']:
+                    c = coords['bottom_clock'][end_state]
+                    crop = img[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
+                    # Basic game_over_found logic just checks for any readable clock at end position
+                    if read_clock(crop) is not None:
+                        detected_false_end = True
+                        fp_stats['false_ends'] += 1
+                        break
         
         # Result detection (only for end states)
         detected_result = None
@@ -856,6 +929,10 @@ def main():
                     more = f" (+{len(comparison['errors'])-10} more)" if len(comparison['errors']) > 10 else ""
                     print(f"  Errors:   {', '.join(errs)}{more}")
         print(f"  Time: bottom={bot_time}  top={top_time}")
+        if not is_actual_start and detected_false_start:
+            print(f"  ❌ FALSE START DETECTED! (This image triggered 'New Game Found')")
+        if not is_actual_end and detected_false_end:
+            print(f"  ❌ FALSE END DETECTED! (This image triggered 'Game Over Found')")
         if detected_result or gt_result:
             res_str = f"  Result: detected={detected_result} (score={result_score:.2f})"
             if gt_result:
@@ -909,6 +986,17 @@ def main():
             print(f" ({clock_results['top_correct']}/{clock_results['top_with_gt']} correct, {acc:.1f}%)")
         else:
             print()
+
+    if fp_stats['total_non_start'] > 0 or fp_stats['total_non_end'] > 0:
+        print(f"False Positive Detection (Cross-State Robustness):")
+        if fp_stats['total_non_start'] > 0:
+            start_fp_rate = fp_stats['false_starts'] / fp_stats['total_non_start'] * 100
+            status = "✅" if fp_stats['false_starts'] == 0 else "❌"
+            print(f"  False Starts:     {status} {fp_stats['false_starts']}/{fp_stats['total_non_start']} non-start images ({start_fp_rate:.1f}%)")
+        if fp_stats['total_non_end'] > 0:
+            end_fp_rate = fp_stats['false_ends'] / fp_stats['total_non_end'] * 100
+            status = "✅" if fp_stats['false_ends'] == 0 else "❌"
+            print(f"  False Ends:       {status} {fp_stats['false_ends']}/{fp_stats['total_non_end']} non-end images ({end_fp_rate:.1f}%)")
 
     if result_stats['detected_total'] > 0 or result_stats['total_with_gt'] > 0:
         print(f"Result detection:")

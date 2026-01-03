@@ -459,11 +459,33 @@ class OfflineFitter:
                 y = int(np.mean([s['y'] for s in samples]))
                 w = int(np.mean([s.get('width', 147) for s in samples]))
                 h = int(np.mean([s.get('height', 44) for s in samples]))
-                # Apply vertical safety margin to final combined coordinates
-                # This ensures we don't chop digits due to slight variations in Lichess layout
-                v_margin = int(h * 0.1)
-                y_final = y - v_margin
-                h_final = h + v_margin * 2
+                
+                # STRICT FITTING: Tighten vertical coordinates to the actual digits
+                # Extract crop and find horizontal sums to find content
+                # (Assuming the first sample is representative for fitting)
+                y_final, h_final = y, h
+                try:
+                    # Find which detection this sample belongs to
+                    for det in detections:
+                        img = det['image']
+                        for s_name, s_coords in det['clocks'][clock_type].items():
+                            if s_coords['y'] == y: # Found the matching image
+                                crop = img[y:y+h, x:x+w]
+                                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                                if np.mean(binary) > 127: binary = 255 - binary
+                                h_sums = np.sum(binary > 0, axis=1)
+                                v_content = np.where(h_sums > (binary.shape[1] * 0.05))[0]
+                                if len(v_content) > 0:
+                                    v_start, v_end = v_content[0], v_content[-1]
+                                    # Center the digits in a fixed height crop (e.g. 44px)
+                                    target_h = 44 
+                                    digit_h = v_end - v_start
+                                    y_final = y + v_start - (target_h - digit_h) // 2
+                                    h_final = target_h
+                                break
+                except:
+                    pass
                 
                 return {labels[0]: {'x': x, 'y': y_final, 'width': w, 'height': h_final}}
             # Sort by y then split into k roughly equal groups (top to bottom)
@@ -498,14 +520,44 @@ class OfflineFitter:
                 if i >= len(labels) or not group:
                     continue
                 
+                x = int(np.mean([g['x'] for g in group]))
+                y = int(np.mean([g['y'] for g in group]))
+                w = int(np.mean([g.get('width', 147) for g in group]))
                 h_avg = int(np.mean([g.get('height', 44) for g in group]))
-                v_margin = int(h_avg * 0.1)
+                
+                # STRICT FITTING: Tighten vertical coordinates to the actual digits
+                y_final, h_final = y, h_avg
+                try:
+                    # Find a sample from this group to use for vertical alignment
+                    sample = group[0]
+                    for det in detections:
+                        img = det['image']
+                        found = False
+                        for s_name, s_coords in det['clocks'][clock_type].items():
+                            if s_coords['y'] == sample['y']:
+                                crop = img[y:y+h_avg, x:x+w]
+                                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                                if np.mean(binary) > 127: binary = 255 - binary
+                                h_sums = np.sum(binary > 0, axis=1)
+                                v_content = np.where(h_sums > (binary.shape[1] * 0.05))[0]
+                                if len(v_content) > 0:
+                                    v_start, v_end = v_content[0], v_content[-1]
+                                    target_h = 44
+                                    digit_h = v_end - v_start
+                                    y_final = y + v_start - (target_h - digit_h) // 2
+                                    h_final = target_h
+                                found = True
+                                break
+                        if found: break
+                except:
+                    pass
                 
                 clustered[labels[i]] = {
-                    'x': int(np.mean([g['x'] for g in group])),
-                    'y': int(np.mean([g['y'] for g in group])) - v_margin,
-                    'width': int(np.mean([g.get('width', 147) for g in group])),
-                    'height': h_avg + v_margin * 2,
+                    'x': x,
+                    'y': y_final,
+                    'width': w,
+                    'height': h_final,
                 }
             return clustered
 
