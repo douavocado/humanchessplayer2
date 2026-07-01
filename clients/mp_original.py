@@ -1249,9 +1249,36 @@ def hover(duration=0.1, noise=STEP*2):
     
     return True
 
+def _verify_move_registered(move_uci: str, timeout: float = 0.5):
+    """
+    Poll the board until the moved piece has left its origin square.
+
+    Scanning immediately after the clicks races the board render: a stale
+    scan makes the client re-issue the same move, which grabs an
+    already-empty square and cancels any queued premove. Returns True once
+    the origin square no longer holds our piece; False if that never
+    happens within the timeout (the move likely did not register, e.g. the
+    game is already over or the drop was rejected).
+    """
+    bottom = "w" if GAME_INFO["playing_side"] == chess.WHITE else "b"
+    from_square = chess.parse_square(move_uci[:2])
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            board_img = capture_board()
+            fen_now = get_fen_from_image(board_img, bottom=bottom, fast_mode=True)
+            piece = chess.Board(fen_now).piece_at(from_square)
+            if piece is None or piece.color != GAME_INFO["playing_side"]:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.04)
+    return False
+
+
 def make_move(move_uci:str, premove:str=None):
-    """ Executes mouse clicks for the moves. 
-        
+    """ Executes mouse clicks for the moves.
+
         Returns True if clicks were made successfully, else returns False
     """
     global LOG, HOVER_SQUARE, MOVE_TIMING
@@ -1302,7 +1329,16 @@ def make_move(move_uci:str, premove:str=None):
     else:
         LOG += "Tried to make clicks for move {}, but made mouse slip \n".format(move_uci)
         return False
-    
+
+    # Confirm the move actually landed before queueing the premove or
+    # handing control back to the scan loop; stray premove clicks on an
+    # unregistered move select the wrong squares and cancel premoves
+    if not _verify_move_registered(move_uci):
+        LOG += "WARNING: Clicks made for move {} but the piece never left {} - move did not register, skipping premove. \n".format(
+            move_uci, move_uci[:2])
+        HOVER_SQUARE = None
+        return False
+
     # If there is a premove
     premove_time = 0
     if premove is not None:
