@@ -538,9 +538,10 @@ def set_game(starting_time):
             LOG += "Corrected by switching turn. \n"
             starting_fen = new_fen
         else:
-            error_filename = os.path.join("Error_files", "board_img_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')                
-            LOG += "ERROR: Not corrected. Continuingly anyway. Saving board image to {}. \n".format(error_filename)
-            cv2.imwrite(error_filename, board_img)
+            debug_files = save_debug_screenshot(
+                "setup_bottom_check_error", board_img=board_img,
+                extra_info={'starting_fen': starting_fen, 'bottom': bottom})
+            LOG += "ERROR: Not corrected. Continuingly anyway. Debug files: {}. \n".format(debug_files)
         
     else:
         LOG += "Checking bottom successfully matched. \n"
@@ -646,9 +647,9 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
             if opp_clock_time is None:
                 opp_clock_time = read_clock(capture_top_clock(state="start2"))
             if opp_clock_time is None:
-                error_filename = os.path.join("Error_files", "top_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Could not find the opponent clock time from move change update. Saving image to {}. \n".format(error_filename)
-                cv2.imwrite(error_filename, top_clock_img)
+                debug_files = save_debug_screenshot(
+                    "opp_clock_move_change_error", clock_imgs={'top': top_clock_img})
+                LOG += "ERROR: Could not find the opponent clock time from move change update. Debug files: {}. \n".format(debug_files)
             else:
                 DYNAMIC_INFO["opp_clock_times"].append(opp_clock_time)
                 DYNAMIC_INFO["opp_clock_times"] = DYNAMIC_INFO["opp_clock_times"][-FEN_NO_CAP:]
@@ -665,9 +666,9 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
             if self_clock_time is None:
                 self_clock_time = read_clock(capture_bottom_clock(state="start2"))
             if self_clock_time is None:
-                error_filename = os.path.join("Error_files", "bot_clock_play_" + str(datetime.datetime.now()).replace(" ", "").replace(":","_") + '.png')
-                LOG += "ERROR: Could not find own clock time from move change update. Saving image to {}. \n".format(error_filename)
-                cv2.imwrite(error_filename, bot_clock_img)
+                debug_files = save_debug_screenshot(
+                    "own_clock_move_change_error", clock_imgs={'bottom': bot_clock_img})
+                LOG += "ERROR: Could not find own clock time from move change update. Debug files: {}. \n".format(debug_files)
             else:
                 DYNAMIC_INFO["self_clock_times"].append(self_clock_time)
                 DYNAMIC_INFO["self_clock_times"] = DYNAMIC_INFO["self_clock_times"][-FEN_NO_CAP:]
@@ -1348,8 +1349,12 @@ def make_move(move_uci:str, premove:str=None):
     # handing control back to the scan loop; stray premove clicks on an
     # unregistered move select the wrong squares and cancel premoves
     if not _verify_move_registered(move_uci):
-        LOG += "WARNING: Clicks made for move {} but the piece never left {} - move did not register, skipping premove. \n".format(
-            move_uci, move_uci[:2])
+        debug_files = save_debug_screenshot(
+            "move_not_registered",
+            extra_info={'move_uci': move_uci, 'premove': premove,
+                        'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
+        LOG += "WARNING: Clicks made for move {} but the piece never left {} - move did not register, skipping premove. Debug files: {}. \n".format(
+            move_uci, move_uci[:2], debug_files)
         HOVER_SQUARE = None
         return False
 

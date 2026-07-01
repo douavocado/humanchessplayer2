@@ -860,6 +860,25 @@ if args.debug or args.offline:
 # Get the logger for game start/end tracking
 session_logger = get_logger()
 
+def _crash_handler(exc_type, exc_value, exc_tb):
+    """
+    Save a fullscreen capture and the traceback when the program dies on an
+    unhandled exception, so the screen state that caused it can be debugged
+    offline like any other parsing error.
+    """
+    if exc_type not in (SystemExit, KeyboardInterrupt):
+        try:
+            import traceback
+            from clients.mp_original import save_debug_screenshot
+            tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            files = save_debug_screenshot("unhandled_crash", extra_info={'traceback': tb})
+            session_logger.client_error(f"Unhandled crash, debug files: {files}")
+        except Exception:
+            pass
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _crash_handler
+
 def setup_game_with_retries(starting_time, attempts=3):
     """
     Run set_game with retries. Right after a game is found the page can
