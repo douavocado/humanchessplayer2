@@ -51,6 +51,10 @@ except ImportError:
 # import threading
 # from multiprocessing import Process, Manager
 
+# pyautogui sleeps PAUSE after every mouseDown/mouseUp/click - at the default
+# 0.1s that adds ~0.2s of dead time per move on top of the actual gestures
+pyautogui.PAUSE = 0.02
+
 
 def save_debug_screenshot(prefix: str, board_img=None, clock_imgs=None, extra_info=None):
     """
@@ -211,8 +215,8 @@ def _movement_duration(distance):
     threshold while drags animated just above it.
     """
     jitter = 0.8 + 0.4 * random.random()
-    base = 0.07 + MOUSE_QUICKNESS / 1000.0 * jitter * np.sqrt(max(float(distance), 0.0) / RESOLUTION_SCALE)
-    return float(np.clip(base, 0.12, 0.35))
+    base = 0.023 + MOUSE_QUICKNESS / 3000.0 * jitter * np.sqrt(max(float(distance), 0.0) / RESOLUTION_SCALE)
+    return float(np.clip(base, 0.04, 0.12))
 
 
 def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
