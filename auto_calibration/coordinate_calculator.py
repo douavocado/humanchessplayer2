@@ -47,10 +47,11 @@ class CoordinateCalculator:
     REF_RESULT_X_OFFSET = 155   # From clock X (result is in the right panel)
     
     # Resign button position relative to notation
-    # The button row (takeback, draw, resign) is below the notation panel
+    # The button row (takeback, draw, resign) sits INSIDE the notation panel,
+    # just above its bottom edge; the flag is the rightmost of the 3 buttons
     # These values are for the reference 848px board size
-    REF_RESIGN_BUTTON_Y_OFFSET = 10  # Gap below notation panel to button row
-    REF_RESIGN_BUTTON_X_OFFSET = 85  # From notation X to resign button centre (rightmost of 3 buttons)
+    REF_RESIGN_BUTTON_Y_OFFSET = 25  # From notation bottom edge UP to button-row centre
+    REF_RESIGN_BUTTON_X_OFFSET = 98  # From notation X to resign button centre (rightmost of 3 buttons)
     
     def __init__(self, board_detection: Optional[Dict] = None,
                  clock_detection: Optional[Dict] = None):
@@ -307,27 +308,27 @@ class CoordinateCalculator:
     def _calculate_resign_button(self, notation: Dict) -> Dict:
         """
         Calculate resign button position (scaled).
-        
-        The resign button (flag icon) is below the notation panel,
-        in a row with takeback and draw buttons. It's the rightmost button.
-        
+
+        The resign button (flag icon) sits inside the notation panel in a
+        button row (takeback, draw, resign) just above the panel's bottom
+        edge. It's the rightmost button.
+
         Args:
             notation: Notation panel coordinates.
-        
+
         Returns:
-            Resign button coordinates.
+            Resign button coordinates (box whose centre is the click point).
         """
         resign_size = int(self.REF_RESIGN_BUTTON_SIZE * self.scale)
         resign_y_offset = int(self.REF_RESIGN_BUTTON_Y_OFFSET * self.scale)
         resign_x_offset = int(self.REF_RESIGN_BUTTON_X_OFFSET * self.scale)
-        
-        # Resign button is below notation, offset to the right
-        resign_x = notation['x'] + resign_x_offset
-        resign_y = notation['y'] + notation['height'] + resign_y_offset
-        
+
+        centre_x = notation['x'] + resign_x_offset
+        centre_y = notation['y'] + notation['height'] - resign_y_offset
+
         return {
-            'x': resign_x,
-            'y': resign_y,
+            'x': centre_x - resign_size // 2,
+            'y': centre_y - resign_size // 2,
             'width': resign_size,
             'height': resign_size
         }
