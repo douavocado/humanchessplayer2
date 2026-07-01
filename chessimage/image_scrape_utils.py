@@ -963,26 +963,30 @@ def check_fen_last_move_bottom(fen, board_img, proposed_bottom):
 def find_initial_side():
     """
     Detect which side we are playing by checking the bottom-left square (a1/h8).
-    
+
+    Reads the full board as if white were at the bottom and inspects the
+    corner: at (or near) the game start it holds our rook. This reuses the
+    brightness-aware piece classifier used for FEN extraction, which is far
+    more reliable than a single raw template match - a black rook is mostly
+    dark-on-dark and scores below any workable fixed threshold.
+
     Returns:
         chess.WHITE (True) if white rook found
         chess.BLACK (False) if black rook found
         None if neither found (potential error/popup)
     """
-    # check bottom left square for a rook
-    a1_img = SCREEN_CAPTURE.capture((int(START_X),int(START_Y + 7*STEP), PIECE_STEP, PIECE_STEP))
-    a1_processed = np.expand_dims(remove_background_colours(a1_img[:,:,:3]),0).astype(np.uint8)
-    
-    # Check for white rook
-    white_score = template_match_f(a1_processed, w_rook).item()
-    if white_score > 0.75:
+    board_img = capture_board()
+    if board_img is None or board_img.size == 0:
+        return None
+    try:
+        fen = get_fen_from_image(board_img, bottom="w", fast_mode=True)
+        corner_piece = chess.Board(fen).piece_at(chess.A1)
+    except Exception:
+        return None
+    if corner_piece == chess.Piece(chess.ROOK, chess.WHITE):
         return chess.WHITE
-        
-    # Check for black rook
-    black_score = template_match_f(a1_processed, b_rook).item()
-    if black_score > 0.75:
+    if corner_piece == chess.Piece(chess.ROOK, chess.BLACK):
         return chess.BLACK
-        
     return None
 
 # Target size for fast processing (roughly 1080p equivalent)
