@@ -860,6 +860,22 @@ if args.debug or args.offline:
 # Get the logger for game start/end tracking
 session_logger = get_logger()
 
+def setup_game_with_retries(starting_time, attempts=3):
+    """
+    Run set_game with retries. Right after a game is found the page can
+    still be mid-transition, so a single failed setup does not mean there
+    is no live game - and seeking a new game over a live one clicks the
+    play button onto the running game.
+    """
+    for attempt in range(attempts):
+        if set_game(starting_time):
+            return True
+        if attempt < attempts - 1:
+            session_logger.client_warn(
+                f"Game setup attempt {attempt+1}/{attempts} failed, retrying")
+            time.sleep(1.0)
+    return False
+
 if args.arena == True:
     # in tournament mode
     session_logger.client_info("Starting tournament arena mode")
@@ -874,7 +890,7 @@ if args.arena == True:
                 "Initial Time": f"{res}s",
                 "Berserk": args.berserk
             })
-            if set_game(res):
+            if setup_game_with_retries(res):
                 game_num += 1
                 if args.berserk:
                     # beserk mode
@@ -926,7 +942,7 @@ else:
                 "Time Control": tc_str,
                 "Initial Time": f"{res}s"
             })
-            if set_game(res):
+            if setup_game_with_retries(res):
                 run_game(arena=False)
                 session_logger.end_game()
                 print("Finished game {}".format(i+1))

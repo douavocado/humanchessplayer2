@@ -490,11 +490,25 @@ def set_game(starting_time):
     GAME_INFO["opp_initial_time"] = starting_time
     
     # find out our side
+    # The board can still be rendering right after the game is found, so
+    # retry for a few seconds before giving up
     side = find_initial_side()
+    side_detect_deadline = time.time() + 3.0
+    while side is None and time.time() < side_detect_deadline:
+        time.sleep(0.25)
+        side = find_initial_side()
     if side is None:
-        LOG += "ERROR: Could not detect playing side. Board might be obscured or setup failed. Aborting game setup. \n"
+        debug_files = save_debug_screenshot(
+            "side_detection_failure", board_img=board_img,
+            extra_info={'starting_time': starting_time})
+        LOG += "ERROR: Could not detect playing side after retries. Board might be obscured or setup failed. Aborting game setup. Debug files: {}. \n".format(debug_files)
+        write_log()
         return False
-        
+
+    # Re-capture the board: the first capture may predate the board render
+    # (and as black the opponent may already have moved)
+    board_img = capture_board()
+
     GAME_INFO["playing_side"] = side
     if GAME_INFO["playing_side"] == chess.WHITE:
         bottom = "w"
@@ -1448,7 +1462,34 @@ def new_game(time_control="1+0"):
     if is_capslock_on():
         LOG += "Tried to start new game with time control {} but failed as caps lock is on. \n ".format(time_control)
         return False
-    
+
+    # Never seek while a game is visibly live: the play-button clicks would
+    # land on the running game (this happens when game setup fails during
+    # the lobby-to-game page transition)
+    for state in ["play", "start1", "start2"]:
+        if read_clock(capture_bottom_clock(state=state)) is not None:
+            # A readable clock could also be a FINISHED game whose end-state
+            # clock bleeds into this region; a visible result box means the
+            # game is over and seeking is safe
+            game_over = False
+            try:
+                result_img = capture_result(arena=False)
+                if result_img is not None and result_img.size > 0:
+                    for ref, threshold in _get_result_references():
+                        if compare_result_images(result_img, ref) > threshold:
+                            game_over = True
+                            break
+            except Exception:
+                pass
+            if game_over:
+                break
+            debug_files = save_debug_screenshot(
+                "new_game_blocked_live_game", extra_info={'clock_state': state})
+            LOG += "ERROR: Tried to seek a new game but a live game appears to be on screen (clock readable in state {}). Not clicking. Debug files: {}. \n".format(
+                state, debug_files)
+            write_log()
+            return False
+
     # Try dynamic button detection first
     if DYNAMIC_BUTTON_DETECTION:
         LOG += "Using dynamic button detection for new game with time control {}. \n".format(time_control)
