@@ -1,0 +1,15 @@
+target-version = "py312"
+extend-exclude = ["development", "Engines"]
+
+[lint]
+# Default E/F rules, minus idioms pervasive in the existing codebase.
+ignore = [
+    "E402", # imports after sys.path setup
+    "E701", # single-line `if x: y` statements
+    "E712", # `== True` comparisons
+    "E722", # bare except (used for vision-loop resilience)
+    "E741", # ambiguous single-letter names
+    "F403", # star imports
+    "F405", # names from star imports
+    "F541", # f-strings without placeholders
+]
