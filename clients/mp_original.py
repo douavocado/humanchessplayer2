@@ -901,8 +901,40 @@ def check_our_turn():
     
     return board.turn == playing_side
 
+_RESULT_REFERENCES = None
+
+def _get_result_references():
+    """
+    Result reference images for game-end detection, as (image, threshold) pairs.
+
+    Prefers templates extracted for the active calibration profile, matched
+    strictly. Falls back to the legacy chessimage/ references at the historic
+    looser threshold - those may come from a different screen layout.
+    """
+    global _RESULT_REFERENCES
+    if _RESULT_REFERENCES is not None:
+        return _RESULT_REFERENCES
+    refs = []
+    try:
+        from auto_calibration.template_extractor import TemplateExtractor
+        template_dir = get_config().get_template_dir()
+        profile_templates = TemplateExtractor(template_dir=str(template_dir)).load_result_templates()
+        for ref in (profile_templates or {}).values():
+            if ref is not None:
+                refs.append((ref, 0.8))
+    except Exception:
+        pass
+    if not refs:
+        for name in ("blackwin_result", "whitewin_result", "draw_result"):
+            ref = cv2.imread(f"chessimage/{name}.png")
+            if ref is not None:
+                refs.append((ref, 0.70))
+    _RESULT_REFERENCES = refs
+    return refs
+
+
 def check_game_end(arena=False):
-    """ 
+    """
     Check whether the game has ended.
     
     Uses multiple signals for robustness:
@@ -919,39 +951,38 @@ def check_game_end(arena=False):
     
     # Method 2: Check via result image comparison
     # Uses calibrated coordinates from auto-calibration config
-    # Lowered threshold (0.70) to catch more variations in result display
     try:
         result_img = capture_result(arena=arena)
         if result_img is not None and result_img.size > 0:
-            blackwin_ref = cv2.imread("chessimage/blackwin_result.png")
-            whitewin_ref = cv2.imread("chessimage/whitewin_result.png")
-            draw_ref = cv2.imread("chessimage/draw_result.png")
-            
-            if blackwin_ref is not None and compare_result_images(result_img, blackwin_ref) > 0.70:
-                return True
-            elif whitewin_ref is not None and compare_result_images(result_img, whitewin_ref) > 0.70:
-                return True
-            elif draw_ref is not None and compare_result_images(result_img, draw_ref) > 0.70:
-                return True
+            for ref, threshold in _get_result_references():
+                if compare_result_images(result_img, ref) > threshold:
+                    return True
     except Exception as e:
         # Don't fail the game check if result image comparison fails
         pass
-    
+
     # Method 3: Fallback - check if clock is readable at end positions but NOT at play position
     # This catches cases where the UI has changed due to game ending
+    # Guard: at game start ("play the first move" state) the clock also sits
+    # away from the play position and can bleed into an end-state region, so
+    # a start-position board is never treated as a game end here.
     try:
-        # First check if we can read the clock at play position
-        play_clock = read_clock(capture_bottom_clock(state="play"))
-        
-        # If we CAN'T read the clock at play position, the game might have ended
-        # (UI overlay blocking the clock area)
-        if play_clock is None:
-            # Try reading at end positions to confirm
-            if game_over_found():
-                return True
+        start_placement = chess.STARTING_FEN.split()[0]
+        board_start_like = (len(DYNAMIC_INFO["fens"]) > 0 and
+                            DYNAMIC_INFO["fens"][-1].split()[0] == start_placement)
+        if not board_start_like:
+            # First check if we can read the clock at play position
+            play_clock = read_clock(capture_bottom_clock(state="play"))
+
+            # If we CAN'T read the clock at play position, the game might have ended
+            # (UI overlay blocking the clock area)
+            if play_clock is None:
+                # Try reading at end positions to confirm
+                if game_over_found():
+                    return True
     except Exception as e:
         pass
-    
+
     return False
 
 def await_move(arena=False):

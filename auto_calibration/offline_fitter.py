@@ -435,12 +435,65 @@ class OfflineFitter:
         """
         self.calculator.set_board(board_detection)
 
+        def tighten_clock_vertical(x: int, y: int, w: int, h: int, dets=None):
+            """
+            Tighten a clock box vertically to the digit content.
+
+            Uses the median of content bounds across the given detections (all
+            detections if not specified): a single frame can under-detect thin
+            glyph rows (clipping the digits) or binarize background noise
+            (inflating the box), but the typical frame gets it right.
+            Pads with a small margin.
+            """
+            starts, ends = [], []
+            try:
+                for det in (dets if dets is not None else detections):
+                    img = det.get('image')
+                    if img is None:
+                        continue
+                    crop = img[y:y + h, x:x + w]
+                    if crop.size == 0:
+                        continue
+                    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                    if np.mean(binary) > 127:
+                        binary = 255 - binary
+                    h_sums = np.sum(binary > 0, axis=1)
+                    content = h_sums > (binary.shape[1] * 0.05)
+                    # The box can also catch slivers of the username text above
+                    # and panel borders below: keep only the largest contiguous
+                    # content block, which is the digit row.
+                    best_run = None
+                    run_start = None
+                    for i, on in enumerate(list(content) + [False]):
+                        if on and run_start is None:
+                            run_start = i
+                        elif not on and run_start is not None:
+                            if best_run is None or (i - run_start) > (best_run[1] - best_run[0]):
+                                best_run = (run_start, i - 1)
+                            run_start = None
+                    if best_run is not None:
+                        starts.append(int(best_run[0]))
+                        ends.append(int(best_run[1]))
+            except Exception:
+                pass
+            if not starts:
+                return y, h
+            margin = 3
+            v_start = int(np.median(starts))
+            v_end = int(np.median(ends))
+            y_final = y + v_start - margin
+            h_final = (v_end - v_start + 1) + 2 * margin
+            return y_final, h_final
+
         def collect_positions(clock_type: str, labels: List[str], k_clusters: int = 1):
             """
             Collect clock positions for a state family and optionally cluster them.
             Labels length should match k_clusters when k_clusters > 1.
             """
-            # Gather raw detections that match the state family
+            # Gather raw detections that match the state family, keeping a
+            # reference to the source detection so tightening only inspects
+            # frames that actually show this clock state
             samples = []
             for det in detections:
                 clocks = det['clocks']
@@ -450,115 +503,45 @@ class OfflineFitter:
                 for state_name, coords in clocks[clock_type].items():
                     actual_state = hint if hint and state_name == 'play' else state_name
                     if any(actual_state.startswith(prefix.rstrip('123')) for prefix in labels):
-                        samples.append(coords)
+                        samples.append((coords, det))
             if not samples:
                 return {}
-            if k_clusters == 1:
-                # Average all samples
-                x = int(np.mean([s['x'] for s in samples]))
-                y = int(np.mean([s['y'] for s in samples]))
-                w = int(np.mean([s.get('width', 147) for s in samples]))
-                h = int(np.mean([s.get('height', 44) for s in samples]))
-                
+
+            def fit_group(group):
+                coords_list = [s[0] for s in group]
+                dets = [s[1] for s in group]
+                x = int(np.mean([c['x'] for c in coords_list]))
+                y = int(np.mean([c['y'] for c in coords_list]))
+                w = int(np.mean([c.get('width', 147) for c in coords_list]))
+                h = int(np.mean([c.get('height', 44) for c in coords_list]))
                 # STRICT FITTING: Tighten vertical coordinates to the actual digits
-                # Extract crop and find horizontal sums to find content
-                # (Assuming the first sample is representative for fitting)
-                y_final, h_final = y, h
-                try:
-                    # Find which detection this sample belongs to
-                    for det in detections:
-                        img = det['image']
-                        for s_name, s_coords in det['clocks'][clock_type].items():
-                            if s_coords['y'] == y: # Found the matching image
-                                crop = img[y:y+h, x:x+w]
-                                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                                if np.mean(binary) > 127: binary = 255 - binary
-                                h_sums = np.sum(binary > 0, axis=1)
-                                v_content = np.where(h_sums > (binary.shape[1] * 0.05))[0]
-                                if len(v_content) > 0:
-                                    v_start, v_end = v_content[0], v_content[-1]
-                                    # Center the digits in a fixed height crop (e.g. 44px)
-                                    target_h = 44 
-                                    digit_h = v_end - v_start
-                                    y_final = y + v_start - (target_h - digit_h) // 2
-                                    h_final = target_h
-                                break
-                except:
-                    pass
-                
-                return {labels[0]: {'x': x, 'y': y_final, 'width': w, 'height': h_final}}
-            # Sort by y then split into k roughly equal groups (top to bottom)
-            samples_sorted = sorted(samples, key=lambda c: (c['y'], c['x']))
-            n = len(samples_sorted)
-            if n < k_clusters:
-                # Not enough samples; map what we have in order, leave others missing
-                clustered = {}
-                for i, sample in enumerate(samples_sorted):
-                    if i >= len(labels):
-                        break
-                    
-                    v_margin = int(sample.get('height', 44) * 0.1)
-                    clustered[labels[i]] = {
-                        'x': sample['x'],
-                        'y': sample['y'] - v_margin,
-                        'width': sample.get('width', 147),
-                        'height': sample.get('height', 44) + v_margin * 2,
-                    }
-                return clustered
-            # Split into k contiguous groups
-            clusters = []
-            size = n // k_clusters
-            remainder = n % k_clusters
-            start = 0
-            for i in range(k_clusters):
-                end = start + size + (1 if i < remainder else 0)
-                clusters.append(samples_sorted[start:end])
-                start = end
+                y_final, h_final = tighten_clock_vertical(x, y, w, h, dets=dets)
+                return {'x': x, 'y': y_final, 'width': w, 'height': h_final}
+
+            if k_clusters == 1:
+                return {labels[0]: fit_group(samples)}
+
+            # Cluster by y position: split sorted samples where consecutive
+            # y values jump, so each cluster is one true clock position
+            # (equal-size splitting mixes states when counts are uneven)
+            samples_sorted = sorted(samples, key=lambda s: (s[0]['y'], s[0]['x']))
+            clusters = [[samples_sorted[0]]]
+            for sample in samples_sorted[1:]:
+                if sample[0]['y'] - clusters[-1][-1][0]['y'] > 12:
+                    clusters.append([sample])
+                else:
+                    clusters[-1].append(sample)
+
+            # If more clusters than labels, keep the best-supported ones
+            if len(clusters) > len(labels):
+                clusters = sorted(clusters, key=len, reverse=True)[:len(labels)]
+                clusters = sorted(clusters, key=lambda g: g[0][0]['y'])
+
             clustered = {}
             for i, group in enumerate(clusters):
                 if i >= len(labels) or not group:
                     continue
-                
-                x = int(np.mean([g['x'] for g in group]))
-                y = int(np.mean([g['y'] for g in group]))
-                w = int(np.mean([g.get('width', 147) for g in group]))
-                h_avg = int(np.mean([g.get('height', 44) for g in group]))
-                
-                # STRICT FITTING: Tighten vertical coordinates to the actual digits
-                y_final, h_final = y, h_avg
-                try:
-                    # Find a sample from this group to use for vertical alignment
-                    sample = group[0]
-                    for det in detections:
-                        img = det['image']
-                        found = False
-                        for s_name, s_coords in det['clocks'][clock_type].items():
-                            if s_coords['y'] == sample['y']:
-                                crop = img[y:y+h_avg, x:x+w]
-                                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                                _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                                if np.mean(binary) > 127: binary = 255 - binary
-                                h_sums = np.sum(binary > 0, axis=1)
-                                v_content = np.where(h_sums > (binary.shape[1] * 0.05))[0]
-                                if len(v_content) > 0:
-                                    v_start, v_end = v_content[0], v_content[-1]
-                                    target_h = 44
-                                    digit_h = v_end - v_start
-                                    y_final = y + v_start - (target_h - digit_h) // 2
-                                    h_final = target_h
-                                found = True
-                                break
-                        if found: break
-                except:
-                    pass
-                
-                clustered[labels[i]] = {
-                    'x': x,
-                    'y': y_final,
-                    'width': w,
-                    'height': h_final,
-                }
+                clustered[labels[i]] = fit_group(group)
             return clustered
 
         def build_clock_dict(clock_type: str):
@@ -683,15 +666,21 @@ class OfflineFitter:
                         piece_instances[piece].append(template)
             
             # 2. Collect Digit Instances
+            # Only from play-state frames: we crop at the play-state clock
+            # position, and start/end frames have their clocks shifted there
             digit_positions = config.get('digit_positions')
-            if digit_positions:
+            if digit_positions and (state_hint or 'play') == 'play':
                 times = {'top_clock': gt.get('top_time'), 'bottom_clock': gt.get('bottom_time')}
                 for clock_type in ['bottom_clock', 'top_clock']:
                     if clock_type in detection['clocks'] and times[clock_type] is not None:
                         known_time = times[clock_type]
-                        # Use first state available for this clock type
-                        state = next(iter(detection['clocks'][clock_type]))
-                        c = detection['clocks'][clock_type][state]
+                        # Prefer the final tightened coordinates over the raw
+                        # detection box, which includes loose vertical padding
+                        c = config['coordinates'].get(clock_type, {}).get('play')
+                        if c is None:
+                            # Use first state available for this clock type
+                            state = next(iter(detection['clocks'][clock_type]))
+                            c = detection['clocks'][clock_type][state]
                         clock_img = image[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
                         
                         if clock_img.size > 0:
@@ -803,17 +792,20 @@ class OfflineFitter:
             
             digit_val = int(digit_str)
             
-            # Find the "best" instance. For digits, we want the one that is most complete.
-            # Trimming logic in extract_digits_from_clock means the widest image 
-            # (before resizing) is likely the most complete one.
-            # But since they are all resized to 30x44, we check which one has the 
-            # highest pixel density (most white pixels), which often indicates a full digit.
+            # Find the "best" instance: the one most similar to the mean of all
+            # instances. Outliers polluted by neighbouring content (colon dots,
+            # adjacent digits) get trimmed and resized differently, so they
+            # correlate poorly with the typical rendering.
+            stack = np.stack([inst.astype(np.float32) for inst in instances])
+            mean_img = stack.mean(axis=0)
+            mean_norm = np.sqrt((mean_img ** 2).sum()) + 1e-9
             best_instance = instances[0]
-            max_density = 0
+            best_score = -1.0
             for inst in instances:
-                density = np.sum(inst > 127)
-                if density > max_density:
-                    max_density = density
+                I = inst.astype(np.float32)
+                score = float((I * mean_img).sum()) / (np.sqrt((I ** 2).sum()) * mean_norm + 1e-9)
+                if score > best_score:
+                    best_score = score
                     best_instance = inst
             
             if best_instance is not None:
@@ -923,6 +915,22 @@ class OfflineFitter:
         Returns:
             Digit positions as fractions, or None if detection failed.
         """
+        # Prefer the final tightened coordinates: the raw detection boxes carry
+        # loose vertical padding that defeats digit segmentation
+        tightened = coordinates.get('bottom_clock', {}).get('play')
+        if tightened:
+            x, y = tightened['x'], tightened['y']
+            w, h = tightened['width'], tightened['height']
+            for detection in detections:
+                image = detection.get('image')
+                if image is None:
+                    continue
+                clock_img = image[y:y+h, x:x+w]
+                if clock_img.size > 0:
+                    positions = detect_digit_positions(clock_img)
+                    if positions:
+                        return positions
+
         # Try to find a 'start1' or 'start2' detection as these show initial time
         for detection in detections:
             if detection['state_hint'] in ['start1', 'start2']:

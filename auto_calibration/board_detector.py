@@ -129,19 +129,29 @@ class BoardDetector:
         
         # Create colour mask
         mask = create_board_colour_mask(small)
-        
+
         # Find largest contour
         contour = find_largest_contour(mask)
-        
+
         if contour is None:
             return None
-        
+
         # Get bounding rectangle
         x, y, w, h = get_bounding_rect(contour)
-        
+
         # Check if approximately square
         if not is_approximately_square(w, h, tolerance=0.2):
-            return None
+            # Board-coloured UI elements (e.g. the green "play the first move"
+            # banner) can merge with the board in the mask. Morphological
+            # opening disconnects them; retry once with the cleaned mask.
+            kernel = np.ones((5, 5), np.uint8)
+            opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            contour = find_largest_contour(opened)
+            if contour is None:
+                return None
+            x, y, w, h = get_bounding_rect(contour)
+            if not is_approximately_square(w, h, tolerance=0.2):
+                return None
         
         # Scale coordinates back up
         x, y, w, h = upscale_coordinates((x, y, w, h), self.DOWNSCALE_FACTOR)
