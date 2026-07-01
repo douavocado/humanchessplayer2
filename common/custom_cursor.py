@@ -145,36 +145,46 @@ class CustomCursor:
     @staticmethod
     def quick_move_to(point: list or tuple, duration: float = 0.15, resolution_scale: float = 1.0):
         """
-        Fast human-like mouse movement using minimal waypoints.
-        Uses pyautogui's built-in smooth movement between waypoints for speed.
-        
+        Smooth human-like mouse movement with an exact duration.
+
+        Steps along a quadratic Bezier curve manually (~100Hz) instead of
+        delegating timing to pyautogui, which executes any movement shorter
+        than MINIMUM_DURATION (0.1s) as an instant teleport and sleeps in
+        50ms chunks above it - the cursor either jumped or stuttered.
+
         Args:
             point: Target (x, y) coordinates
             duration: Movement duration in seconds
-            resolution_scale: Scale factor (ignored in minimal mode)
+            resolution_scale: Kept for signature compatibility (unused)
         """
         start = pyautogui.position()
         end = (int(point[0]), int(point[1]))
-        
-        # Generate minimal curved path (1-2 waypoints)
-        waypoints = _generate_minimal_curve(start, end)
-        
-        # Disable pyautogui's built-in pause
-        old_pause = pyautogui.PAUSE
-        pyautogui.PAUSE = 0
-        
-        try:
-            if len(waypoints) == 1:
-                # Direct movement with slight curve built into pyautogui
-                pyautogui.moveTo(end[0], end[1], duration=duration, tween=pyautogui.easeOutQuad)
-            else:
-                # Move through waypoint then to end
-                mid = waypoints[0]
-                # Split duration: 40% to midpoint, 60% to end
-                pyautogui.moveTo(int(mid[0]), int(mid[1]), duration=duration * 0.4, tween=pyautogui.easeOutQuad)
-                pyautogui.moveTo(end[0], end[1], duration=duration * 0.6, tween=pyautogui.easeOutQuad)
-        finally:
-            pyautogui.PAUSE = old_pause
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        distance = math.sqrt(dx * dx + dy * dy)
+
+        if distance < 3 or duration <= 0:
+            pyautogui.moveTo(end[0], end[1], _pause=False)
+            return
+
+        # Slight curve via a perpendicular control-point offset
+        perp_x, perp_y = -dy / distance, dx / distance
+        curve = distance * random.uniform(0.04, 0.12) * random.choice([-1, 1])
+        ctrl = (start[0] + dx * 0.5 + perp_x * curve,
+                start[1] + dy * 0.5 + perp_y * curve)
+
+        steps = max(3, int(duration / 0.01))
+        t_start = time.time()
+        for i in range(1, steps + 1):
+            t = _ease_out_quad(i / steps)
+            u = 1 - t
+            x = u * u * start[0] + 2 * u * t * ctrl[0] + t * t * end[0]
+            y = u * u * start[1] + 2 * u * t * ctrl[1] + t * t * end[1]
+            pyautogui.moveTo(int(x), int(y), _pause=False)
+            delay = t_start + duration * (i / steps) - time.time()
+            if delay > 0:
+                time.sleep(delay)
+        pyautogui.moveTo(end[0], end[1], _pause=False)
     
     @staticmethod
     def move_to(point: list or tuple, duration: float = None, human_curve=None, steady=False):

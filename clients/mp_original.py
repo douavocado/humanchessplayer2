@@ -200,6 +200,21 @@ def is_capslock_on():
         return True
     
 
+def _movement_duration(distance):
+    """
+    Duration for one mouse-movement leg, scaled by distance (Fitts-like)
+    and MOUSE_QUICKNESS.
+
+    Shared by drags and click-moves so both gestures move the cursor at
+    the same apparent speed: the previous per-path formulas made distance
+    contribute ~5ms, leaving clicks under pyautogui's instant-teleport
+    threshold while drags animated just above it.
+    """
+    jitter = 0.8 + 0.4 * random.random()
+    base = 0.07 + MOUSE_QUICKNESS / 1000.0 * jitter * np.sqrt(max(float(distance), 0.0) / RESOLUTION_SCALE)
+    return float(np.clip(base, 0.12, 0.35))
+
+
 def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     """ Make human drag and drop move with human mouse speed and randomness in mind.
         Uses optimised Bezier curves that are faster at higher resolutions.
@@ -233,14 +248,8 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     from_distance = np.sqrt((new_from_x - current_x)**2 + (new_from_y - current_y)**2)
     to_distance = np.sqrt((new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2)
     
-    # Duration scales with distance but adjusted for resolution
-    # At 4K (RESOLUTION_SCALE=2.0), distances are 2x but we want similar timing to 1080p
-    base_duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (from_distance / RESOLUTION_SCALE)**0.3
-    base_duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * (to_distance / RESOLUTION_SCALE)**0.5
-    
-    # Ensure minimum reasonable duration for human-like movement
-    duration_from = max(0.08, min(0.25, base_duration_from + 0.08))
-    duration_to = max(0.10, min(0.30, base_duration_to + 0.10))
+    duration_from = _movement_duration(from_distance)
+    duration_to = _movement_duration(to_distance)
     
     drag_start = time.time()
     
@@ -294,13 +303,8 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     from_distance = np.sqrt((new_from_x - current_x)**2 + (new_from_y - current_y)**2)
     to_distance = np.sqrt((new_from_x - new_to_x)**2 + (new_from_y - new_to_y)**2)
     
-    # Duration scales with distance but adjusted for resolution
-    base_duration_from = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(from_distance / RESOLUTION_SCALE)
-    base_duration_to = MOUSE_QUICKNESS/10000 * (0.8 + 0.4*random.random()) * np.sqrt(to_distance / RESOLUTION_SCALE)
-    
-    # Ensure minimum reasonable duration for human-like movement
-    duration_from = max(0.08, min(0.25, base_duration_from + 0.08))
-    duration_to = max(0.08, min(0.25, base_duration_to + 0.08))
+    duration_from = _movement_duration(from_distance)
+    duration_to = _movement_duration(to_distance)
     
     click_start = time.time()
     
