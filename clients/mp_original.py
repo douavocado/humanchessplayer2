@@ -373,12 +373,32 @@ def get_move_change(image, bottom='w'):
     else:
         return [detected[0]+detected[1], detected[1] + detected[0]]
 
+_START_LIKE_BOARD_FENS = None
+
+def _start_like_board_fens():
+    """
+    Board placements that can be on screen when a new game is found: the
+    starting position, or one white move into it - as black the opponent
+    often moves (or premoves) before our first scan.
+    """
+    global _START_LIKE_BOARD_FENS
+    if _START_LIKE_BOARD_FENS is None:
+        fens = {chess.STARTING_BOARD_FEN}
+        base = chess.Board()
+        for move in list(base.legal_moves):
+            base.push(move)
+            fens.add(base.board_fen())
+            base.pop()
+        _START_LIKE_BOARD_FENS = fens
+    return _START_LIKE_BOARD_FENS
+
+
 def new_game_found(expected_time=None):
     """ Uses screenshot to detect whether we have started new game.
-    
+
     Args:
         expected_time: Optional expected initial time in seconds to validate against.
-        
+
     Returns None if not, else returns our starting initial time in seconds.
     """
     # try to read bot clock for start position. if none is found, then haven't started the game
@@ -405,26 +425,20 @@ def new_game_found(expected_time=None):
                 continue
             
             # Fix 2: Starting Board Verification (The "Strict" Check)
-            # If we found a valid clock, verify the board is actually at start
+            # If we found a valid clock, verify the board is at (or one white
+            # move into) the starting position: as black the opponent may
+            # already have moved before we scan
             board_img = capture_board()
-            if GAME_INFO["playing_side"] == chess.WHITE:
-                bottom = "w"
-            else:
-                # If side not yet known, try 'w' first as it's most common
-                # find_initial_side will be called properly in set_game
-                bottom = "w"
-                
-            # Use fast_mode=True for minimal impact
-            # We just need to see if the board part matches a starting setup
+            # Side is not known yet; try 'w' first as it's most common
+            # (find_initial_side will be called properly in set_game)
             try:
-                test_fen = get_fen_from_image(board_img, bottom=bottom, fast_mode=True)
-                test_board = chess.Board(test_fen)
-                # Check if it's the starting position (ignoring turn/castling/clocks)
-                if test_board.board_fen() != chess.STARTING_BOARD_FEN:
+                start_like = _start_like_board_fens()
+                test_fen = get_fen_from_image(board_img, bottom="w", fast_mode=True)
+                if chess.Board(test_fen).board_fen() not in start_like:
                     # Could be we are playing as black, try other orientation
                     test_fen_b = get_fen_from_image(board_img, bottom="b", fast_mode=True)
-                    if chess.Board(test_fen_b).board_fen() != chess.STARTING_BOARD_FEN:
-                        continue # Not a starting board in either orientation
+                    if chess.Board(test_fen_b).board_fen() not in start_like:
+                        continue # Not a start-like board in either orientation
             except:
                 continue
                 
