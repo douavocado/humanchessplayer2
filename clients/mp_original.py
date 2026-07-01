@@ -445,6 +445,7 @@ def game_over_found():
     return False
 
 def await_new_game(timeout=60, expected_time=None):
+    global LOG
     time_start = time.time()
     while time.time() - time_start < timeout:
         res = new_game_found(expected_time=expected_time)
@@ -452,7 +453,13 @@ def await_new_game(timeout=60, expected_time=None):
             sound_file = "assets/audio/new_game_found.mp3"
             os.system("mpg123 -q " + sound_file)
             return res
-    
+
+    debug_files = save_debug_screenshot(
+        "new_game_timeout",
+        extra_info={'timeout': timeout, 'expected_time': expected_time})
+    LOG += "ERROR: No new game found within {}s (expected_time={}). Debug files: {}. \n".format(
+        timeout, expected_time, debug_files)
+
     sound_file = "assets/audio/alert.mp3"
     os.system("mpg123 -q " + sound_file)
     return None
@@ -943,19 +950,30 @@ def check_game_end(arena=False):
     3. Clock position check - fallback using end-state clock positions
     4. Clock unreadable at play position - indicates UI state change
     """
+    global LOG
+
     # Method 1: Check via board outcome (checkmate/stalemate)
     if len(DYNAMIC_INFO["fens"]) > 0:
         board = chess.Board(DYNAMIC_INFO["fens"][-1])
         if board.outcome() is not None:
+            LOG += "Game end detected via board outcome {} on fen {}. \n".format(
+                board.outcome().termination, DYNAMIC_INFO["fens"][-1])
             return True
-    
+
     # Method 2: Check via result image comparison
     # Uses calibrated coordinates from auto-calibration config
     try:
         result_img = capture_result(arena=arena)
         if result_img is not None and result_img.size > 0:
             for ref, threshold in _get_result_references():
-                if compare_result_images(result_img, ref) > threshold:
+                score = compare_result_images(result_img, ref)
+                if score > threshold:
+                    debug_files = save_debug_screenshot(
+                        "game_end_result_match",
+                        extra_info={'score': score, 'threshold': threshold,
+                                    'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
+                    LOG += "Game end detected via result image match (score {:.2f} > {}). Debug files: {}. \n".format(
+                        score, threshold, debug_files)
                     return True
     except Exception as e:
         # Don't fail the game check if result image comparison fails
@@ -979,6 +997,11 @@ def check_game_end(arena=False):
             if play_clock is None:
                 # Try reading at end positions to confirm
                 if game_over_found():
+                    debug_files = save_debug_screenshot(
+                        "game_end_clock_fallback",
+                        extra_info={'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
+                    LOG += "Game end detected via clock fallback: play clock unreadable, end-state clock readable. Debug files: {}. \n".format(
+                        debug_files)
                     return True
     except Exception as e:
         pass
