@@ -10,6 +10,46 @@ import time
 
 from common.board_information import calculate_threatened_levels, get_threatened_board, PIECE_VALS
 
+class InvalidPositionError(Exception):
+    """ A board given to the engine is structurally impossible (e.g. a king
+        missing from a mid-animation screen scrape). Callers should discard
+        the position and rescan rather than treat this as fatal.
+    """
+    pass
+
+
+# Piece-placement Status flags that can never occur in a real game, in
+# contrast to turn/castling/en-passant flags which the screen scraper
+# legitimately gets wrong on transient frames.
+_IMPOSSIBLE_PLACEMENT_STATUS = (
+    chess.Status.NO_WHITE_KING
+    | chess.Status.NO_BLACK_KING
+    | chess.Status.TOO_MANY_KINGS
+    | chess.Status.TOO_MANY_WHITE_PAWNS
+    | chess.Status.TOO_MANY_BLACK_PAWNS
+    | chess.Status.PAWNS_ON_BACKRANK
+    | chess.Status.TOO_MANY_WHITE_PIECES
+    | chess.Status.TOO_MANY_BLACK_PIECES
+    | chess.Status.EMPTY
+)
+
+def scraped_fen_sanity_issues(fen_or_board):
+    """ Check a screen-scraped position for piece placements that are
+        impossible in a real game, e.g. a missing king when a capture
+        animation covers it. Stockfish segfaults if asked to analyse such
+        a position, so these must never be adopted as the tracked board.
+
+        Only placement is checked: turn, castling rights and en-passant
+        are synthesised by the scraper and may be transiently wrong on
+        perfectly usable scrapes.
+
+        Returns a (possibly empty) list of human-readable issue strings.
+    """
+    board = fen_or_board if isinstance(fen_or_board, chess.Board) else chess.Board(fen_or_board)
+    bad = board.status() & _IMPOSSIBLE_PLACEMENT_STATUS
+    return [flag.name for flag in chess.Status if flag & bad]
+
+
 def extend_mate_score(score, mate_score=2500, extension=100):
     """ Given we are close to mating opponent, extend mate score to be such that
         each move closer to mate is not 1 eval difference but rather extension amount

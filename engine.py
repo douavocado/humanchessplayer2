@@ -36,7 +36,8 @@ from common.board_information import (
     is_offer_exchange, king_danger, is_open_file, calculate_threatened_levels, check_best_takeback_exists,
     is_weird_move, is_under_mate_threat
             )
-from common.utils import flip_uci, patch_fens, check_safe_premove, extend_mate_score
+from common.utils import (flip_uci, patch_fens, check_safe_premove, extend_mate_score,
+                          scraped_fen_sanity_issues, InvalidPositionError)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 # TODO: Intelligent premoves
@@ -1166,7 +1167,19 @@ class Engine:
         self.log += "Performing initial quick analysis perhaps used later by stockfish. \n"
         start = time.time()
         no_lines = len(list(self.current_board.legal_moves))
-        
+
+        # Stockfish segfaults on structurally impossible positions (e.g. a
+        # missing king from a corrupt screen scrape), taking any restarted
+        # engine down with it. Refuse to analyse instead; the client treats
+        # this as "rescan the board", not a fatal error.
+        sanity_issues = scraped_fen_sanity_issues(self.current_board)
+        if sanity_issues:
+            self.log += "ERROR: Refusing stockfish analysis of structurally impossible position {} ({}). \n".format(
+                self.current_board.fen(), sanity_issues)
+            raise InvalidPositionError(
+                "Position {} is structurally impossible: {}".format(
+                    self.current_board.fen(), sanity_issues))
+
         try:
             analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
         except chess.engine.EngineTerminatedError:

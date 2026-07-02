@@ -690,9 +690,31 @@ class TemplateExtractor:
                 return None
             
             templates[result_type] = template
-        
+
         return templates
-    
+
+    def load_game_over_message_templates(self) -> Dict[str, np.ndarray]:
+        """
+        Load templates of game-over messages that show NO result box, only
+        an italic message in the notation panel: "... aborted the game" and
+        "... didn't move". These are matched separately from the result
+        templates. Each is optional: profiles without a template simply
+        skip detecting that message. Returns a (possibly empty) dict.
+        """
+        filename_map = {
+            'aborted': 'aborted_result.png',
+            'didnt_move': 'didnt_move_result.png',
+        }
+        templates = {}
+        for name, filename in filename_map.items():
+            filepath = self.template_dir / "results" / filename
+            if not filepath.exists():
+                continue
+            template = cv2.imread(str(filepath))
+            if template is not None:
+                templates[name] = template
+        return templates
+
     # -------------------------------------------------------------------------
     # Bulk Operations
     # -------------------------------------------------------------------------

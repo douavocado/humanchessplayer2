@@ -21,13 +21,14 @@ from common.custom_cursor import CustomCursor
 
 from engine import Engine
 from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY, RESOLUTION_SCALE
-from common.utils import patch_fens, check_safe_premove
+from common.utils import patch_fens, check_safe_premove, scraped_fen_sanity_issues, InvalidPositionError
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
                                            capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
-                                           capture_result, compare_result_images, capture_rating)
+                                           capture_result, compare_result_images, capture_rating,
+                                           capture_white_notation)
 
 # Import dynamic button detection
 try:
@@ -193,6 +194,20 @@ MOVE_TIMING = {
     "mouse_time_ms": None,           # Time spent on mouse movement
     "waiting_for_clock": False       # Whether we're waiting to detect clock change
 }
+
+# Guard against acting twice off stale vision. Set when a move's clicks are
+# successfully executed, cleared whenever a scan is adopted into
+# DYNAMIC_INFO (even one showing an unchanged board - that is positive
+# evidence the move never registered, so a retry is then correct). While
+# set, check_our_turn() may not trigger another move: every duplicate
+# move/premove observed in the wild came from acting on a fen frozen by
+# discarded mid-animation scans.
+AWAITING_FRESH_SCAN = False
+
+# Below this much time on our own clock, skip the confirmation re-capture
+# for unlinkable scans and act on the first reading - a human under time
+# pressure is also prone to misreading the board.
+RESYNC_CONFIRM_MIN_TIME = 15
 
 
 
@@ -488,10 +503,11 @@ def await_new_game(timeout=60, expected_time=None):
 
 def set_game(starting_time):
     ''' Once client has found game, sets up game parameters. '''
-    global HOVER_SQUARE, GAME_INFO, LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO, PONDER_DIC
-    
+    global HOVER_SQUARE, GAME_INFO, LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO, PONDER_DIC, AWAITING_FRESH_SCAN
+
     # resetting hover square
     HOVER_SQUARE = None
+    AWAITING_FRESH_SCAN = False
     # getting game information, including the side the player is playing and the initial time
     board_img = capture_board()
 
@@ -644,7 +660,7 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
     """ The second way we can update the dynamic information, from screenshots
         and change detection. 
     """
-    global DYNAMIC_INFO, LOG, GAME_INFO
+    global DYNAMIC_INFO, LOG, GAME_INFO, AWAITING_FRESH_SCAN
     # update fen list
     last_board = chess.Board(DYNAMIC_INFO["fens"][-1])
     last_board.push(move_obj)
@@ -699,10 +715,39 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
             DYNAMIC_INFO["self_clock_times"] = DYNAMIC_INFO["self_clock_times"][-FEN_NO_CAP:]
     LOG += "Updated dynamic information from move-change screenshot prompt: \n"
     LOG += "{} \n".format(DYNAMIC_INFO)
+    # A move was adopted - the move loop may act on the position again.
+    AWAITING_FRESH_SCAN = False
     
+def _under_time_pressure():
+    """ Whether our own clock is low enough that we accept first readings
+        rather than spend time double-checking the board. """
+    times = DYNAMIC_INFO["self_clock_times"]
+    return bool(times) and times[-1] < RESYNC_CONFIRM_MIN_TIME
+
+
+def _confirm_board_stable(board_fen, bottom, delay=0.15):
+    """ Re-capture the board after a short delay and check the same piece
+        placement is still on screen.
+
+        A frame that fails move-linking or turn detection is either a
+        transient mid-animation misread or a genuine resync after missed
+        moves. A misread never survives two captures this far apart; a
+        settled board does. Returns True if the placement reproduced.
+    """
+    time.sleep(delay)
+    try:
+        board_img = capture_board()
+        fen_now = get_fen_from_image(board_img, bottom=bottom)
+    except Exception:
+        return False
+    if scraped_fen_sanity_issues(fen_now):
+        return False
+    return chess.Board(fen_now).board_fen() == board_fen
+
+
 def update_dynamic_info_from_fullimage():
     """ Scrape image information from screenshot and update info dic. """
-    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING
+    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING, AWAITING_FRESH_SCAN
     
     scan_start = time.time()
     
@@ -718,7 +763,26 @@ def update_dynamic_info_from_fullimage():
     
     fen = get_fen_from_image(board_img, bottom=bottom) # assumes white turn
     fen_time = time.time()
-    
+
+    # Reject structurally impossible scrapes (e.g. a king hidden behind a
+    # capture animation): adopting one poisons the fen history and a
+    # king-less position segfaults stockfish downstream. Skip this scan
+    # and let the next one see the settled board.
+    sanity_issues = scraped_fen_sanity_issues(fen)
+    if sanity_issues:
+        debug_files = save_debug_screenshot(
+            "insane_scraped_fen",
+            board_img=board_img,
+            extra_info={
+                'detected_fen': fen,
+                'sanity_issues': sanity_issues,
+                'previous_fens': DYNAMIC_INFO["fens"][-3:],
+            }
+        )
+        LOG += "ERROR: Scraped fen {} is structurally impossible ({}), discarding this scan. Debug files: {}. \n".format(
+            fen, sanity_issues, debug_files)
+        return
+
     # now check the turn
     check_turn_res = check_turn_from_last_moved(fen, board_img, bottom)
     turn_time = time.time()
@@ -773,6 +837,15 @@ def update_dynamic_info_from_fullimage():
             fen_after = dummy_board.fen()
             res = patch_fens(fen_before, fen_after)
             if res is None:
+                # An unlinkable board with an unreadable turn is either a
+                # transient animation frame or a genuine resync; only a
+                # settled board survives a second capture. Guessing the
+                # turn off a transient frame is how moves get played out
+                # of turn, so confirm before adopting (unless low on time,
+                # where we accept the misread risk to move quickly).
+                if not _under_time_pressure() and not _confirm_board_stable(dummy_board.board_fen(), bottom):
+                    LOG += "Unlinkable board with unreadable turn did not survive a confirmation re-capture, discarding this scan as a transient frame. \n"
+                    return
                 LOG += "ERROR: Could not find turn using any method, resorting to the same turn as last turn. \n"
         fen = fen_after
     elif check_turn_res == False:
@@ -785,9 +858,13 @@ def update_dynamic_info_from_fullimage():
     dummy_board = chess.Board(fen)
     last_tracked = chess.Board(DYNAMIC_INFO["fens"][-1])
     if dummy_board.board_fen() == last_tracked.board_fen() and dummy_board.turn == last_tracked.turn:
-        # also need the turn to be the same        
+        # also need the turn to be the same
         # fen has not changed from last position, do nothing and return
-        return 
+        # This is still an adopted scan: an unchanged board after we made
+        # clicks is positive evidence the move never registered, so allow
+        # the move loop to act (retry) again.
+        AWAITING_FRESH_SCAN = False
+        return
     
     # Update board fen
     # need to do some adjustments with move numbers
@@ -822,6 +899,15 @@ def update_dynamic_info_from_fullimage():
             DYNAMIC_INFO["last_moves"].extend(last_moves)
             DYNAMIC_INFO["last_moves"] = DYNAMIC_INFO["last_moves"][-(FEN_NO_CAP-1):]
         else:
+            # Unlinkable frames are usually mid-animation misreads, not
+            # genuine missed-move resyncs; wiping history off one poisons
+            # the fen state (and downstream, the engine input). Adopt the
+            # resync only if the board reproduces on a second capture -
+            # except under time pressure, where we act on first readings.
+            if not _under_time_pressure() and not _confirm_board_stable(chess.Board(now_fen).board_fen(), bottom):
+                del DYNAMIC_INFO["fens"][-1]
+                LOG += "ERROR: Couldn't find linking move between fens {} and {}, and the new board did not survive a confirmation re-capture. Discarding this scan as a transient frame. \n".format(prev_fen, now_fen)
+                return
             # Save comprehensive debug info for linking move errors
             debug_files = save_debug_screenshot(
                 "linking_move_error",
@@ -934,6 +1020,8 @@ def update_dynamic_info_from_fullimage():
     
     LOG += "Updated dynamic information from full image scans: \n"
     LOG += "{} \n".format(DYNAMIC_INFO)
+    # A scan was adopted - the move loop may act on the position again.
+    AWAITING_FRESH_SCAN = False
     
 
 
@@ -977,6 +1065,63 @@ def _get_result_references():
     return refs
 
 
+_GAME_OVER_MESSAGE_REFERENCES = None
+GAME_OVER_MESSAGE_MATCH_THRESHOLD = 0.75
+
+def _get_game_over_message_references():
+    """
+    Templates of game-over messages that appear WITHOUT a result box, as a
+    list of (name, image) pairs: "... aborted the game", "... didn't move".
+    """
+    global _GAME_OVER_MESSAGE_REFERENCES
+    if _GAME_OVER_MESSAGE_REFERENCES is None:
+        try:
+            from auto_calibration.template_extractor import TemplateExtractor
+            template_dir = get_config().get_template_dir()
+            templates = TemplateExtractor(template_dir=str(template_dir)).load_game_over_message_templates()
+            _GAME_OVER_MESSAGE_REFERENCES = list(templates.items())
+        except Exception:
+            _GAME_OVER_MESSAGE_REFERENCES = []
+    return _GAME_OVER_MESSAGE_REFERENCES
+
+
+def game_over_message_found():
+    """
+    Detect a game that ended without a result box, via its notation-panel
+    message: "White/Black aborted the game" or "White/Black didn't move".
+
+    These endings leave none of the usual game-end signals: the board is
+    still start-like (so no board outcome, and the clock fallback is
+    guarded off) and there is no result box for the result templates to
+    match - only an italic message. The panel is more compact than after
+    a normal game (zero or one move in the list) and shifts with layout,
+    so the message is template-searched anywhere within the notation
+    region rather than compared at a fixed spot. Templates deliberately
+    exclude the leading colour word.
+
+    Returns the matched message name (truthy) or None.
+    """
+    refs = _get_game_over_message_references()
+    if not refs:
+        return None
+    try:
+        region = capture_white_notation()
+        if region is None or region.size == 0:
+            return None
+        region_gray = cv2.cvtColor(np.ascontiguousarray(region), cv2.COLOR_BGR2GRAY)
+        for name, ref in refs:
+            ref_gray = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY)
+            if (region_gray.shape[0] < ref_gray.shape[0]
+                    or region_gray.shape[1] < ref_gray.shape[1]):
+                continue
+            score = cv2.matchTemplate(region_gray, ref_gray, cv2.TM_CCOEFF_NORMED).max()
+            if score > GAME_OVER_MESSAGE_MATCH_THRESHOLD:
+                return name
+        return None
+    except Exception:
+        return None
+
+
 def check_game_end(arena=False):
     """
     Check whether the game has ended.
@@ -1015,6 +1160,18 @@ def check_game_end(arena=False):
     except Exception as e:
         # Don't fail the game check if result image comparison fails
         pass
+
+    # Method 2b: Aborted / didn't-move endings show no result box at all -
+    # match their message in the notation panel instead
+    message = game_over_message_found()
+    if message:
+        debug_files = save_debug_screenshot(
+            "game_end_message_{}".format(message),
+            extra_info={'message': message,
+                        'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
+        LOG += "Game end detected via game-over message match ({}). Debug files: {}. \n".format(
+            message, debug_files)
+        return True
 
     # Method 3: Fallback - check if clock is readable at end positions but NOT at play position
     # This catches cases where the UI has changed due to game ending
@@ -1063,8 +1220,13 @@ def await_move(arena=False):
         # Next try full body scan
         update_dynamic_info_from_fullimage()
         
-        # See if it is our turn
-        if check_our_turn() == True:
+        # See if it is our turn. While AWAITING_FRESH_SCAN is set we have
+        # already clicked a move off this position and no scan has been
+        # adopted since - the fen is stale (frozen by discarded frames),
+        # and returning True here would re-issue the same clicks. Keep
+        # scanning: a valid scan clears the flag whether it shows the
+        # advanced position (not our turn) or an unchanged one (retry).
+        if check_our_turn() == True and not AWAITING_FRESH_SCAN:
             return True
         
         # In the meantime check for updates via screenshot method. The amount of time we
@@ -1318,8 +1480,8 @@ def make_move(move_uci:str, premove:str=None):
 
         Returns True if clicks were made successfully, else returns False
     """
-    global LOG, HOVER_SQUARE, MOVE_TIMING
-    
+    global LOG, HOVER_SQUARE, MOVE_TIMING, AWAITING_FRESH_SCAN
+
     move_start_time = time.time()
     
     # Record timing for realised move comparison
@@ -1422,7 +1584,10 @@ def make_move(move_uci:str, premove:str=None):
     MOVE_TIMING["move_execution_end_time"] = time.time()
     MOVE_TIMING["mouse_time_ms"] = total_move_time
     MOVE_TIMING["waiting_for_clock"] = True
-    
+
+    # Block further moves off this position until a scan is adopted
+    AWAITING_FRESH_SCAN = True
+
     return True
 
 def berserk():
@@ -1496,16 +1661,18 @@ def new_game(time_control="1+0"):
     for state in ["play", "start1", "start2"]:
         if read_clock(capture_bottom_clock(state=state)) is not None:
             # A readable clock could also be a FINISHED game whose end-state
-            # clock bleeds into this region; a visible result box means the
-            # game is over and seeking is safe
-            game_over = False
+            # clock bleeds into this region; a visible result box (or an
+            # aborted / didn't-move message, which has no result box) means
+            # the game is over and seeking is safe
+            game_over = game_over_message_found() is not None
             try:
-                result_img = capture_result(arena=False)
-                if result_img is not None and result_img.size > 0:
-                    for ref, threshold in _get_result_references():
-                        if compare_result_images(result_img, ref) > threshold:
-                            game_over = True
-                            break
+                if not game_over:
+                    result_img = capture_result(arena=False)
+                    if result_img is not None and result_img.size > 0:
+                        for ref, threshold in _get_result_references():
+                            if compare_result_images(result_img, ref) > threshold:
+                                game_over = True
+                                break
             except Exception:
                 pass
             if game_over:
@@ -1824,9 +1991,21 @@ def run_game(arena=False):
         if is_capslock_on():
             continue
         
-        ENGINE.update_info(input_dic)
-        
-        # Once we send the information to the engine, first check if 
+        try:
+            ENGINE.update_info(input_dic)
+        except InvalidPositionError as e:
+            # A structurally impossible position slipped into the fen
+            # history (corrupt scrape). Don't let it kill the client:
+            # go back to scanning, the next clean scrape replaces it.
+            debug_files = save_debug_screenshot(
+                "engine_rejected_position",
+                extra_info={'error': str(e), 'fens': DYNAMIC_INFO["fens"]})
+            LOG += "ERROR: Engine rejected position as structurally impossible ({}). Rescanning. Debug files: {}. \n".format(
+                e, debug_files)
+            write_log()
+            continue
+
+        # Once we send the information to the engine, first check if
         if ENGINE._decide_resign() == True:
             LOG += "Engine has decided to resign. Executing resign interaction. \n"
             time.sleep(2+3*random.random())

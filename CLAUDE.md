@@ -36,9 +36,12 @@ The bot cannot be run end-to-end here — it needs an X11 display and a live Lic
 
 Behaviour is tuned via `common/constants.py`: `DIFFICULTY`, `QUICKNESS` (move-time pacing), `MOUSE_QUICKNESS` (cursor speed), `RESOLUTION_SCALE` (1.0 for 1080p, 2.0 for 4K). `main.py` flags override some of these per run.
 
+Client-side scan reliability lives in `clients/mp_original.py`: after making a move, `AWAITING_FRESH_SCAN` blocks further moves until a scan is adopted (prevents duplicate/out-of-turn clicks off stale vision), and board scans that fail move-linking or turn detection must survive a confirmation re-capture before being adopted — skipped when our clock is under `RESYNC_CONFIRM_MIN_TIME` seconds (deliberate: humans misread boards under time pressure).
+
 ## Architecture pointers
 
 - `engine.py` — move selection core; modular logic lives in `engine_components/` (decision_logic, human_move_logic, premover, ponderer, mood_manager, state_manager).
-- `clients/mp_original.py` — the active Lichess client (mouse automation, game loop); other clients in `clients/` are older variants.
+- `clients/mp_original.py` — the active Lichess client (mouse automation, game loop, scan-reliability guards); other clients in `clients/` are older variants.
+- `common/utils.py` — `scraped_fen_sanity_issues()` / `InvalidPositionError`: reject structurally impossible scraped positions (e.g. king hidden by a capture animation); the engine refuses to analyse them (Stockfish segfaults) and the client discards the scan.
 - `chessimage/image_scrape_utils.py` — screen capture, FEN extraction, clock OCR.
 - `auto_calibration/` — fits board/UI coordinates from screenshots; profiles stored in `auto_calibration/calibrations/`.
