@@ -992,6 +992,56 @@ def find_initial_side():
 # Target size for fast processing (roughly 1080p equivalent)
 _TARGET_BOARD_SIZE = 824  # 103 pixels per square * 8
 
+
+def _strip_flat_grey_backgrounds(imgs):
+    """
+    Zero out flat grey square backgrounds that survive remove_background_colours.
+
+    Board squares and most Lichess highlights are coloured, so background
+    removal leaves them at 0. The premove-destination highlight however is
+    grey (R=G=B), passes the grayscale mask, and floods the square with a
+    near-uniform value — the flat background then swamps the normalized
+    cross-correlation and the piece on it reads as an empty square (this
+    resigned a winning game when the bot's queen "vanished" off a premove
+    square).
+
+    Detection uses the square's border ring: after background removal a
+    normal square's ring is almost entirely zero, while a surviving grey
+    highlight fills it with one tight value band. Piece pixels sit well away
+    from that band (black fill ~51, outlines ~255 vs highlight ~136), so
+    zeroing the band restores a normal piece-on-black image.
+
+    Args:
+        imgs: NxHxW uint8 array of per-square images (modified in place)
+    """
+    h, w = imgs.shape[-2:]
+    b = max(1, int(h * 0.12))
+    ring_mask = np.zeros((h, w), dtype=bool)
+    ring_mask[:b, :] = True
+    ring_mask[-b:, :] = True
+    ring_mask[:, :b] = True
+    ring_mask[:, -b:] = True
+    ring_size = ring_mask.sum()
+
+    for i in range(len(imgs)):
+        ring = imgs[i][ring_mask]
+        nonzero = ring[ring > 1]
+        # Normal squares have a near-empty ring (background already removed).
+        if len(nonzero) < ring_size * 0.4:
+            continue
+        # Large pieces poke into the ring, so don't require the ring to be
+        # pure - require one value band to dominate it. A surviving grey
+        # highlight is near-uniform; piece pixels spread across fill and
+        # outline values.
+        hist = np.bincount(nonzero, minlength=256)
+        mode = int(hist.argmax())
+        band_lo, band_hi = max(mode - 16, 2), mode + 16
+        if hist[band_lo:band_hi + 1].sum() < ring_size * 0.4:
+            continue
+        band = (imgs[i] >= band_lo) & (imgs[i] <= band_hi)
+        imgs[i][band] = 0
+    return imgs
+
 # Pre-computed smaller templates for fast matching (generated on first use)
 _SMALL_PIECE_TEMPLATES = None
 _SMALL_TEMPLATE_SIZE = 103  # Target piece size for fast matching
@@ -1163,7 +1213,8 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
                 piece = cv2.resize(piece, (int(step_small), int(step_small)))
                 images.append(piece)
         images = np.stack(images, axis=0)
-        
+        images = _strip_flat_grey_backgrounds(images)
+
         # Use pre-computed small templates with cached matching for extra speed
         templates = _get_small_templates()
         valid_squares, argmaxes = multitemplate_multimatch_cached(images, templates)
@@ -1195,6 +1246,7 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
                 images.append(piece)
                 
         images = np.stack(images, axis=0)
+        images = _strip_flat_grey_backgrounds(images)
         templates = PIECE_TEMPLATES
         valid_squares, argmaxes = multitemplate_multimatch(images, templates)
     

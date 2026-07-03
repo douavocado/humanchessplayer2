@@ -2007,15 +2007,25 @@ def run_game(arena=False):
 
         # Once we send the information to the engine, first check if
         if ENGINE._decide_resign() == True:
-            LOG += "Engine has decided to resign. Executing resign interaction. \n"
-            time.sleep(2+3*random.random())
-            successful = resign()
-            if successful == True:
-                return
+            if not DYNAMIC_INFO["last_moves"]:
+                # A resign-worthy position with no linked move history means
+                # the fen history was just wiped by an unlinkable scan - far
+                # more likely a stable misread (e.g. a piece on a grey
+                # premove-highlight square reading as empty) than a real
+                # collapse. A genuinely lost position survives to the next
+                # linked scan, so resigning waits for one.
+                LOG += "Engine wants to resign but the position has no linked move history (possible misread). Not resigning on this scan. \n"
+                write_log()
             else:
-                # was not able to resign, keep playing I guess
-                pass
-            
+                LOG += "Engine has decided to resign. Executing resign interaction. \n"
+                time.sleep(2+3*random.random())
+                successful = resign()
+                if successful == True:
+                    return
+                else:
+                    # was not able to resign, keep playing I guess
+                    pass
+
         # check if manual mode on
         if is_capslock_on():
             continue
