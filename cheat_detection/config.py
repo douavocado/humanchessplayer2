@@ -1,0 +1,54 @@
+"""Configuration for the human-likeness analyzer.
+
+All tunables live here. Defaults match the choices made when the module was
+designed: Stockfish depth 18, multi-PV 5, using the repo's Stockfish 17 binary.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+# Reuse the engine binary the bot already ships with, so the diagnostic sees
+# the same evaluations. Falls back gracefully if constants can't be imported.
+try:
+    from common.constants import PATH_TO_STOCKFISH as _DEFAULT_SF
+except Exception:  # pragma: no cover - only when run outside the repo
+    _DEFAULT_SF = os.environ.get("STOCKFISH_PATH", "stockfish")
+
+
+@dataclass
+class AnalysisConfig:
+    # --- Engine analysis ---
+    stockfish_path: str = _DEFAULT_SF
+    depth: int = 18                 # fixed-depth analysis per position
+    multipv: int = 5                # number of candidate moves ranked per position
+    threads: int = 2
+    hash_mb: int = 256
+    mate_cp: int = 10000            # centipawn value assigned to a forced mate
+
+    # --- Feature thresholds (ported from Irwin/Kaladin conventions) ---
+    ambiguity_wc_window: float = 0.05   # moves within this win-prob of best are "equally good"
+    instant_move_secs: float = 1.0      # emt below this counts as an "instant" move
+    blunder_wc_loss: float = 0.15       # win-prob drop that marks a blunder
+
+    # --- Phase boundaries ---
+    opening_plies: int = 16             # first N plies = opening
+    endgame_npm: int = 13               # non-pawn material (points) at/below which = endgame
+
+    # --- Caching ---
+    cache_dir: str = field(
+        default_factory=lambda: os.path.join(
+            os.path.dirname(__file__), "cache"
+        )
+    )
+
+    # --- Reporting ---
+    # A feature whose bot value is this many baseline-std's away is flagged.
+    flag_zscore: float = 2.0
+
+    def cache_path(self) -> str:
+        os.makedirs(self.cache_dir, exist_ok=True)
+        return os.path.join(
+            self.cache_dir, f"analysis_d{self.depth}_mpv{self.multipv}.json"
+        )

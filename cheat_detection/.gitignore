@@ -1,0 +1,11 @@
+# Engine-analysis cache (regenerated on demand, can be large)
+cache/
+# Generated human baselines and reports
+baselines/
+*.report.json
+report.md
+report.json
+# Downloaded/filtered human corpora (can be large)
+corpora/
+# Orchestrator working dir (fetched games, reports)
+runs/
