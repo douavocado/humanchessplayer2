@@ -38,6 +38,12 @@ Behaviour is tuned via `common/constants.py`: `DIFFICULTY`, `QUICKNESS` (move-ti
 
 Client-side scan reliability lives in `clients/mp_original.py`: after making a move, `AWAITING_FRESH_SCAN` blocks further moves until a scan is adopted (prevents duplicate/out-of-turn clicks off stale vision), and board scans that fail move-linking or turn detection must survive a confirmation re-capture before being adopted — skipped when our clock is under `RESYNC_CONFIRM_MIN_TIME` seconds (deliberate: humans misread boards under time pressure).
 
+## Move-time pacing (`engine.py:_get_time_taken`)
+
+How long the bot "thinks" per move is decided in `Engine._get_time_taken`. A "complicated position" — one worth spending more time on — is keyed off **sharpness** (`self.sharpness`, computed in `_compute_sharpness`): the win-probability spread across the engine's top candidates from a narrow, slightly-deeper scan (multipv 5, depth 12), using the same logistic and definition as the `cheat_detection/` human-likeness analyser. Sharpness ≥ 0.25 is a "critical" position. This replaced the older structural trigger (Lucas `activity`/`eff_mob`); those Lucas metrics are still computed and used elsewhere (mood, resign logic), just no longer for time-scaling. Sharpness maps onto the same `((x+12)/25)**0.4` envelope, so the *magnitude* of the slow-down is unchanged — only the trigger.
+
+An **intuition gate** stops the bot over-thinking (and flagging on time): in a sharp position it applies the slow-down only ~35% of the time and otherwise snaps the move quickly (gate probability 0.65, `base_time *= 0.5`), mirroring that humans trust intuition on most critical moves. Very flat positions (sharpness < 0.10) get a `*0.7` "little at stake" cut. All three log to `engine.log` (sharpness value, multiplier, gate outcome).
+
 ## Architecture pointers
 
 - `engine.py` — move selection core; modular logic lives in `engine_components/` (decision_logic, human_move_logic, premover, ponderer, mood_manager, state_manager).

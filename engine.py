@@ -101,6 +101,10 @@ class Engine:
             "narrowness": None,
             "activity": None,
             }
+        # Position "sharpness": win-probability spread across the top candidate
+        # moves (see _compute_sharpness). Drives the "complicated position"
+        # time-scaling in _get_time_taken. 0.25 is the neutral / critical point.
+        self.sharpness = None
         # A bool to track whether we have updated analytics following updating info
         self.analytics_updated = False
         
@@ -1207,13 +1211,64 @@ class Engine:
         lucas_dict = {"complexity": xcomp, "win_prob": xmlr, "eff_mob": xemo, "narrowness": xnar, "activity": xact}
         self.lucas_analytics.update(lucas_dict)
         self.log += "Lucas analytics: {} \n".format(lucas_dict)
-        
+
+        # Sharpness of the position (eval-stakes among the plausible moves).
+        # This is the criterion for "complicated position" used when deciding
+        # how long to think (see _get_time_taken).
+        self.sharpness = self._compute_sharpness()
+        self.log += "Position sharpness: {} \n".format(self.sharpness)
+        print(f"[ENGINE] Position sharpness: {self.sharpness:.3f}")
+
         # Now determine our player "mood" and set it as our mode for the rest of the calculations
         self.mood = self._set_mood()
         self.log += "Setted mood to be: {} \n".format(self.mood)
         print(f"[ENGINE] Setted mood to be: {self.mood}")
         self.analytics_updated = True
-    
+
+    def _compute_sharpness(self):
+        """ Measures how "sharp" (critical) the current position is, using the
+            same definition as the cheat_detection human-likeness analyser:
+            the spread in win-probability across the engine's top candidate
+            moves. A position where the best move is winning and the next-best
+            is losing is sharp (a lot is at stake); one where every candidate
+            keeps roughly the same win-probability is not.
+
+            Distinct from the Lucas analytics (which measure *structural*
+            complexity -- number of good moves, mobility, activity): this keys
+            off eval-stakes instead. Computed from a narrow, slightly deeper
+            scan (multipv 5, depth 12) than the Lucas scan.
+
+            Returns sharpness : float in [0, 1]. Falls back to 0.25 (the neutral
+            / "critical" threshold) if the position can't be scanned, so a
+            failed scan leaves the move-time pacing unchanged.
+        """
+        # Logistic centipawn -> win-probability, matching the analyser.
+        def winning_chances(cp):
+            return 1.0 / (1.0 + np.exp(-0.00368208 * cp))
+
+        try:
+            no_lines = min(5, len(list(self.current_board.legal_moves)))
+            if no_lines == 0:
+                return 0.25
+            analysis = self.stockfish_engine.analyse(
+                self.current_board,
+                limit=chess.engine.Limit(depth=12),
+                multipv=no_lines,
+            )
+            if isinstance(analysis, dict):
+                analysis = [analysis]
+            wcs = [
+                winning_chances(entry["score"].pov(self.current_board.turn).score(mate_score=10000))
+                for entry in analysis
+            ]
+            if not wcs:
+                return 0.25
+            return max(wcs) - min(wcs)
+        except Exception as e:
+            self.log += "WARNING: sharpness scan failed ({}); defaulting to neutral. \n".format(e)
+            print(f"[ENGINE] WARNING: sharpness scan failed ({e}); defaulting to neutral 0.25.")
+            return 0.25
+
     def check_obvious_move(self):
         """ Given input information, check whether there is an obvious move in the
             position that we may play immediately.
@@ -1367,18 +1422,55 @@ class Engine:
             
             self.log += "Base time after game phase analysis: {} \n".format(base_time)
             
-            # The more activity we have in the position, the more we think
-            activity = self.lucas_analytics["activity"]
-            activity_sf = ((activity+12)/25)**0.4
-            base_time *= activity_sf
-            
-            self.log += "Base time after activity analysis: {} \n".format(base_time)
-            
-            # The greater the proportion of good moves in a position, the less we think
-            eff_mob = self.lucas_analytics["eff_mob"]
-            if eff_mob > 25:
-                base_time *= 0.7
-                self.log += "Base time after eff_mob analysis: {} \n".format(base_time)
+            # The sharper (more critical) the position, the more we think.
+            # "Complicated position" is defined by eval-stakes -- the spread in
+            # win-probability across the plausible moves (self.sharpness) --
+            # rather than the structural Lucas activity/eff_mob it used to key
+            # off. The scaling envelope is unchanged: sharpness is mapped onto
+            # the same ((x+12)/25)**0.4 curve, with the "critical position"
+            # threshold (0.25) sitting at the neutral point (multiplier 1.0),
+            # so the range of delay outputs is the same -- only the trigger
+            # changed.
+            sharpness = self.sharpness if self.sharpness is not None else 0.25
+
+            # Intuition gate: a human does NOT deep-think every critical
+            # position -- often they trust intuition and snap the move out,
+            # especially to avoid burning the clock. So in a sharp position we
+            # only apply the slow-down some of the time; the rest of the time we
+            # skip the boost and play quickly. Gating probability 0.65 means we
+            # snap ~65% of sharp positions and genuinely think on the other ~35%
+            # (which the mood branch then thins further). Prevents the bot from
+            # reliably over-thinking sharp positions and falling behind on time.
+            snap_in_sharp = (sharpness >= 0.25) and (np.random.random() < 0.65)
+            if snap_in_sharp:
+                base_time *= 0.5
+                self.log += "Sharp position (sharpness={:.3f}) but snapping on intuition (gate 0.65); base_time *= 0.5 -> {} \n".format(
+                    sharpness, base_time)
+                print(f"[ENGINE] Sharp position (sharpness={sharpness:.3f}): snapping on intuition (no long think).")
+            else:
+                # The sharper (more critical) the position, the more we think.
+                # "Complicated position" is defined by eval-stakes -- the spread
+                # in win-probability across the plausible moves (self.sharpness)
+                # -- rather than the structural Lucas activity/eff_mob it used to
+                # key off. The scaling envelope is unchanged: sharpness is mapped
+                # onto the same ((x+12)/25)**0.4 curve, with the "critical
+                # position" threshold (0.25) sitting at the neutral point
+                # (multiplier 1.0), so the range of delay outputs is the same --
+                # only the trigger changed.
+                sharp_scaled = min(sharpness * 52, 25)
+                sharpness_sf = ((sharp_scaled + 12) / 25) ** 0.4
+                base_time *= sharpness_sf
+
+                self.log += "Base time after sharpness analysis (sharpness={:.3f}, multiplier={:.3f}): {} \n".format(
+                    sharpness, sharpness_sf, base_time)
+
+                # When the plausible moves all keep roughly the same
+                # win-probability (a flat, non-critical position), little is at
+                # stake, so we think less -- the sharpness analogue of the old
+                # "many good moves" cut.
+                if sharpness < 0.10:
+                    base_time *= 0.7
+                    self.log += "Base time after low-sharpness (flat position) analysis: {} \n".format(base_time)
             
             # If opponent has just blundered, then act startled
             if self.opponent_just_blundered == True:
