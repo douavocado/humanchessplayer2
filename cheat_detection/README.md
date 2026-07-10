@@ -77,8 +77,11 @@ venv/bin/python -m cheat_detection.gui
 Enter the bot's Lichess account, rating band and time control, point at a
 baseline (or a corpus PGN to build one), and hit **Run diagnostic**. Analysis
 runs in a background thread; progress streams to the log and the result renders
-as a z-score chart plus a sortable feature table. **Open report JSON...** views
-a previously saved report instantly (no recompute).
+as a z-score chart plus a sortable feature table. Click any feature row to
+drill down into its distribution — a histogram of human per-game values overlaid
+with the bot's per-game values, human mean and ±2σ marked (**⟵ Overview**
+returns to the z-score chart). **Open report JSON...** views a previously saved
+report instantly (no recompute), including the drill-downs.
 
 ### One command: `run`
 
@@ -123,7 +126,9 @@ venv/bin/python -m cheat_detection.analyze baseline \
 Only players whose Elo falls in `--rating` are included. `--max-games` caps how
 much of the dump is analysed (analysis is the slow part). The baseline JSON
 stores the mean/std of every feature across human "units" (one unit = one
-player's moves in one game).
+player's moves in one game), plus the raw per-unit values (used by the GUI's
+distribution drill-down; baselines built before this field exists still load,
+falling back to a normal-fit curve).
 
 ### 2. Report the bot against that baseline
 
@@ -141,9 +146,14 @@ plain-English explanation of each.
 
 ## Configuration
 
-Defaults live in `config.py` (`AnalysisConfig`): Stockfish **depth 18**,
+Defaults live in `config.py` (`AnalysisConfig`): Stockfish **depth 10**,
 **multipv 5**, using the repo's `PATH_TO_STOCKFISH` (Stockfish 17). Override per
 run with `--depth`, `--multipv`, `--threads`, `--hash`, `--min-moves`.
+
+Depth 10 was chosen after benchmarking (~24× faster than depth 18 with only
+modest shifts in baseline stats). If you change depth, rebuild the baseline at
+the same depth — comparing bot games analysed at one depth against a baseline
+built at another skews every engine-derived feature.
 
 ## Performance & caching
 

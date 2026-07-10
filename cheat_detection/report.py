@@ -142,11 +142,17 @@ def render_markdown(
 
 
 def build_report(bot_units, baseline, cfg):
+    from .baseline import collect_values
+
     comps = compare(bot_units, baseline, cfg)
     md = render_markdown(comps, baseline, bot_units, cfg)
     report_dict = {
         "baseline": {"n_units": baseline.n_units, "rating_band": list(baseline.rating_band)},
         "bot": {"n_units": len(bot_units), "n_moves": sum(u.n_moves for u in bot_units)},
+        # Per-unit distributions for interactive drill-down (human side is
+        # absent when the baseline predates the `values` field).
+        "human_values": baseline.values,
+        "bot_values": collect_values(bot_units),
         "features": [
             {
                 "key": c.key,

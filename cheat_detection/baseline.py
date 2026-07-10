@@ -23,14 +23,20 @@ class Baseline:
     rating_band: tuple[int, int]
     n_units: int
     stats: dict[str, dict[str, Optional[float]]]  # feature -> {"mean","std","n"}
+    # Per-unit raw values (feature -> [value, ...]); powers distribution views.
+    # Optional: baselines built before this field exists load as None.
+    values: Optional[dict[str, list[float]]] = None
 
     def to_json(self, path: str) -> None:
+        payload = {
+            "rating_band": list(self.rating_band),
+            "n_units": self.n_units,
+            "stats": self.stats,
+        }
+        if self.values is not None:
+            payload["values"] = self.values
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump({
-                "rating_band": list(self.rating_band),
-                "n_units": self.n_units,
-                "stats": self.stats,
-            }, fh, indent=2)
+            json.dump(payload, fh, indent=2)
 
     @staticmethod
     def from_json(path: str) -> "Baseline":
@@ -40,7 +46,16 @@ class Baseline:
             rating_band=tuple(d["rating_band"]),
             n_units=d["n_units"],
             stats=d["stats"],
+            values=d.get("values"),
         )
+
+
+def collect_values(units: list[Unit]) -> dict[str, list[float]]:
+    """Per-feature list of per-unit values (Nones dropped)."""
+    return {
+        key: [round(u.features[key], 6) for u in units if u.features.get(key) is not None]
+        for key in FEATURE_KEYS
+    }
 
 
 def _summarize(units: list[Unit]) -> dict[str, dict[str, Optional[float]]]:
@@ -83,4 +98,5 @@ def build_baseline(
         rating_band=rating_band,
         n_units=len(units),
         stats=_summarize(units),
+        values=collect_values(units),
     )

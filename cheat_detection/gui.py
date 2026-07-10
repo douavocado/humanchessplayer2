@@ -59,7 +59,7 @@ class DiagnosticGUI:
         self.v_botpgn = tk.StringVar(value="")
         self.v_botmax = tk.StringVar(value="300")
         self.v_basemax = tk.StringVar(value="250")
-        self.v_depth = tk.StringVar(value="18")
+        self.v_depth = tk.StringVar(value="10")
         self.v_multipv = tk.StringVar(value="5")
 
         def row(r, label, var, width=22, browse=None):
@@ -173,6 +173,14 @@ class DiagnosticGUI:
         left.pack(side="left", fill="both", expand=True)
         self.verdict = ttk.Label(left, text="", font=("TkDefaultFont", 11, "bold"))
         self.verdict.pack(anchor="w")
+        chart_bar = ttk.Frame(left)
+        chart_bar.pack(anchor="w", pady=(2, 0))
+        ttk.Button(chart_bar, text="⟵ Overview",
+                   command=self._show_overview).pack(side="left")
+        self.chart_hint = ttk.Label(
+            chart_bar, foreground="#888",
+            text="  click a feature in the table to see its distribution")
+        self.chart_hint.pack(side="left")
         self.fig = Figure(figsize=(5.5, 5.2), dpi=96)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=left)
@@ -188,6 +196,7 @@ class DiagnosticGUI:
             self.tree.heading(c, text=txt)
             self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True)
+        self.tree.bind("<<TreeviewSelect>>", self._on_feature_select)
 
         logf = ttk.LabelFrame(self.root, text="Log", padding=4)
         logf.pack(fill="x", padx=8, pady=(0, 8))
@@ -279,6 +288,7 @@ class DiagnosticGUI:
 
     # -------------------------------------------------------------- rendering
     def _render(self, report: dict):
+        self.current_report = report
         feats = report["features"]
         scored = [f for f in feats if f.get("zscore") is not None]
         mean_abs_z = sum(abs(f["zscore"]) for f in scored) / len(scored) if scored else 0.0
@@ -290,7 +300,29 @@ class DiagnosticGUI:
             text=f"Overall divergence: mean |z| = {mean_abs_z:.2f}  ({verdict}); "
                  f"{n_flag} feature(s) beyond 2σ")
 
-        # chart: horizontal bars of z, sorted by |z|
+        self._draw_overview()
+
+        # table (row iid = feature key, so selection can drill down)
+        self.tree.delete(*self.tree.get_children())
+        order = sorted(feats, key=lambda f: -(abs(f["zscore"]) if f.get("zscore") is not None else -1))
+        for f in order:
+            label = FEATURE_META.get(f["key"], (f["key"],))[0]
+            hm, hs = f.get("human_mean"), f.get("human_std")
+            human = f"{hm:.3f}±{hs:.3f}" if hm is not None and hs is not None else "n/a"
+            bot = "n/a" if f.get("bot_value") is None else f"{f['bot_value']:.3f}"
+            z = "n/a" if f.get("zscore") is None else f"{f['zscore']:.2f}"
+            tag = "flag" if f.get("flagged") else ""
+            self.tree.insert("", "end", iid=f["key"], values=(label, human, bot, z),
+                             tags=(tag,))
+        self.tree.tag_configure("flag", background="#ffe0e0")
+
+    def _draw_overview(self):
+        """Horizontal z-score bars for all features, sorted by |z|."""
+        report = getattr(self, "current_report", None)
+        if not report:
+            self._draw_empty()
+            return
+        scored = [f for f in report["features"] if f.get("zscore") is not None]
         rows = sorted(scored, key=lambda f: abs(f["zscore"]))
         labels = [FEATURE_META.get(f["key"], (f["key"],))[0] for f in rows]
         zs = [f["zscore"] for f in rows]
@@ -308,18 +340,60 @@ class DiagnosticGUI:
         self.fig.tight_layout()
         self.canvas.draw()
 
-        # table
-        self.tree.delete(*self.tree.get_children())
-        order = sorted(feats, key=lambda f: -(abs(f["zscore"]) if f.get("zscore") is not None else -1))
-        for f in order:
-            label = FEATURE_META.get(f["key"], (f["key"],))[0]
-            hm, hs = f.get("human_mean"), f.get("human_std")
-            human = f"{hm:.3f}±{hs:.3f}" if hm is not None and hs is not None else "n/a"
-            bot = "n/a" if f.get("bot_value") is None else f"{f['bot_value']:.3f}"
-            z = "n/a" if f.get("zscore") is None else f"{f['zscore']:.2f}"
-            tag = "flag" if f.get("flagged") else ""
-            self.tree.insert("", "end", values=(label, human, bot, z), tags=(tag,))
-        self.tree.tag_configure("flag", background="#ffe0e0")
+    def _show_overview(self):
+        for sel in self.tree.selection():
+            self.tree.selection_remove(sel)
+        self._draw_overview()
+
+    def _on_feature_select(self, _event=None):
+        sel = self.tree.selection()
+        if sel:
+            self._draw_drilldown(sel[0])
+
+    def _draw_drilldown(self, key: str):
+        """Distribution view for one feature: human histogram vs bot per-game values."""
+        report = getattr(self, "current_report", None)
+        if not report:
+            return
+        feat = next((f for f in report["features"] if f["key"] == key), None)
+        if feat is None:
+            return
+        label, meaning = FEATURE_META.get(key, (key, ""))
+        hvals = (report.get("human_values") or {}).get(key) or []
+        bvals = (report.get("bot_values") or {}).get(key) or []
+        hmean, hstd = feat.get("human_mean"), feat.get("human_std")
+        bval, z = feat.get("bot_value"), feat.get("zscore")
+
+        self.ax.clear()
+        if hvals:
+            self.ax.hist(hvals, bins=30, density=True, color="#4c78a8", alpha=0.55,
+                         label=f"human per-game ({len(hvals)})")
+        elif hmean is not None and hstd:
+            # Old baseline without raw values: show the fitted normal instead.
+            import math
+            xs = [hmean + hstd * (i / 25 - 4) for i in range(201)]
+            ys = [math.exp(-((x - hmean) ** 2) / (2 * hstd ** 2))
+                  / (hstd * math.sqrt(2 * math.pi)) for x in xs]
+            self.ax.plot(xs, ys, color="#4c78a8",
+                         label="human (normal fit; rebuild baseline for histogram)")
+        if bvals:
+            self.ax.hist(bvals, bins=30, density=True, color="#ff7f0e", alpha=0.55,
+                         label=f"bot per-game ({len(bvals)})")
+        if hmean is not None:
+            self.ax.axvline(hmean, color="#4c78a8", lw=1.4, ls="--", label="human mean")
+            if hstd:
+                for k in (-2, 2):
+                    self.ax.axvline(hmean + k * hstd, color="#d62728", lw=0.8,
+                                    ls=":", alpha=0.7)
+        if bval is not None:
+            self.ax.axvline(bval, color="#ff7f0e", lw=1.8, label="bot mean")
+        ztxt = "n/a" if z is None else f"{z:+.2f}"
+        self.ax.set_title(f"{label}   (z = {ztxt})", fontsize=10)
+        self.ax.set_xlabel(meaning, fontsize=8)
+        self.ax.set_ylabel("density")
+        self.ax.legend(fontsize=7)
+        self.fig.tight_layout()
+        self.canvas.draw()
 
     # ---------------------------------------------------------------- io
     def _open_report(self):

@@ -1,7 +1,7 @@
 """Configuration for the human-likeness analyzer.
 
-All tunables live here. Defaults match the choices made when the module was
-designed: Stockfish depth 18, multi-PV 5, using the repo's Stockfish 17 binary.
+All tunables live here. Defaults: Stockfish depth 10 (dropped from 18 for a
+~24x speedup), multi-PV 5, using the repo's Stockfish 17 binary.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ except Exception:  # pragma: no cover - only when run outside the repo
 class AnalysisConfig:
     # --- Engine analysis ---
     stockfish_path: str = _DEFAULT_SF
-    depth: int = 18                 # fixed-depth analysis per position
+    depth: int = 10                 # fixed-depth analysis per position
     multipv: int = 5                # number of candidate moves ranked per position
     threads: int = 2
     hash_mb: int = 256

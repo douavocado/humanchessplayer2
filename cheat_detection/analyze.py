@@ -32,7 +32,7 @@ def _progress_printer(label: str):
 
 
 def _add_engine_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--depth", type=int, help="Stockfish analysis depth (default 18)")
+    p.add_argument("--depth", type=int, help="Stockfish analysis depth (default 10)")
     p.add_argument("--multipv", type=int, help="candidate moves per position (default 5)")
     p.add_argument("--threads", type=int, help="Stockfish threads")
     p.add_argument("--hash", type=int, dest="hash_mb", help="Stockfish hash (MB)")
