@@ -21,7 +21,11 @@ from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH, 
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
-                              QUICKNESS, PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
+                              QUICKNESS, GAME_PACE_SIGMA, GAME_PACE_CLIP,
+                              GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP, GAME_SNAP_GATE_RANGE,
+                              MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
+                              MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
+                              PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH, WEIRD_MOVE_SD_DIC, LOWER_THRESH_SF,
                               PROTECT_KING_SF, CAPTURE_EN_PRIS_SF, BREAK_PIN_SF, CAPTURE_SF,
                               CAPTURE_SF_KING_DANGER, CAPTURABLE_SF, CHECK_SF_DIC, TAKEBACK_SF,
@@ -36,6 +40,14 @@ from common.board_information import (
     is_offer_exchange, king_danger, is_open_file, calculate_threatened_levels, check_best_takeback_exists,
     is_weird_move, is_under_mate_threat
             )
+from common.search_constants import (
+    BREADTH_TIME_BONUS_TIERS, EFF_MOB_TACTICAL_CUTOFF, EFF_MOB_FORCED_CUTOFF,
+    KING_DANGER_THRESHOLD, KING_DANGER_BREADTH_BONUS, TACTICAL_MIDGAME_BREADTH_DELTA,
+    ENDGAME_LOW_MOB_BREADTH_FLOOR, ENDGAME_LOW_MOB_BREADTH_BONUS,
+    ENDGAME_BREADTH_FLOOR, ENDGAME_BREADTH_BONUS, STANDARD_BREADTH_DELTA,
+    MOOD_BREADTH_DELTAS, SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH,
+    PREMOVE_SCAN_MULTIPV, MAX_CALC_DEPTH_COEFF,
+)
 from common.utils import (flip_uci, patch_fens, check_safe_premove, extend_mate_score,
                           scraped_fen_sanity_issues, InvalidPositionError)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
@@ -105,6 +117,15 @@ class Engine:
         # moves (see _compute_sharpness). Drives the "complicated position"
         # time-scaling in _get_time_taken. 0.25 is the neutral / critical point.
         self.sharpness = None
+        # Per-game character (see _sample_game_character): one draw per game
+        # each, resampled at every game boundary, None until the first
+        # update_info. game_pace_sf scales every base think time in
+        # _get_time_taken; game_premove_sf scales every premove-search
+        # probability in make_move.
+        self.game_pace_sf = None
+        self.game_premove_sf = None
+        self.game_snap_gate = None
+        self._last_seen_ply = None
         # A bool to track whether we have updated analytics following updating info
         self.analytics_updated = False
         
@@ -731,48 +752,41 @@ class Engine:
         """
         base_no = self.playing_level
         if total_time is not None:
-            if total_time > 1.5:
-                base_no += 1
-            elif total_time > 2.5:
-                base_no += 2
-            elif total_time > 5:
-                base_no += 3
-            
+            for time_threshold, bonus in BREADTH_TIME_BONUS_TIERS:
+                if total_time > time_threshold:
+                    base_no += bonus
+                    break
+
         game_phase = phase_of_game(self.current_board)
         king_dang = king_danger(self.current_board, self.input_info["side"], game_phase)
         eff_mob = self.lucas_analytics["eff_mob"]
-        if eff_mob < 15:
+        if eff_mob < EFF_MOB_TACTICAL_CUTOFF:
             # Either the best move is obvious (e.g. a takeback, mate in one) or
             # there is a tactic involved. Decrease search width to mimic human
             # behaviour in tactics under pressure
-            if king_dang > 500: 
+            if king_dang > KING_DANGER_THRESHOLD:
                 # king is in danger, need to pay attention
-                no_moves = base_no+10
-            elif eff_mob > 5 and game_phase == "midgame":
-                no_moves = max(base_no-1,1)
+                no_moves = base_no + KING_DANGER_BREADTH_BONUS
+            elif eff_mob > EFF_MOB_FORCED_CUTOFF and game_phase == "midgame":
+                no_moves = max(base_no + TACTICAL_MIDGAME_BREADTH_DELTA, 1)
             elif game_phase == "endgame":
-                no_moves = no_moves = max(10, base_no+4)
+                no_moves = max(ENDGAME_LOW_MOB_BREADTH_FLOOR, base_no + ENDGAME_LOW_MOB_BREADTH_BONUS)
             else:
                 no_moves = max(base_no, 1)
         else:
             # There are plenty of good moves, search wide so close the game out effectively
-            if game_phase == 'endgame' and king_dang < 500:
-                no_moves = max(9, base_no+5)
-            elif king_dang > 500: 
+            if game_phase == 'endgame' and king_dang < KING_DANGER_THRESHOLD:
+                no_moves = max(ENDGAME_BREADTH_FLOOR, base_no + ENDGAME_BREADTH_BONUS)
+            elif king_dang > KING_DANGER_THRESHOLD:
                 # king is in danger, need to pay attention
-                no_moves = base_no+10
+                no_moves = base_no + KING_DANGER_BREADTH_BONUS
             else:
                 # not in the endgame, lots of good moves
-                no_moves = max(base_no-1,1)
-        
+                no_moves = max(base_no + STANDARD_BREADTH_DELTA, 1)
+
         # Now for mood dependent logic
-        if self.mood in ["cocky", "hurry"]:
-            no_moves = max(no_moves - 1, 1)
-        elif self.mood == "cautious":
-            no_moves = no_moves + 1
-        elif self.mood == "tilted":
-            no_moves = max(no_moves - 2, 1)
-        
+        no_moves = max(no_moves + MOOD_BREADTH_DELTAS.get(self.mood, 0), 1)
+
         self.log += "Calculated number of root moves in current position: {} \n".format(no_moves)
         return no_moves
     
@@ -871,7 +885,7 @@ class Engine:
         # If the number of re-evaluations far exceeds the numbre of top moves, we may keep 
         # re-evaluating each seed move with greater depth    
         # however there is a max depth, as probability of silly moves increases with depth
-        max_depth = 1 + int(2.5 * no_root_moves ** 0.5) # this is the maximum depth we will consider for re-evaluation, as for too deep re-evaluation we increase the chance of silly moves.
+        max_depth = 1 + int(MAX_CALC_DEPTH_COEFF * no_root_moves ** 0.5) # this is the maximum depth we will consider for re-evaluation, as for too deep re-evaluation we increase the chance of silly moves.
         depth = min((re_evaluations // no_root_moves) + 1, max_depth)
         
         reval_start = time.time()
@@ -1107,6 +1121,44 @@ class Engine:
         return return_dic
             
     
+    @staticmethod
+    def _lognormal_sf(sigma, clip):
+        """ One mean-preserving lognormal draw (median slightly below 1),
+            clipped. sigma <= 0 disables (returns exactly 1.0). """
+        if sigma <= 0:
+            return 1.0
+        return float(np.clip(np.random.lognormal(-sigma**2 / 2, sigma), *clip))
+
+    def _sample_game_character(self):
+        """ Draws this game's character multipliers -- game-to-game variation
+            that per-move noise cannot produce:
+
+            - game_pace_sf: applied to think times in _get_time_taken, so one
+              game is played uniformly faster or slower than another.
+            - game_premove_sf: applied to the premove-search probabilities in
+              make_move, so one game premoves eagerly and another rarely.
+            - game_snap_gate: the intuition-gate probability in
+              _get_time_taken, so one game snaps most sharp positions on gut
+              feel and another stops to think on most of them.
+        """
+        self.game_pace_sf = self._lognormal_sf(GAME_PACE_SIGMA, GAME_PACE_CLIP)
+        self.game_premove_sf = self._lognormal_sf(GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP)
+        self.game_snap_gate = float(np.random.uniform(*GAME_SNAP_GATE_RANGE))
+        self.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f} \n".format(
+            self.game_pace_sf, self.game_premove_sf, self.game_snap_gate)
+        print(f"[ENGINE] Sampled per-game character: pace {self.game_pace_sf:.3f}, "
+              f"premove propensity {self.game_premove_sf:.3f}, snap gate {self.game_snap_gate:.3f}")
+
+    def new_game(self):
+        """ Signals a game boundary: resamples per-game character (pace,
+            premove propensity). update_info also detects boundaries itself
+            (ply going backwards), so calling this is optional -- it only makes
+            the boundary exact for games that start deeper into the book than
+            the last one ended.
+        """
+        self._last_seen_ply = None
+        self._sample_game_character()
+
     def update_info(self, info_dic : dict, auto_update_analytics:bool = True):
         """ The engine is fed the following thins in the info_dic, which a dictionary
             of board information: 
@@ -1149,7 +1201,15 @@ class Engine:
             self.current_board = chess.Board(self.input_info["fens"][-1])
         # make sure the last fen entry is indeed our turn
         assert self.current_board.turn == self.input_info["side"]
-        
+
+        # Detect a game boundary: the engine instance persists across games
+        # (live sessions and simulation batches alike), so when the ply count
+        # goes backwards we are in a new game -- resample per-game character.
+        ply = self.current_board.ply()
+        if self.game_pace_sf is None or (self._last_seen_ply is not None and ply < self._last_seen_ply):
+            self._sample_game_character()
+        self._last_seen_ply = ply
+
         self.analytics_updated = False
         
         if auto_update_analytics == True:
@@ -1247,12 +1307,12 @@ class Engine:
             return 1.0 / (1.0 + np.exp(-0.00368208 * cp))
 
         try:
-            no_lines = min(5, len(list(self.current_board.legal_moves)))
+            no_lines = min(SHARPNESS_SCAN_MULTIPV, len(list(self.current_board.legal_moves)))
             if no_lines == 0:
                 return 0.25
             analysis = self.stockfish_engine.analyse(
                 self.current_board,
-                limit=chess.engine.Limit(depth=12),
+                limit=chess.engine.Limit(depth=SHARPNESS_SCAN_DEPTH),
                 multipv=no_lines,
             )
             if isinstance(analysis, dict):
@@ -1403,6 +1463,8 @@ class Engine:
         if obvious == True:
             # if we have made obvious move, we don't need to take much time
             time_taken = base_time * obvious_sf * (1 + np.random.uniform(-0.5, 0.5))
+            if self.game_pace_sf is not None:
+                time_taken *= self.game_pace_sf
             self.log += "We have made obvious mode, so move quickly in {} seconds. \n".format(time_taken)
             return time_taken
         elif human_filters == True:
@@ -1437,15 +1499,18 @@ class Engine:
             # position -- often they trust intuition and snap the move out,
             # especially to avoid burning the clock. So in a sharp position we
             # only apply the slow-down some of the time; the rest of the time we
-            # skip the boost and play quickly. Gating probability 0.65 means we
-            # snap ~65% of sharp positions and genuinely think on the other ~35%
-            # (which the mood branch then thins further). Prevents the bot from
-            # reliably over-thinking sharp positions and falling behind on time.
-            snap_in_sharp = (sharpness >= 0.25) and (np.random.random() < 0.65)
+            # skip the boost and play quickly. The gating probability is a
+            # per-game draw (see _sample_game_character, mean 0.65): a
+            # trust-the-gut game snaps most sharp positions, a grinding game
+            # genuinely thinks on most of them (which the mood branch then
+            # thins further). Prevents the bot from reliably over-thinking
+            # sharp positions and falling behind on time.
+            snap_gate = self.game_snap_gate if self.game_snap_gate is not None else 0.65
+            snap_in_sharp = (sharpness >= 0.25) and (np.random.random() < snap_gate)
             if snap_in_sharp:
                 base_time *= 0.5
-                self.log += "Sharp position (sharpness={:.3f}) but snapping on intuition (gate 0.65); base_time *= 0.5 -> {} \n".format(
-                    sharpness, base_time)
+                self.log += "Sharp position (sharpness={:.3f}) but snapping on intuition (gate {:.2f}); base_time *= 0.5 -> {} \n".format(
+                    sharpness, snap_gate, base_time)
                 print(f"[ENGINE] Sharp position (sharpness={sharpness:.3f}): snapping on intuition (no long think).")
             else:
                 # The sharper (more critical) the position, the more we think.
@@ -1537,7 +1602,16 @@ class Engine:
                     time_taken = base_time * (3.6 + np.random.uniform(-0.8, 1.0)) * high_range_multiplier
             
             self.log += "Decided time taken after mood analysis: {} \n".format(time_taken)
-        
+
+        # This game's pace multiplier (see _sample_game_character). Applied after
+        # the phase/mood envelopes -- the opening's **0.2 compression would
+        # crush it upstream -- so the whole game runs uniformly faster or
+        # slower. Sits before the reflective-pacing blend: matching the
+        # opponent's tempo deliberately overrides our own pace.
+        if self.game_pace_sf is not None:
+            time_taken *= self.game_pace_sf
+            self.log += "Time taken after per-game pace multiplier ({:.3f}): {} \n".format(self.game_pace_sf, time_taken)
+
         # we also use reflective moving, which is to play faster when opponent has been playing
         # fast over the last few moves (as we feel the pressure to keep up with the pace)
         # we do not move slower if opponents has beserked, because our mood function should take care of that
@@ -1579,7 +1653,61 @@ class Engine:
         # Targeted console output
         print(f"[ENGINE] Decided time taken for move: {time_taken:.3f}s")
         return time_taken
-    
+
+    def _chosen_move_wc_loss(self, move_uci):
+        """ Win-probability given up by the chosen move vs the engine's best,
+            from the initial full-width analysis (calculate_analytics scans
+            every legal move, so the chosen move is always in there). Same
+            logistic as _compute_sharpness. Returns None if it can't be read.
+        """
+        if not self.stockfish_analysis:
+            return None
+        side = self.input_info["side"]
+        best_wc, move_wc = None, None
+        for entry in self.stockfish_analysis:
+            cp = entry["score"].pov(side).score(mate_score=10000)
+            wc = 1.0 / (1.0 + np.exp(-0.00368208 * cp))
+            if best_wc is None or wc > best_wc:
+                best_wc = wc
+            if entry["pv"][0].uci() == move_uci:
+                move_wc = wc
+        if best_wc is None or move_wc is None:
+            return None
+        return best_wc - move_wc
+
+    def _adjust_time_for_move_loss(self, move_uci, time_take):
+        """ The hesitation before the mistake. Humans think longer in
+            positions where they end up erring (difficulty consumes clock AND
+            induces the error), giving a positive per-game correlation
+            between move time and move loss. The engine's errors come from
+            the human-probability sampling, independent of the decided think
+            time, so the link is restored here: when the chosen move gives up
+            real win probability, the already-decided think time is
+            (sometimes) stretched. The rest stay fast -- snap blunders exist.
+
+            Returns the (possibly stretched) time_take.
+        """
+        own_time = max(self.input_info["self_clock_times"][-1], 1)
+        if own_time < MISTAKE_HESITATION_MIN_TIME or self.mood == "hurry":
+            # scramble errors are fast and must stay fast
+            return time_take
+        try:
+            wc_loss = self._chosen_move_wc_loss(move_uci)
+        except Exception as e:
+            self.log += "WARNING: could not compute chosen-move loss ({}); skipping hesitation. \n".format(e)
+            return time_take
+        if wc_loss is None or wc_loss < MISTAKE_HESITATION_WC_LOSS:
+            return time_take
+        if np.random.random() >= MISTAKE_HESITATION_PROB:
+            self.log += "Chosen move loses {:.3f} win prob but snapping it anyway (no hesitation). \n".format(wc_loss)
+            return time_take
+        stretch = np.random.uniform(*MISTAKE_HESITATION_RANGE)
+        new_time = min(time_take * stretch, own_time*0.7 + 1)
+        self.log += "Chosen move loses {:.3f} win prob; hesitating before the mistake (x{:.2f}: {:.2f}s -> {:.2f}s). \n".format(
+            wc_loss, stretch, time_take, new_time)
+        print(f"[ENGINE] Hesitating before a mistake (wc loss {wc_loss:.3f}): {time_take:.2f}s -> {new_time:.2f}s")
+        return new_time
+
     def _set_mood(self):
         """ Given input information, we determine our mood which influences the rest of our
             calculations. The calculation of these moods should ideally not depend on engine
@@ -1749,7 +1877,7 @@ class Engine:
             else:
                 self.log += "Even though opening phase, did not find matching position in opening database. Resorting to stockfish premove. \n"
         if candidate_premove is None: # didn't find opening book premove
-            next_analysis = self.stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(depth=8, time=0.02), multipv=10)
+            next_analysis = self.stockfish_engine.analyse(dummy_board, limit=chess.engine.Limit(depth=8, time=0.02), multipv=PREMOVE_SCAN_MULTIPV)
             if isinstance(next_analysis, dict):
                 next_analysis = [next_analysis]
             # now use get_stockfish move on this position
@@ -1848,7 +1976,7 @@ class Engine:
         if board.outcome() is not None:
             return None
         
-        max_depth = int(2.5 * search_width ** 0.5) # this is the maximum depth we will consider for ponder, as for too deep ponder we increase the chance of silly moves.
+        max_depth = int(MAX_CALC_DEPTH_COEFF * search_width ** 0.5) # this is the maximum depth we will consider for ponder, as for too deep ponder we increase the chance of silly moves.
 
         if ponder_width is None:
             # As a maximum number of ponder moves (to prevent too quick responses),
@@ -2064,7 +2192,11 @@ class Engine:
                 return_dic["move_made"] = self.get_stockfish_move()
                 stockfish_end = time.time()
                 self.log += "Stockfish move gotten in {} seconds. \n".format(stockfish_end-stockfish_start)
-        
+            # Now that the move is known, restore the human link between
+            # think time and move quality (hesitation before the mistake).
+            return_dic["time_take"] = self._adjust_time_for_move_loss(
+                return_dic["move_made"], return_dic["time_take"])
+
         if log == True:
             self._write_log()
         # Now that we have decided what move are going to make, lets check whether the opponent
@@ -2088,23 +2220,27 @@ class Engine:
         if after_board.outcome() is None:
             self_initial_time = self.input_info["self_initial_time"]
             premove_start = time.time()
+            # Probability of searching for a *full* premove (anticipating the
+            # opponent's reply), by situation; anything else falls back to the
+            # takeback-only search. Both are scaled by this game's premove
+            # propensity (see _sample_game_character): an eager game premoves
+            # more of everything, a reluctant game sometimes doesn't even
+            # queue the obvious takeback.
+            premove_sf = self.game_premove_sf if self.game_premove_sf is not None else 1.0
             if self.mood == "hurry" and own_time < 20:
-                # with some probability we return a premove
-                if np.random.random() < 0.3*self_initial_time/(own_time + 0.3*self_initial_time):
-                    return_dic["premove"] = self.get_premove(after_board, self.input_info["side"])
-                else:
-                    # look for takeback premoves only
-                    return_dic["premove"] = self.get_premove(after_board, self.input_info["side"], takeback_only=True)
+                full_premove_prob = 0.3*self_initial_time/(own_time + 0.3*self_initial_time)
             elif self_initial_time <= 60 and phase_of_game(self.current_board) == "opening":
-                # with some probability return a forced premove, otherwise just look for takeback premoves
-                if np.random.random() < 0.9:
-                    return_dic["premove"] = self.get_premove(after_board, self.input_info["side"])
-                else:
-                    # look for takeback premoves only
-                    return_dic["premove"] = self.get_premove(after_board, self.input_info["side"], takeback_only=True)
+                full_premove_prob = 0.9
             else:
+                full_premove_prob = 0.0
+            if np.random.random() < min(full_premove_prob * premove_sf, 0.98):
+                return_dic["premove"] = self.get_premove(after_board, self.input_info["side"])
+            elif np.random.random() < premove_sf:
                 # look for takeback premoves only
                 return_dic["premove"] = self.get_premove(after_board, self.input_info["side"], takeback_only=True)
+            else:
+                return_dic["premove"] = None
+                self.log += "Skipped premove search this move (premove propensity {:.2f}). \n".format(premove_sf)
             premove_end = time.time()
             self.log += "Premove search took {} seconds. \n".format(premove_end-premove_start)
         else:
@@ -2143,8 +2279,12 @@ class Engine:
                 # push response move uci to the board, but first check if it is legal
                 if chess.Move.from_uci(response_move_uci) in b.legal_moves:
                     b.push_uci(response_move_uci)
-                    # get premove for the board
-                    premove = self.get_premove(b, self.input_info["side"], takeback_only=True)
+                    # get premove for the board -- gated by this game's premove
+                    # propensity, like the direct premove searches above
+                    if np.random.random() < (self.game_premove_sf if self.game_premove_sf is not None else 1.0):
+                        premove = self.get_premove(b, self.input_info["side"], takeback_only=True)
+                    else:
+                        premove = None
                     if premove is not None:
                         return_ponder_dic[board_fen] = {"move":response_move_uci, "premove":premove}
                     else:

@@ -65,13 +65,45 @@ ZERO_DEPTH_PENALTY = 30
 CAPTURE_BONUS = 10
 
 
-QUICKNESS = 2.1 # adjust depending on computer fastness. The bigger the number the slower the moves made
-DIFFICULTY = 4 # engine difficulty
-MOUSE_QUICKNESS = 3 # number between 0 and 10. Bigger the number the slower we are with mouse movements
+QUICKNESS = 2.5 # adjust depending on computer fastness. The bigger the number the slower the moves made
+# Per-game pace variation: at each game boundary the engine samples one
+# multiplier (mean-preserving lognormal, sigma below, clipped to the range)
+# and applies it to every think time that game (engine.py:_sample_game_pace).
+# Humans' average pace swings game to game (mood, opponent, focus); without
+# this the bot's per-game mean move time is unnaturally consistent. 0 disables.
+GAME_PACE_SIGMA = 0.28
+GAME_PACE_CLIP = (0.55, 1.8)
+# Same idea for premove appetite: one multiplier per game scaling every
+# premove-search probability in make_move (full and takeback-only alike).
+# Some games the bot premoves everything, some games barely at all --
+# humans' premove usage swings similarly with mood/opponent. 0 disables.
+GAME_PREMOVE_SIGMA = 0.4
+GAME_PREMOVE_CLIP = (0.3, 1.7)
+# Per-game intuition gate: the probability of snapping (not deep-thinking) a
+# sharp position, drawn uniformly from this range at each game boundary
+# (mean 0.65, the old fixed value). Trust-the-gut games snap ~85% of critical
+# moves; grinding games stop and think on most of them. Widens the
+# game-to-game spread of the long-think tail (move-time std).
+GAME_SNAP_GATE_RANGE = (0.45, 0.85)
+# "Hesitation before the mistake" (engine.py:_adjust_time_for_move_loss):
+# humans think longer in positions where they end up erring, giving a
+# positive per-game correlation between move time and move loss (~ +0.10 in
+# the 2300-2600 corpus) that the engine otherwise lacks -- its errors come
+# from the human-probability sampling, independent of the decided think time.
+# When the chosen move gives up at least WC_LOSS win probability, the think
+# time is stretched by a Uniform(*RANGE) factor with probability PROB (the
+# rest stay fast: snap blunders exist). Skipped when own clock < MIN_TIME
+# or mood is "hurry" -- scramble errors are fast and must stay fast.
+MISTAKE_HESITATION_WC_LOSS = 0.08
+MISTAKE_HESITATION_PROB = 0.55
+MISTAKE_HESITATION_RANGE = (1.3, 2.2)
+MISTAKE_HESITATION_MIN_TIME = 15
+DIFFICULTY = 3 # engine difficulty
+MOUSE_QUICKNESS = 4 # number between 0 and 10. Bigger the number the slower we are with mouse movements
 RESOLUTION_SCALE = 2.0  # Set to 2.0 for 4K, 1.0 for 1080p - adjusts mouse curve point density
 
 # BENCHMARKS
-""" 
+"""
 DIFFICULTY   |   QUICKNESS   |    ELO
     3        |     2.2      |  ~2500
 
