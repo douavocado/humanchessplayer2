@@ -15,9 +15,9 @@ parallelise.
 ## Quick start
 
 ```bash
-# simulate 20 games of 60+0
+# simulate 20 games of 60+0 on 5 parallel workers
 venv/bin/python -m simulation.run --games 20 --tc 60+0 --seed 1 \
-    --out simulation/games/selfplay_60plus0.pgn
+    --workers 5 --out simulation/games/selfplay_60plus0.pgn
 
 # analyse them exactly like real bot games
 venv/bin/python -m cheat_detection.analyze report \
@@ -31,6 +31,16 @@ engine's move RNG (`make_move(seed=...)`) and every latency draw. A manifest
 JSON (results, terminations, per-game move-kind counts) is written beside the
 PGN. Outputs under `simulation/games/` and `simulation/calibration/` are
 gitignored.
+
+`--workers N` scales throughput near-linearly: each worker process owns an
+Engine pair (several Stockfish subprocesses + torch models, pinned to 1 torch
+thread), so keep N around cores/3. Seeds are partitioned deterministically
+(worker *w* plays `seeds[w::N]`) — the same `(games, seed, workers)` triple
+reproduces the same batch, but changing the worker count changes which
+engine-state history precedes each game, so per-game results are only stable
+for a fixed worker count. Simulation cost is genuine engine compute
+(Stockfish searches; GPU doesn't help — NNUE is CPU-bound and the torch nets
+are tiny), which is why parallelism is the speed lever.
 
 ## How a move's clock charge is built
 
