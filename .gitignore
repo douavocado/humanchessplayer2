@@ -73,3 +73,6 @@ auto_calibration/debug_calibration.ipynb
 .kiro/steering/byterover-rules.md
 .qoder/rules/byterover-rules.md
 .augment/rules/byterover-rules.md
+# Simulation calibration (machine-specific measurements) and outputs
+simulation/calibration/
+simulation/games/

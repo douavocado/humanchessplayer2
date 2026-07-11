@@ -21,6 +21,11 @@ from common.custom_cursor import CustomCursor
 
 from engine import Engine
 from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY, RESOLUTION_SCALE
+from common.move_timing import (MOVE_DELAY, DRAG_MOVE_DELAY, CLICK_MOVE_DELAY,
+                                movement_duration, drag_settle_sleep,
+                                click_settle_sleep, drag_probability,
+                                ponder_response_wait, scramble_response_wait,
+                                resign_pause)
 from common.utils import patch_fens, check_safe_premove, scraped_fen_sanity_issues, InvalidPositionError
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
@@ -150,9 +155,8 @@ def save_debug_screenshot(prefix: str, board_img=None, clock_imgs=None, extra_in
 # global variables
 FEN_NO_CAP = 8 # the max number of successive fens e store from the most recent position
 SCRAPE_EVERY = 0.5 # the time gap between scraping
-MOVE_DELAY = 0.25 # the amount of time we take per move minus the time the engine calc time from other aspects (time scrape, position updates, moving pieces etc.)
-DRAG_MOVE_DELAY = 0.07 # the amount of time to allow for move to snap onto the board before taking a screenshot
-CLICK_MOVE_DELAY = 0.03
+# MOVE_DELAY / DRAG_MOVE_DELAY / CLICK_MOVE_DELAY now live in
+# common/move_timing.py, shared with the offline simulator.
 
 CURSOR = CustomCursor() # mouse control object which simulates human-like movement with mouse
 
@@ -220,18 +224,9 @@ def is_capslock_on():
     
 
 def _movement_duration(distance):
-    """
-    Duration for one mouse-movement leg, scaled by distance (Fitts-like)
-    and MOUSE_QUICKNESS.
-
-    Shared by drags and click-moves so both gestures move the cursor at
-    the same apparent speed: the previous per-path formulas made distance
-    contribute ~5ms, leaving clicks under pyautogui's instant-teleport
-    threshold while drags animated just above it.
-    """
-    jitter = 0.8 + 0.4 * random.random()
-    base = 0.023 + MOUSE_QUICKNESS / 3000.0 * jitter * np.sqrt(max(float(distance), 0.0) / RESOLUTION_SCALE)
-    return float(np.clip(base, 0.04, 0.12))
+    """One mouse-leg duration — formula shared with the simulator via
+    common/move_timing.py."""
+    return movement_duration(distance, MOUSE_QUICKNESS, RESOLUTION_SCALE)
 
 
 def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
@@ -276,7 +271,7 @@ def drag_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     CURSOR.quick_move_to([new_from_x, new_from_y], duration=duration_from, resolution_scale=RESOLUTION_SCALE)
     
     # Tiny pause to ensure cursor has settled before picking up piece
-    time.sleep(0.015 + 0.015 * random.random())
+    time.sleep(drag_settle_sleep())
     
     pyautogui.mouseDown()
     CURSOR.quick_move_to([new_to_x, new_to_y], duration=duration_to, resolution_scale=RESOLUTION_SCALE)
@@ -332,8 +327,7 @@ def click_to_from_mouse(from_x, from_y, to_x, to_y, tolerance=0):
     pyautogui.click(button="left")
     
     # Small delay after first click to let Lichess register piece selection
-    # Random 25-50ms feels human and gives server time to respond
-    time.sleep(0.025 + 0.025 * random.random())
+    time.sleep(click_settle_sleep())
     
     CURSOR.quick_move_to([new_to_x, new_to_y], duration=duration_to, resolution_scale=RESOLUTION_SCALE)
     pyautogui.click(button="left")
@@ -1507,11 +1501,8 @@ def make_move(move_uci:str, premove:str=None):
     # compute randomised offset from centre of the square
     # sometimes we drag and drop, other times we click two squares
     own_time = max(DYNAMIC_INFO["self_clock_times"][-1],1)
-    if own_time < 20:
-        prob = own_time/25
-    else:
-        prob = 0.8
-    
+    prob = drag_probability(own_time)
+
     main_move_start = time.time()
     if np.random.random() < prob:
         LOG += "Dragging move {} \n".format(move_uci)
@@ -1883,9 +1874,7 @@ def run_game(arena=False):
                 LOG += "Found current position in ponder dic. Responding with corresponding move: {} and premove: {} \n".format(response_uci, premove)
                 
                 # wait a certain amount of time that depends on the time control
-                initial_time = GAME_INFO["self_initial_time"]
-                base_time = 0.3*QUICKNESS*initial_time**1.1/(100 + initial_time**0.7)
-                wait_time = base_time*(0.8+0.4*random.random())
+                wait_time = ponder_response_wait(GAME_INFO["self_initial_time"], QUICKNESS)
                 LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                 time.sleep(wait_time)
                 successful = make_move(response_uci, premove=premove)
@@ -1914,11 +1903,10 @@ def run_game(arena=False):
                         # the lower the time control the more likely we do this
                         initial_time = GAME_INFO["self_initial_time"]
                         prob = np.sqrt(1/initial_time)
-                        if initial_time < 200 and np.random.random() < prob:                            
+                        if initial_time < 200 and np.random.random() < prob:
                             # then we do it
                             LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), last_board.fen())
-                            base_time = 0.3*QUICKNESS*initial_time**1.1/(100 + initial_time**0.7)
-                            wait_time = base_time*(0.8+0.4*random.random())
+                            wait_time = ponder_response_wait(initial_time, QUICKNESS)
                             LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                             time.sleep(wait_time)
                             successful = make_move(last_pondered_move_obj.uci())
@@ -1947,8 +1935,7 @@ def run_game(arena=False):
                 if check_safe_premove(last_board, move_obj.uci()) or np.random.random() < prob:
                     # then we do it
                     LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(move_obj), curr_board.fen())
-                    base_time = 0.1
-                    wait_time = base_time*(0.8+0.4*random.random())
+                    wait_time = scramble_response_wait()
                     LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                     time.sleep(wait_time)
                     successful = make_move(move_obj.uci())
@@ -2018,7 +2005,7 @@ def run_game(arena=False):
                 write_log()
             else:
                 LOG += "Engine has decided to resign. Executing resign interaction. \n"
-                time.sleep(2+3*random.random())
+                time.sleep(resign_pause())
                 successful = resign()
                 if successful == True:
                     return

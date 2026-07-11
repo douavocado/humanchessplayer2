@@ -42,9 +42,10 @@ parser.add_argument("--offline", help="Use offline screenshots instead of live c
                         action="store_true")
 parser.add_argument("--offline-dir", type=str, default="auto_calibration/offline_screenshots",
                     help="Directory containing offline screenshots (default: auto_calibration/offline_screenshots)")
-parser.add_argument("--log-level", type=str, default="INFO", 
+parser.add_argument("--log-level", type=str, default="PERF",
                     choices=["DEBUG", "PERF", "INFO", "WARN", "ERROR"],
-                    help="Minimum log level (default: INFO)")
+                    help="Minimum log level (default: PERF, so live sessions record "
+                         "[PERF] timing data used to calibrate the simulator)")
 parser.add_argument("--verbose", "-v", action="store_true",
                     help="Enable verbose console output")
 
