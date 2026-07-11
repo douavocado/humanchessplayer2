@@ -101,9 +101,9 @@ uses), not the unwired `engine_components/` refactor.
   (scan ≈ 13ms + ~8ms capture; compute mean 0.76s, p90 1.42s, p99 3.75s).
 - **Phase 1 (done)**: core simulator, this package.
 - **Phase 2 (partial)**: fast paths, premove semantics, compute-overrun and
-  slip retries are in. Not yet modelled: berserk, opponent-blunder "startle"
-  double-take interactions with fast paths, hover/wander cursor drift,
-  sub-second server lag-compensation.
+  slip retries are in. Detection/overhead and network-lag components are
+  fitted to live `[PERF]` data (2026-07-11 session: overhead mean 166ms,
+  scan 31ms). Not yet modelled: berserk, hover/wander cursor drift.
 - **Phase 3 (next)**: validation loop — run `cheat_detection` comparing
   simulated games vs the real fetched 60+0 bot games (Welch t-test mode);
   every significant timing feature points at the latency component to fix.
@@ -114,7 +114,12 @@ uses), not the unwired `engine_components/` refactor.
 
 - Self-play opponent: the bot's timing reacts to its opponent (reflective
   pacing, blunder reactions); a bot opponent is self-consistent but not a
-  human. Check feature drift in Phase 3 rather than assuming.
+  human. Measured Phase-3 consequences (sim vs the real bot's profile):
+  the long-think tail is thinner (the engine mirrors slow human opponents
+  30% of the time; bot opponents are never slow), games run ~30% longer
+  (~95 vs ~71 plies — bot opponents don't collapse), which inflates the
+  timeout rate (~50% vs 35%) and slightly depresses match rates. A
+  "human-paced opponent" mode is the Phase-4 answer if these matter.
 - Engines are reused across games in a batch; per-game client state
   (ponder dic, premove queue, cursor) is reset, but any residual engine
   internals carry over — same as consecutive live games in one session.

@@ -199,9 +199,9 @@ def cmd_detection(args) -> int:
         "screenshots": args.screenshots,
         "profile": args.profile,
         "vision_ms": parsed,
-        # Screen capture itself can't run offline; ~8ms is typical for
-        # fastgrab at 1080p. Refined later from live [PERF] scan logs.
-        "capture_ms_estimate": 8.0,
+        # Screen capture itself can't run offline; live [PERF] scans measured
+        # 31ms total, so capture ~= 31 - vision. Refined from live scan logs.
+        "capture_ms_estimate": 18.0,
     }
     os.makedirs(CALIB_DIR, exist_ok=True)
     out_path = args.out or os.path.join(CALIB_DIR, "detection_latency.json")

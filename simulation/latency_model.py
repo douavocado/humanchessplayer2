@@ -52,6 +52,25 @@ CONFIRM_RECAPTURE_SLEEP = 0.15
 # is skipped entirely.
 RESYNC_CONFIRM_MIN_TIME = 15.0
 
+# Between scans the client idles with hover()/wander() cursor gestures
+# (mp_original await_move): if the opponent's move lands mid-gesture, the
+# next scan waits for it to finish. Gestures run only above 15s own time.
+# Fitted to live [PERF] "Detection/overhead" data (2026-07-11 session,
+# n=87: mean 166ms, p50 158ms, p90 344ms).
+IDLE_GESTURE_PROB = 0.9          # chance a gesture is in flight when the move lands
+IDLE_GESTURE_MAX = 0.25          # hover duration ~ U(0, 0.25)s
+
+# Rare detection stalls: mis-linked scans, move-not-registered polling,
+# animation confusion. Produces the realised-time tail seen in live games.
+DETECTION_STALL_PROB = 0.03
+DETECTION_STALL_RANGE = (0.3, 0.8)
+
+# Server round-trip residual charged by Lichess on a normal move. Lichess
+# lag compensation refunds most of the round trip, so this is small; kept
+# distinct from detection (which live [PERF] data measures directly).
+NETWORK_LAG_MEDIAN = 0.04
+NETWORK_LAG_SIGMA = 0.6
+
 
 def _load_json(path: str) -> Optional[dict]:
     try:
@@ -95,10 +114,23 @@ class LatencyModel:
         scan_s *= 0.8 + 0.5 * self.rng.random()
         phase_lag = self.rng.random() * 0.02
         total = scan_s + phase_lag
-        if own_time >= RESYNC_CONFIRM_MIN_TIME and \
-                self.rng.random() < CONFIRM_RECAPTURE_PROB:
-            total += CONFIRM_RECAPTURE_SLEEP + scan_s
+        if own_time >= RESYNC_CONFIRM_MIN_TIME:
+            # Idle hover/wander gestures run between scans; a move landing
+            # mid-gesture waits for it to finish before the next scan.
+            if self.rng.random() < IDLE_GESTURE_PROB:
+                total += self.rng.random() * IDLE_GESTURE_MAX
+            if self.rng.random() < CONFIRM_RECAPTURE_PROB:
+                total += CONFIRM_RECAPTURE_SLEEP + scan_s
+        if self.rng.random() < DETECTION_STALL_PROB:
+            lo, hi = DETECTION_STALL_RANGE
+            total += lo + (hi - lo) * self.rng.random()
         return total
+
+    # -------------------------------------------------------------- network
+    def network_lag(self) -> float:
+        """Server round-trip residual Lichess charges on a normal move."""
+        return NETWORK_LAG_MEDIAN * math.exp(
+            NETWORK_LAG_SIGMA * self.rng.gauss(0.0, 1.0))
 
     # -------------------------------------------------------------- compute
     def compute_time(self, phase: str) -> float:

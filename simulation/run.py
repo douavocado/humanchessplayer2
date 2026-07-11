@@ -42,9 +42,13 @@ def _play_chunk(task: tuple) -> list:
     Module-level (picklable) and self-contained: runs in a spawned process.
     Returns [(SimGame, wall_secs), ...] in the order played.
     """
-    worker_id, seeds, cfg, difficulty = task
+    worker_id, seeds, cfg, difficulty, quickness = task
     import torch
     torch.set_num_threads(1)  # N workers x default 8 threads would thrash
+    if quickness is not None:
+        # engine.py binds QUICKNESS at import time; patch before importing.
+        import common.constants as _constants
+        _constants.QUICKNESS = quickness
     from engine import Engine
     from .game_runner import GameRunner
 
@@ -85,6 +89,10 @@ def main(argv=None) -> int:
                    help="Elo written to headers and fed to the engines")
     p.add_argument("--difficulty", type=int,
                    help="engine playing_level (default common.constants.DIFFICULTY)")
+    p.add_argument("--quickness", type=float,
+                   help="move-time pacing override (default common.constants."
+                        "QUICKNESS); match the value your real games used "
+                        "when comparing sim vs real")
     p.add_argument("--max-plies", type=int, default=400)
     p.add_argument("--out", help="output PGN path")
     p.add_argument("--white-name", default="SimBotWhite")
@@ -107,14 +115,16 @@ def main(argv=None) -> int:
     cfg = SimConfig(initial_time=float(base), increment=float(inc),
                     white_rating=args.rating, black_rating=args.rating,
                     max_plies=args.max_plies)
+    if args.quickness is not None:
+        cfg.quickness = args.quickness  # client-side waits (ponder responses)
     seeds = [args.seed + i for i in range(args.games)]
     workers = max(1, min(args.workers, len(seeds)))
 
     t_start = time.perf_counter()
     if workers == 1:
-        chunk_results = [_play_chunk((0, seeds, cfg, difficulty))]
+        chunk_results = [_play_chunk((0, seeds, cfg, difficulty, args.quickness))]
     else:
-        tasks = [(w, seeds[w::workers], cfg, difficulty)
+        tasks = [(w, seeds[w::workers], cfg, difficulty, args.quickness)
                  for w in range(workers)]
         # spawn: clean interpreter per worker (torch + subprocesses don't
         # mix well with fork).

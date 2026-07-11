@@ -140,12 +140,14 @@ class SimClient:
                 return MoveDecision(premove, PREMOVE_FIRE_SECS, "premove")
             # Illegal after the opponent's actual move: Lichess cancels it.
 
-        detection = self.latency.detection_latency(own_time)
+        # Detection + server round-trip apply to every non-premove branch.
+        overhead = (self.latency.detection_latency(own_time)
+                    + self.latency.network_lag())
 
         # 2. Ponder-dic fast paths (no engine call at all).
         fast = self._try_ponder_fast_paths(board, fens, own_time)
         if fast is not None:
-            fast.charged_secs += detection
+            fast.charged_secs += overhead
             return fast
 
         # 3. Full engine path.
@@ -163,7 +165,7 @@ class SimClient:
         self.engine.update_info(info)
 
         if self.engine._decide_resign():
-            return MoveDecision(None, detection + resign_pause(self.rng),
+            return MoveDecision(None, overhead + resign_pause(self.rng),
                                 "resign")
 
         out = self.engine.make_move(log=False,
@@ -183,4 +185,4 @@ class SimClient:
         think = max(float(out["time_take"]) - MOVE_DELAY, compute)
 
         gesture = self._gesture(move_uci, own_time)
-        return MoveDecision(move_uci, detection + think + gesture, "engine")
+        return MoveDecision(move_uci, overhead + think + gesture, "engine")
