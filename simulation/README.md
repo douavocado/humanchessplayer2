@@ -32,6 +32,10 @@ JSON (results, terminations, per-game move-kind counts) is written beside the
 PGN. Outputs under `simulation/games/` and `simulation/calibration/` are
 gitignored.
 
+Progress renders as a tqdm bar (one tick per finished game) with per-game
+summary lines above it; both go to stderr, so `2>progress.log` captures them.
+Engine-internal prints are silenced in workers to keep the bar clean.
+
 `--workers N` scales throughput near-linearly: each worker process owns an
 Engine pair (several Stockfish subprocesses + torch models, pinned to 1 torch
 thread), so keep N around cores/3. Seeds are partitioned deterministically
