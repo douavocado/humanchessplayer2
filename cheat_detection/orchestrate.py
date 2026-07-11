@@ -109,6 +109,7 @@ class DiagnosticSpec:
     username: str
     rating_band: tuple[int, int]
     perf: str = "bullet"                     # Lichess speed category
+    time_control: Optional[str] = None       # exact clock, e.g. "60+0" (fetch filter)
     bot_pgn: Optional[str] = None            # if None, fetched from Lichess
     baseline_path: str = ""
     corpus_pgn: Optional[str] = None         # used to build baseline if missing
@@ -134,13 +135,16 @@ def run_diagnostic(
     bot_pgn = spec.bot_pgn
     if not bot_pgn:
         phase("fetch")
-        bot_pgn = os.path.join(workdir, f"bot_{spec.username}.pgn")
+        # TC-specific cache name so 60+0 and 30+0 fetches don't shadow each other.
+        tc_tag = f"_{spec.time_control.replace('+', 'plus')}" if spec.time_control else ""
+        bot_pgn = os.path.join(workdir, f"bot_{spec.username}{tc_tag}.pgn")
         if os.path.exists(bot_pgn):
             log(f"Using cached bot games: {bot_pgn}")
         else:
             fetch_user_games(
                 spec.username, bot_pgn,
                 max_games=spec.fetch_max_games, perf_type=spec.perf,
+                time_control=spec.time_control,
                 on_log=on_log,
             )
 

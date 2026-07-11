@@ -57,8 +57,10 @@ zstd -dc lichess_db_standard_rated_2024-01.pgn.zst | \
 
 `--category` is one of bullet/blitz/rapid/classical (classified by
 `base + 40*increment`, as Lichess does); or set `--base-min/--base-max`
-explicitly. Both players' Elo must fall in `--rating`. Games without clocks are
-dropped by default (the timing features need them).
+explicitly. Prefer `--tc 60+0` to pin one **exact** clock — a whole category
+mixes pacing (people move roughly twice as fast in 30+0 as in 60+0), which
+muddies every timing feature. Both players' Elo must fall in `--rating`. Games
+without clocks are dropped by default (the timing features need them).
 
 For a smaller, targeted baseline of *specific* strong human players instead of a
 random sample, the Lichess API also exports a user's games with clocks:
@@ -105,8 +107,15 @@ local PGN. Fetched games and outputs go under `cheat_detection/runs/`.
 
 ```bash
 venv/bin/python -m cheat_detection.analyze fetch-games \
-    --user JXu2019 --perf bullet --max-games 300 --out bot.pgn
+    --user JXu2019 --perf bullet --tc 60+0 --max-games 300 --out bot.pgn
 ```
+
+`--tc` keeps only games at that exact clock. The Lichess API can only filter by
+speed category server-side, so up to `--max-games` games of `--perf` are
+downloaded and non-matching clocks discarded locally — if fewer survive than
+you wanted, raise `--max-games`. The same flag exists on `run` (and as the
+"exact clock" field in the GUI, default `60+0` to match the shipped baseline);
+there the fetched file is cached per-clock as `runs/bot_<user>_<tc>.pgn`.
 
 (Set `LICHESS_TOKEN` in the environment to raise the API rate limit.)
 
@@ -143,6 +152,25 @@ venv/bin/python -m cheat_detection.analyze report \
 player in the file). The report shows, per feature, the human mean±std, the
 bot's value, and the z-score, and calls out the biggest divergences with a
 plain-English explanation of each.
+
+### Flagging mode: effect size vs. Welch t-test
+
+Two statistics are always computed and shown per feature; `--test` (CLI) or the
+**Test** dropdown (GUI) picks which one decides the ⚑ flags:
+
+- **`effect-size`** (default): flag when
+  `|z| = |bot_mean − human_mean| / human_std ≥ 2`. Sample-size independent —
+  it asks "is the bot's average far outside normal human game-to-game
+  variation?" A small systematic bias never flags, no matter how many games.
+- **`welch`**: Welch two-sample t-test (bot games vs. baseline games, unequal
+  variances); flag when the two-sided p-value < `--alpha` (default 0.05, the
+  **α** field in the GUI). Sensitivity grows with sample size, so with enough
+  games even small-but-real systematic differences flag. Needs ≥2 games on
+  each side and a baseline that stores per-feature `n` (all do).
+
+The Welch test treats each game as an independent observation from both
+populations, so with hundreds of games expect it to flag more features than
+effect-size does — statistically detectable ≠ practically distinguishable.
 
 ## Configuration
 

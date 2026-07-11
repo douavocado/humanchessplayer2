@@ -41,12 +41,31 @@ FEATURE_META: dict[str, tuple[str, str]] = {
 }
 
 
-def _bot_summary(units: list[Unit]) -> dict[str, Optional[float]]:
-    out: dict[str, Optional[float]] = {}
-    for key in FEATURE_KEYS:
-        vals = [u.features[key] for u in units if u.features.get(key) is not None]
-        out[key] = (sum(vals) / len(vals)) if vals else None
-    return out
+def _welch_test(
+    hmean: Optional[float], hstd: Optional[float], hn: Optional[int],
+    bmean: Optional[float], bstd: Optional[float], bn: Optional[int],
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Welch two-sample t-test (unequal variances).
+
+    Returns (t, df, two-sided p), or (None, None, None) when either sample is
+    too small (n < 2) or both variances are zero.
+    """
+    import math
+
+    if None in (hmean, hstd, bmean, bstd) or not hn or not bn or hn < 2 or bn < 2:
+        return None, None, None
+    vh, vb = hstd ** 2 / hn, bstd ** 2 / bn
+    se2 = vh + vb
+    if se2 <= 0:
+        return None, None, None
+    t = (bmean - hmean) / math.sqrt(se2)
+    df = se2 ** 2 / (vh ** 2 / (hn - 1) + vb ** 2 / (bn - 1))
+    try:
+        from scipy import stats as _scipy_stats
+        p = float(2 * _scipy_stats.t.sf(abs(t), df))
+    except ImportError:  # pragma: no cover - venv ships scipy
+        p = math.erfc(abs(t) / math.sqrt(2))  # normal approximation
+    return t, df, p
 
 
 @dataclass
@@ -54,24 +73,37 @@ class FeatureComparison:
     key: str
     human_mean: Optional[float]
     human_std: Optional[float]
+    human_n: Optional[int]
     bot_value: Optional[float]
-    zscore: Optional[float]
+    bot_std: Optional[float]
+    bot_n: Optional[int]
+    zscore: Optional[float]        # effect size: (bot - human) / human_std
+    t_stat: Optional[float]        # Welch two-sample t
+    df: Optional[float]
+    p_value: Optional[float]       # two-sided
     flagged: bool
 
 
 def compare(bot_units: list[Unit], baseline: Baseline, cfg: AnalysisConfig) -> list[FeatureComparison]:
-    bot = _bot_summary(bot_units)
+    from .baseline import _summarize
+
+    bot = _summarize(bot_units)
     comps: list[FeatureComparison] = []
     for key in FEATURE_KEYS:
         hs = baseline.stats.get(key, {})
-        hmean, hstd = hs.get("mean"), hs.get("std")
-        bval = bot.get(key)
+        hmean, hstd, hn = hs.get("mean"), hs.get("std"), hs.get("n")
+        bs = bot[key]
+        bval, bstd, bn = bs["mean"], bs["std"], bs["n"]
         z = None
-        flagged = False
         if bval is not None and hmean is not None and hstd:
             z = (bval - hmean) / hstd
-            flagged = abs(z) >= cfg.flag_zscore
-        comps.append(FeatureComparison(key, hmean, hstd, bval, z, flagged))
+        t, df, p = _welch_test(hmean, hstd, hn, bval, bstd, bn)
+        if cfg.test_mode == "welch":
+            flagged = p is not None and p < cfg.flag_pvalue
+        else:
+            flagged = z is not None and abs(z) >= cfg.flag_zscore
+        comps.append(FeatureComparison(
+            key, hmean, hstd, hn, bval, bstd, bn, z, t, df, p, flagged))
     return comps
 
 
@@ -90,6 +122,13 @@ def render_markdown(
     mean_abs_z = (sum(abs(c.zscore) for c in scored) / len(scored)) if scored else None
     flagged = [c for c in comps if c.flagged]
 
+    welch = cfg.test_mode == "welch"
+    test_desc = (
+        f"Welch two-sample t-test, flag at p < {cfg.flag_pvalue:g}"
+        if welch else
+        f"effect size vs human spread, flag at |z| >= {cfg.flag_zscore:g}"
+    )
+
     lines: list[str] = []
     lines.append("# Human-likeness diagnostic report\n")
     lines.append(
@@ -97,6 +136,7 @@ def render_markdown(
         f"rating {baseline.rating_band[0]}-{baseline.rating_band[1]}\n"
         f"- Bot sample: {len(bot_units)} games/units, {n_moves} moves\n"
         f"- Engine: Stockfish depth {cfg.depth}, multipv {cfg.multipv}\n"
+        f"- Test: {test_desc}\n"
     )
 
     if mean_abs_z is not None:
@@ -106,19 +146,31 @@ def render_markdown(
             verdict = "noticeably distinguishable from human play"
         else:
             verdict = "strongly distinguishable from human play"
+        flag_desc = (
+            f"significant at p < {cfg.flag_pvalue:g} (Welch)" if welch
+            else f"beyond {cfg.flag_zscore:g}sigma"
+        )
         lines.append(
             f"\n**Overall divergence: mean |z| = {mean_abs_z:.2f}** "
-            f"({verdict}). {len(flagged)} feature(s) beyond {cfg.flag_zscore}sigma.\n"
+            f"({verdict}). {len(flagged)} feature(s) {flag_desc}.\n"
         )
 
-    # Most divergent features first.
+    # Most divergent features first (by p when testing, by |z| otherwise).
     lines.append("\n## Biggest divergences from human play\n")
     if flagged:
-        for c in sorted(flagged, key=lambda c: -abs(c.zscore)):
+        if welch:
+            ordered = sorted(flagged, key=lambda c: c.p_value)
+        else:
+            ordered = sorted(flagged, key=lambda c: -abs(c.zscore))
+        for c in ordered:
             label, meaning = FEATURE_META.get(c.key, (c.key, ""))
-            direction = "higher" if c.zscore > 0 else "lower"
+            direction = "higher" if (c.zscore or 0) > 0 else "lower"
+            stat = (
+                f"t = {_fmt(c.t_stat, 2)}, p = {_fmt(c.p_value, 4)}" if welch
+                else f"{abs(c.zscore):.1f}sigma"
+            )
             lines.append(
-                f"- **{label}** ({direction} than human by {abs(c.zscore):.1f}sigma): "
+                f"- **{label}** ({direction} than human; {stat}): "
                 f"bot {_fmt(c.bot_value)} vs human {_fmt(c.human_mean)}+/-{_fmt(c.human_std)}. "
                 f"_{meaning}._"
             )
@@ -126,16 +178,17 @@ def render_markdown(
         lines.append("_No feature exceeded the flag threshold; the bot tracks the human "
                      "baseline closely on all measured axes._")
 
-    # Full table.
+    # Full table (both statistics shown regardless of which one flags).
     lines.append("\n## All features\n")
-    lines.append("| Feature | Human mean +/- std | Bot | z |")
-    lines.append("|---|---|---|---|")
+    lines.append("| Feature | Human mean +/- std | Bot | z | t | p |")
+    lines.append("|---|---|---|---|---|---|")
     for c in comps:
         label = FEATURE_META.get(c.key, (c.key, ""))[0]
         mark = " ⚑" if c.flagged else ""
         lines.append(
             f"| {label}{mark} | {_fmt(c.human_mean)} +/- {_fmt(c.human_std)} "
-            f"| {_fmt(c.bot_value)} | {_fmt(c.zscore, 2)} |"
+            f"| {_fmt(c.bot_value)} | {_fmt(c.zscore, 2)} "
+            f"| {_fmt(c.t_stat, 2)} | {_fmt(c.p_value, 4)} |"
         )
     lines.append("")
     return "\n".join(lines)
@@ -149,6 +202,9 @@ def build_report(bot_units, baseline, cfg):
     report_dict = {
         "baseline": {"n_units": baseline.n_units, "rating_band": list(baseline.rating_band)},
         "bot": {"n_units": len(bot_units), "n_moves": sum(u.n_moves for u in bot_units)},
+        "test_mode": cfg.test_mode,
+        "flag_zscore": cfg.flag_zscore,
+        "flag_pvalue": cfg.flag_pvalue,
         # Per-unit distributions for interactive drill-down (human side is
         # absent when the baseline predates the `values` field).
         "human_values": baseline.values,
@@ -158,8 +214,14 @@ def build_report(bot_units, baseline, cfg):
                 "key": c.key,
                 "human_mean": c.human_mean,
                 "human_std": c.human_std,
+                "human_n": c.human_n,
                 "bot_value": c.bot_value,
+                "bot_std": c.bot_std,
+                "bot_n": c.bot_n,
                 "zscore": c.zscore,
+                "t_stat": c.t_stat,
+                "df": c.df,
+                "p_value": c.p_value,
                 "flagged": c.flagged,
             }
             for c in comps

@@ -52,6 +52,7 @@ class DiagnosticGUI:
         self.v_rmin = tk.StringVar(value="2300")
         self.v_rmax = tk.StringVar(value="2600")
         self.v_perf = tk.StringVar(value="bullet")
+        self.v_tc = tk.StringVar(value="60+0")
         self.v_baseline = tk.StringVar(
             value=os.path.join(_HERE, "baselines", "bullet_1plus0_2300_2600.json"))
         self.v_corpus = tk.StringVar(
@@ -61,6 +62,8 @@ class DiagnosticGUI:
         self.v_basemax = tk.StringVar(value="250")
         self.v_depth = tk.StringVar(value="10")
         self.v_multipv = tk.StringVar(value="5")
+        self.v_test = tk.StringVar(value="effect-size")
+        self.v_alpha = tk.StringVar(value="0.05")
 
         def row(r, label, var, width=22, browse=None):
             ttk.Label(f, text=label).grid(row=r, column=0, sticky="w", padx=4, pady=2)
@@ -79,9 +82,14 @@ class DiagnosticGUI:
         ttk.Label(rb, text=" to ").pack(side="left")
         ttk.Entry(rb, textvariable=self.v_rmax, width=6).pack(side="left")
         ttk.Label(f, text="Time control").grid(row=2, column=0, sticky="w", padx=4)
-        ttk.Combobox(f, textvariable=self.v_perf, width=12, state="readonly",
-                     values=["bullet", "blitz", "rapid", "classical"]).grid(
-            row=2, column=1, sticky="w", padx=4)
+        tcf = ttk.Frame(f)
+        tcf.grid(row=2, column=1, sticky="w", padx=4)
+        ttk.Combobox(tcf, textvariable=self.v_perf, width=12, state="readonly",
+                     values=["bullet", "blitz", "rapid", "classical"]).pack(side="left")
+        ttk.Label(tcf, text="  exact clock").pack(side="left")
+        ttk.Entry(tcf, textvariable=self.v_tc, width=8).pack(side="left", padx=(4, 0))
+        ttk.Label(tcf, text="(e.g. 60+0; blank = whole category)",
+                  foreground="#888").pack(side="left", padx=(4, 0))
 
         row(3, "Baseline JSON", self.v_baseline, 48,
             browse=lambda: self._pick(self.v_baseline, [("JSON", "*.json")]))
@@ -98,6 +106,13 @@ class DiagnosticGUI:
                             ("MultiPV", self.v_multipv, 5)]:
             ttk.Label(adv, text=lbl).pack(side="left", padx=(8, 2))
             ttk.Entry(adv, textvariable=var, width=w).pack(side="left")
+        # effect-size: flag |z| >= 2 vs human spread (sample-size independent).
+        # Welch t-test: flag p < alpha; sensitivity grows with more games.
+        ttk.Label(adv, text="Test").pack(side="left", padx=(8, 2))
+        ttk.Combobox(adv, textvariable=self.v_test, width=11, state="readonly",
+                     values=["effect-size", "Welch t-test"]).pack(side="left")
+        ttk.Label(adv, text="α").pack(side="left", padx=(8, 2))
+        ttk.Entry(adv, textvariable=self.v_alpha, width=5).pack(side="left")
 
         btns = ttk.Frame(f)
         btns.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
@@ -189,10 +204,10 @@ class DiagnosticGUI:
 
         right = ttk.Frame(body)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
-        cols = ("feature", "human", "bot", "z")
+        cols = ("feature", "human", "bot", "z", "p")
         self.tree = ttk.Treeview(right, columns=cols, show="headings", height=16)
-        for c, txt, w in [("feature", "Feature", 210), ("human", "Human m±sd", 120),
-                          ("bot", "Bot", 80), ("z", "z", 60)]:
+        for c, txt, w in [("feature", "Feature", 200), ("human", "Human m±sd", 115),
+                          ("bot", "Bot", 75), ("z", "z", 55), ("p", "p (Welch)", 75)]:
             self.tree.heading(c, text=txt)
             self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True)
@@ -221,6 +236,8 @@ class DiagnosticGUI:
         cfg = AnalysisConfig()
         cfg.depth = int(self.v_depth.get())
         cfg.multipv = int(self.v_multipv.get())
+        cfg.test_mode = "welch" if self.v_test.get() == "Welch t-test" else "effect_size"
+        cfg.flag_pvalue = float(self.v_alpha.get())
         return cfg
 
     def _on_run(self):
@@ -232,6 +249,7 @@ class DiagnosticGUI:
                 username=self.v_user.get().strip(),
                 rating_band=(int(self.v_rmin.get()), int(self.v_rmax.get())),
                 perf=self.v_perf.get(),
+                time_control=self.v_tc.get().strip() or None,
                 bot_pgn=self.v_botpgn.get().strip() or None,
                 baseline_path=self.v_baseline.get().strip(),
                 corpus_pgn=self.v_corpus.get().strip() or None,
@@ -239,6 +257,9 @@ class DiagnosticGUI:
                 baseline_max_games=int(self.v_basemax.get()) if self.v_basemax.get() else None,
                 fetch_max_games=int(self.v_botmax.get()),
             )
+            if spec.time_control:
+                from .fetch_lichess import parse_time_control
+                parse_time_control(spec.time_control)  # fail fast on bad input
         except ValueError as e:
             messagebox.showerror("Bad input", str(e))
             return
@@ -296,23 +317,34 @@ class DiagnosticGUI:
                    else "noticeably distinguishable" if mean_abs_z < 2
                    else "strongly distinguishable")
         n_flag = sum(1 for f in feats if f.get("flagged"))
+        welch = report.get("test_mode") == "welch"
+        if welch:
+            alpha = report.get("flag_pvalue", 0.05)
+            flag_desc = f"{n_flag} feature(s) significant at p<{alpha:g} (Welch)"
+        else:
+            flag_desc = f"{n_flag} feature(s) beyond 2σ"
         self.verdict.configure(
             text=f"Overall divergence: mean |z| = {mean_abs_z:.2f}  ({verdict}); "
-                 f"{n_flag} feature(s) beyond 2σ")
+                 f"{flag_desc}")
 
         self._draw_overview()
 
         # table (row iid = feature key, so selection can drill down)
         self.tree.delete(*self.tree.get_children())
-        order = sorted(feats, key=lambda f: -(abs(f["zscore"]) if f.get("zscore") is not None else -1))
+        if welch:
+            order = sorted(feats, key=lambda f: f.get("p_value")
+                           if f.get("p_value") is not None else 2.0)
+        else:
+            order = sorted(feats, key=lambda f: -(abs(f["zscore"]) if f.get("zscore") is not None else -1))
         for f in order:
             label = FEATURE_META.get(f["key"], (f["key"],))[0]
             hm, hs = f.get("human_mean"), f.get("human_std")
             human = f"{hm:.3f}±{hs:.3f}" if hm is not None and hs is not None else "n/a"
             bot = "n/a" if f.get("bot_value") is None else f"{f['bot_value']:.3f}"
             z = "n/a" if f.get("zscore") is None else f"{f['zscore']:.2f}"
+            p = "n/a" if f.get("p_value") is None else f"{f['p_value']:.4f}"
             tag = "flag" if f.get("flagged") else ""
-            self.tree.insert("", "end", iid=f["key"], values=(label, human, bot, z),
+            self.tree.insert("", "end", iid=f["key"], values=(label, human, bot, z, p),
                              tags=(tag,))
         self.tree.tag_configure("flag", background="#ffe0e0")
 
@@ -326,8 +358,10 @@ class DiagnosticGUI:
         rows = sorted(scored, key=lambda f: abs(f["zscore"]))
         labels = [FEATURE_META.get(f["key"], (f["key"],))[0] for f in rows]
         zs = [f["zscore"] for f in rows]
-        colors = ["#d62728" if abs(z) >= 2 else "#ff7f0e" if abs(z) >= 1 else "#4c78a8"
-                  for z in zs]
+        # Red = flagged by the active test; orange = large-ish effect anyway.
+        colors = ["#d62728" if f.get("flagged")
+                  else "#ff7f0e" if abs(f["zscore"]) >= 1 else "#4c78a8"
+                  for f in rows]
         self.ax.clear()
         self.ax.barh(range(len(zs)), zs, color=colors)
         self.ax.set_yticks(range(len(zs)))
@@ -363,6 +397,7 @@ class DiagnosticGUI:
         bvals = (report.get("bot_values") or {}).get(key) or []
         hmean, hstd = feat.get("human_mean"), feat.get("human_std")
         bval, z = feat.get("bot_value"), feat.get("zscore")
+        pval = feat.get("p_value")
 
         self.ax.clear()
         if hvals:
@@ -388,7 +423,8 @@ class DiagnosticGUI:
         if bval is not None:
             self.ax.axvline(bval, color="#ff7f0e", lw=1.8, label="bot mean")
         ztxt = "n/a" if z is None else f"{z:+.2f}"
-        self.ax.set_title(f"{label}   (z = {ztxt})", fontsize=10)
+        ptxt = "" if pval is None else f", p = {pval:.4f}"
+        self.ax.set_title(f"{label}   (z = {ztxt}{ptxt})", fontsize=10)
         self.ax.set_xlabel(meaning, fontsize=8)
         self.ax.set_ylabel("density")
         self.ax.legend(fontsize=7)

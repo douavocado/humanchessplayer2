@@ -44,8 +44,19 @@ class AnalysisConfig:
     )
 
     # --- Reporting ---
+    # Which statistic decides whether a feature is flagged:
+    #   "effect_size" — |z| = |bot_mean - human_mean| / human_std >= flag_zscore.
+    #     Sample-size independent; flags differences large relative to normal
+    #     human game-to-game variation.
+    #   "welch" — Welch two-sample t-test (bot games vs baseline games);
+    #     flags when the two-sided p-value < flag_pvalue. Grows more sensitive
+    #     with more games, so tiny systematic biases eventually flag.
+    # Both statistics are always computed and shown; this only picks the flagger.
+    test_mode: str = "effect_size"
     # A feature whose bot value is this many baseline-std's away is flagged.
     flag_zscore: float = 2.0
+    # Significance level for test_mode="welch".
+    flag_pvalue: float = 0.05
 
     def cache_path(self) -> str:
         os.makedirs(self.cache_dir, exist_ok=True)

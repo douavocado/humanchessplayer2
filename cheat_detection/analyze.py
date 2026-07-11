@@ -38,14 +38,21 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--hash", type=int, dest="hash_mb", help="Stockfish hash (MB)")
     p.add_argument("--min-moves", type=int, default=10,
                    help="minimum analysed moves for a unit to count (default 10)")
+    p.add_argument("--test", choices=["effect-size", "welch"], dest="test_mode",
+                   help="what flags a feature: effect-size |z| >= 2 vs human spread "
+                        "(default), or a Welch two-sample t-test at --alpha")
+    p.add_argument("--alpha", type=float, dest="flag_pvalue",
+                   help="significance level for --test welch (default 0.05)")
 
 
 def _config_from_args(args) -> AnalysisConfig:
     cfg = AnalysisConfig()
-    for attr in ("depth", "multipv", "threads", "hash_mb"):
+    for attr in ("depth", "multipv", "threads", "hash_mb", "flag_pvalue"):
         v = getattr(args, attr, None)
         if v is not None:
             setattr(cfg, attr, v)
+    if getattr(args, "test_mode", None):
+        cfg.test_mode = args.test_mode.replace("-", "_")
     return cfg
 
 
@@ -102,7 +109,7 @@ def cmd_report(args) -> int:
 
 def cmd_fetch_games(args) -> int:
     fetch_user_games(args.user, args.out, max_games=args.max_games,
-                     perf_type=args.perf, on_log=print)
+                     perf_type=args.perf, time_control=args.tc, on_log=print)
     return 0
 
 
@@ -112,6 +119,7 @@ def cmd_run(args) -> int:
         username=args.user,
         rating_band=(args.rating[0], args.rating[1]),
         perf=args.perf,
+        time_control=args.tc,
         bot_pgn=args.pgn,
         baseline_path=args.baseline,
         corpus_pgn=args.corpus,
@@ -150,6 +158,8 @@ def main(argv=None) -> int:
     prun.add_argument("--user", required=True, help="Lichess account of the bot")
     prun.add_argument("--rating", type=int, nargs=2, required=True, metavar=("MIN", "MAX"))
     prun.add_argument("--perf", default="bullet", help="bullet/blitz/rapid/classical")
+    prun.add_argument("--tc", help="exact time control for the bot fetch, e.g. 60+0 "
+                                   "(30+0 and 60+0 pacing differ ~2x; keep one clock)")
     prun.add_argument("--baseline", required=True, help="baseline JSON (loaded if present, else built)")
     prun.add_argument("--corpus", help="human corpus PGN to build the baseline if it doesn't exist")
     prun.add_argument("--pgn", help="bot PGN (skip fetch; use this file instead)")
@@ -167,6 +177,7 @@ def main(argv=None) -> int:
     pf.add_argument("--out", required=True)
     pf.add_argument("--max-games", type=int, default=300)
     pf.add_argument("--perf", default="bullet")
+    pf.add_argument("--tc", help="exact time control to keep, e.g. 60+0")
     pf.set_defaults(func=cmd_fetch_games)
 
     pb = sub.add_parser("baseline", help="build a human baseline from a Lichess dump")

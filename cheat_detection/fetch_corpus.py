@@ -74,6 +74,8 @@ def _keep(headers: dict[str, str], text: str, args) -> bool:
     if tc is None:
         return False
     base, inc = tc
+    if getattr(args, "tc_exact", None) and tc != args.tc_exact:
+        return False
     if args.category:
         clo, chi = _CATEGORY_BOUNDS[args.category]
         if not (clo <= _estimated_duration(base, inc) <= chi):
@@ -142,12 +144,17 @@ def main(argv=None) -> int:
                    help="keep games where BOTH players' Elo is in this band")
     p.add_argument("--category", choices=sorted(_CATEGORY_BOUNDS),
                    help="time-control category (bullet/blitz/rapid/classical)")
+    p.add_argument("--tc", help="exact time control, e.g. 60+0 — keeps only that clock "
+                                "so pacing matches the bot's (30+0 vs 60+0 differ ~2x)")
     p.add_argument("--base-min", type=int, help="min base seconds (alternative to --category)")
     p.add_argument("--base-max", type=int, help="max base seconds")
     p.add_argument("--max-games", type=int, default=5000, help="stop after keeping this many")
     p.add_argument("--allow-no-clock", action="store_true",
                    help="keep games without clock tags (timing features will be sparse)")
     args = p.parse_args(argv)
+    args.tc_exact = _parse_tc(args.tc) if args.tc else None
+    if args.tc and args.tc_exact is None:
+        p.error(f"bad --tc {args.tc!r}; expected e.g. 60+0")
 
     inp = open(args.infile, "r", encoding="utf-8", errors="replace") if args.infile else sys.stdin
     try:
