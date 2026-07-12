@@ -739,6 +739,31 @@ def _confirm_board_stable(board_fen, bottom, delay=0.15):
     return chess.Board(fen_now).board_fen() == board_fen
 
 
+def _link_candidates_for_unreadable_turn(fen_before, scraped_fen):
+    """ Rank both turn readings of an unreadable-turn scrape by link length.
+
+        The scraped fen's turn field is meaningless (the scraper always
+        claims white to move), so try linking the last tracked position to
+        the scraped placement under both possible turns and return the
+        successful (ply_count, fen) candidates shortest-first. Fewest plies
+        wins: patch_fens can "confirm" the wrong turn with a piece-shuffle
+        line, and accepting the longer link hands the move to the wrong
+        side (seen live: f8g7,e2e4 misread as f8h6,e2e4,h6g7, adopting the
+        opponent's turn and flagging a won game). Parity means the two
+        candidates can never tie.
+    """
+    candidates = []
+    for turn in (chess.WHITE, chess.BLACK):
+        dummy_board = chess.Board(scraped_fen)
+        dummy_board.turn = turn
+        candidate_fen = dummy_board.fen()
+        res = patch_fens(fen_before, candidate_fen)
+        if res is not None:
+            candidates.append((len(res[0]), candidate_fen))
+    candidates.sort(key=lambda c: c[0])
+    return candidates
+
+
 def update_dynamic_info_from_fullimage():
     """ Scrape image information from screenshot and update info dic. """
     global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING, AWAITING_FRESH_SCAN
@@ -818,29 +843,25 @@ def update_dynamic_info_from_fullimage():
         
         fen_before = DYNAMIC_INFO["fens"][-1]
         last_board = chess.Board(fen_before)
-        # trying 1 move ahead
-        dummy_board = chess.Board(fen)
-        dummy_board.turn = not last_board.turn
-        fen_after = dummy_board.fen()
-        
-        res = patch_fens(fen_before, fen_after)
-        if res is None:
-            # try with different turn
+        candidates = _link_candidates_for_unreadable_turn(fen_before, fen)
+        if candidates:
+            n_plies, fen_after = candidates[0]
+            if len(candidates) > 1:
+                LOG += "Both turn readings link from the last fen; adopting the shorter ({} plies): {}. \n".format(n_plies, fen_after)
+        else:
             dummy_board = chess.Board(fen)
             dummy_board.turn = last_board.turn
             fen_after = dummy_board.fen()
-            res = patch_fens(fen_before, fen_after)
-            if res is None:
-                # An unlinkable board with an unreadable turn is either a
-                # transient animation frame or a genuine resync; only a
-                # settled board survives a second capture. Guessing the
-                # turn off a transient frame is how moves get played out
-                # of turn, so confirm before adopting (unless low on time,
-                # where we accept the misread risk to move quickly).
-                if not _under_time_pressure() and not _confirm_board_stable(dummy_board.board_fen(), bottom):
-                    LOG += "Unlinkable board with unreadable turn did not survive a confirmation re-capture, discarding this scan as a transient frame. \n"
-                    return
-                LOG += "ERROR: Could not find turn using any method, resorting to the same turn as last turn. \n"
+            # An unlinkable board with an unreadable turn is either a
+            # transient animation frame or a genuine resync; only a
+            # settled board survives a second capture. Guessing the
+            # turn off a transient frame is how moves get played out
+            # of turn, so confirm before adopting (unless low on time,
+            # where we accept the misread risk to move quickly).
+            if not _under_time_pressure() and not _confirm_board_stable(dummy_board.board_fen(), bottom):
+                LOG += "Unlinkable board with unreadable turn did not survive a confirmation re-capture, discarding this scan as a transient frame. \n"
+                return
+            LOG += "ERROR: Could not find turn using any method, resorting to the same turn as last turn. \n"
         fen = fen_after
     elif check_turn_res == False:
         # then need to switch the turn

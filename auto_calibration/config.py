@@ -70,8 +70,14 @@ class ChessConfig:
     FALLBACK_COLOUR_SCHEME = {
         'light_square': [214, 235, 238],      # Cream/beige
         'dark_square': [86, 150, 118],         # Green
-        'highlight_light': [177, 209, 205],    # Light square with last move highlight
-        'highlight_dark': [100, 151, 144],     # Dark square with last move highlight
+        # NB actually BGR (like the square colours above): pale cyan-blue on
+        # this theme. These two were channel-swapped (RGB) for a long time;
+        # the swapped dark value sat within matching tolerance of Lichess's
+        # *selected-square* olive tint, so a stale selection (e.g. left by a
+        # cancelled premove) was read as a last-move highlight and poisoned
+        # turn detection (2026-07-12 game-4 flag).
+        'highlight_light': [205, 209, 177],    # Light square with last move highlight
+        'highlight_dark': [144, 151, 100],     # Dark square with last move highlight
         'premove_light': [160, 165, 170],      # Premove on light square
         'premove_dark': [135, 140, 147],       # Premove on dark square
     }
