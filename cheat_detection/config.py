@@ -25,12 +25,19 @@ class AnalysisConfig:
     multipv: int = 5                # number of candidate moves ranked per position
     threads: int = 2
     hash_mb: int = 256
+    # Parallel game-level analysis: worker processes, each with its own
+    # Stockfish. 1 = sequential (identical to the original behaviour). Total
+    # engine threads = workers * threads, so on a 16-core box workers=6-8
+    # with threads=2 is about right.
+    workers: int = 1
     mate_cp: int = 10000            # centipawn value assigned to a forced mate
 
     # --- Feature thresholds (ported from Irwin/Kaladin conventions) ---
     ambiguity_wc_window: float = 0.05   # moves within this win-prob of best are "equally good"
     instant_move_secs: float = 1.0      # emt below this counts as an "instant" move
     blunder_wc_loss: float = 0.15       # win-prob drop that marks a blunder
+    time_pressure_secs: float = 10.0    # clock below this = "time pressure" for the
+                                        # degradation features (acpl/blunders in scramble)
 
     # --- Phase boundaries ---
     opening_plies: int = 16             # first N plies = opening
@@ -60,6 +67,12 @@ class AnalysisConfig:
 
     def cache_path(self) -> str:
         os.makedirs(self.cache_dir, exist_ok=True)
+        return os.path.join(
+            self.cache_dir, f"analysis_d{self.depth}_mpv{self.multipv}.sqlite"
+        )
+
+    def legacy_cache_path(self) -> str:
+        """Pre-SQLite JSON cache; migrated into the .sqlite once, then unused."""
         return os.path.join(
             self.cache_dir, f"analysis_d{self.depth}_mpv{self.multipv}.json"
         )

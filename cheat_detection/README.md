@@ -24,7 +24,13 @@ Per move (Irwin-style, from Stockfish multi-PV analysis):
 
 Aggregated per player (Kaladin-style distributions):
 - **T1/T2/T3 engine-match rates** — the classic accuracy signal.
+- **Selective accuracy** — T1 match rate split by whether the position had one
+  clear best move (`ambiguity == 1`) or several near-equal candidates. Humans'
+  engine agreement collapses in ambiguous positions; an engine's doesn't.
 - **ACPL** overall and split by opening / middlegame / endgame.
+- **Time-pressure degradation** — ACPL and blunder rate on moves played with
+  under `time_pressure_secs` (default 10s) on the clock. Humans degrade
+  sharply in a scramble; flat quality at 3 seconds is a strong tell.
 - **Blunder rate**, mean win-chance loss.
 - **Move-time** mean, std, coefficient of variation.
 - **Instant-move rate**, and instant moves *in sharp positions* (a strong tell).
@@ -66,6 +72,60 @@ For a smaller, targeted baseline of *specific* strong human players instead of a
 random sample, the Lichess API also exports a user's games with clocks:
 `https://lichess.org/api/games/user/<name>?clocks=true&rated=true&perfType=blitz`.
 
+### Multi-band corpora (custom rating-band comparisons)
+
+To compare the bot against *different rating populations*, fill one or more
+bands in a single streaming pass with repeatable `--band MIN MAX COUNT` (MAX
+`+` = unbounded; maxima are exclusive so adjacent bands don't overlap). By
+default a game needs both players inside the band; with `--any-player` one is
+enough — the off-band opponent is excluded later by the analysis `--rating`
+filter, so the corpus is wider without polluting the baseline:
+
+```bash
+zstd -dc lichess_db_standard_rated_2026-05.pgn.zst | \
+    venv/bin/python -m cheat_detection.fetch_corpus --tc 60+0 --any-player \
+        --band 2300 + 30000 \
+        --out cheat_detection/corpora/bullet_1plus0.pgn
+```
+
+writes one PGN per band (here `bullet_1plus0_2300_plus.pgn`). Build a baseline
+per band (`--rating 2300 9999` covers an unbounded band), then report the bot
+against whichever band matches the account's strength (`--baseline` on the
+CLI, the baseline path field in the GUI):
+
+```bash
+venv/bin/python -m cheat_detection.analyze baseline \
+    --pgn cheat_detection/corpora/bullet_1plus0_2300_plus.pgn \
+    --rating 2300 9999 --workers 6 \
+    --out cheat_detection/baselines/bullet_1plus0_2300_plus.json
+```
+
+### Pair-level unit filters (opponent rating, rating difference)
+
+Beyond the mover's own rating band, units can be filtered by properties of the
+*pairing* — on `baseline`, `report` and `run` (CLI) or the "Filters" row in
+the GUI:
+
+- `--opponent-rating MIN MAX` — count a player's game only when the opponent's
+  Elo is in the band. "Both players 2600–2900" = `--rating 2600 2900
+  --opponent-rating 2600 2900`.
+- `--rating-diff MIN MAX` — bound (own Elo − opponent Elo). "Outrated by at
+  least 200" = `--rating-diff -9999 -200`; this is mover-centric, so it covers
+  the weaker player of either colour.
+
+Since the eval cache already holds the corpus's positions, building extra
+baselines with different filters costs seconds (aggregation only) — slice one
+big corpus into as many comparison populations as you like. Filters are
+recorded in the baseline JSON; in `run`/the GUI they apply to **both** the
+human baseline (when built this run) and the bot's games so the two
+populations stay comparable, and loading a pre-built baseline whose recorded
+filters differ from the requested ones logs a warning.
+
+The eval cache is keyed by FEN alone (depth/multipv live in the filename), so
+it is shared across every time control, rating band, and corpus — each new
+run only pays for positions never seen before, and the cache keeps growing
+into a general evaluation database.
+
 ## Usage
 
 Everything runs from the repo root with the repo venv.
@@ -79,7 +139,10 @@ venv/bin/python -m cheat_detection.gui
 Enter the bot's Lichess account, rating band and time control, point at a
 baseline (or a corpus PGN to build one), and hit **Run diagnostic**. Analysis
 runs in a background thread; progress streams to the log and the result renders
-as a z-score chart plus a sortable feature table. Click any feature row to
+as a z-score chart plus a sortable feature table. A second **Simulation** tab
+drives `simulation/` self-play: configure each bot's name, rating, difficulty,
+quickness and mouse speed (fixed or alternating colours), run, and hand the
+finished PGN straight back to the Diagnostic tab. Click any feature row to
 drill down into its distribution — a histogram of human per-game values overlaid
 with the bot's per-game values, human mean and ±2σ marked (**⟵ Overview**
 returns to the z-score chart). **Open report JSON...** views a previously saved
@@ -172,11 +235,23 @@ The Welch test treats each game as an independent observation from both
 populations, so with hundreds of games expect it to flag more features than
 effect-size does — statistically detectable ≠ practically distinguishable.
 
+### Variance comparison (game-to-game consistency)
+
+Independently of either mean test, every feature's **game-to-game spread** is
+compared against the human spread with a Brown–Forsythe test (median-centred
+Levene) on the per-game values, flagged (⚑v, amber in the GUI) when
+p < `--alpha`. This catches a bot that matches every human *average* while
+being far too consistent — or too erratic — from game to game; the report
+shows the bot/human std ratio alongside the p-value. It needs the baseline's
+per-game `values` (any recently built baseline has them) and ≥3 games per
+side.
+
 ## Configuration
 
 Defaults live in `config.py` (`AnalysisConfig`): Stockfish **depth 10**,
 **multipv 5**, using the repo's `PATH_TO_STOCKFISH` (Stockfish 17). Override per
-run with `--depth`, `--multipv`, `--threads`, `--hash`, `--min-moves`.
+run with `--depth`, `--multipv`, `--threads`, `--hash`, `--min-moves`,
+`--workers`.
 
 Depth 10 was chosen after benchmarking (~24× faster than depth 18 with only
 modest shifts in baseline stats). If you change depth, rebuild the baseline at
@@ -186,13 +261,34 @@ built at another skews every engine-derived feature.
 ## Performance & caching
 
 Engine analysis dominates runtime. Every analysed position is cached to
-`cheat_detection/cache/analysis_d<depth>_mpv<multipv>.json`, keyed by FEN, so:
+`cheat_detection/cache/analysis_d<depth>_mpv<multipv>.sqlite`, keyed by FEN, so:
 - re-running a report reuses cached evals instantly (no engine needed for hits);
 - the bot's and the humans' games share the cache when positions overlap;
 - interrupted runs resume where they left off.
 
+The cache is SQLite in WAL mode: lookups are indexed (nothing loads the whole
+cache into memory) and concurrent processes — parallel workers, or a report
+running alongside a baseline build — serialise safely on row inserts. A legacy
+`.json` cache with the same depth/multipv is imported into the `.sqlite`
+automatically on first use; the JSON file is then unused and can be deleted.
+
 Delete the cache file to force fresh analysis (e.g. after changing depth — though
 the depth/multipv are already in the filename, so different settings don't clash).
+
+### Parallel analysis (`--workers`)
+
+`--workers N` (CLI on `run`/`baseline`/`report`, the **Workers** field in the
+GUI, `AnalysisConfig.workers`) splits the games across N worker processes, each
+with its own Stockfish — games are striped by index, so the analysed set and
+the resulting units are identical to a sequential run. Total engine threads =
+`workers × threads`; with the default `threads=2`, `workers ≈ cores/2` is the
+sweet spot (~3.3× at 6 workers on a 16-core box for a 40-game build, better on
+longer runs where startup cost amortises). Only worth it on *uncached* work —
+a rerun over cached games is already instant.
+
+Workers read and write the SQLite cache concurrently (WAL mode), committing
+at every game boundary, so an interrupted parallel run loses at most one game
+per worker and everything already committed is reused on the next run.
 
 ## Layout
 
@@ -221,3 +317,7 @@ the depth/multipv are already in the filename, so different settings don't clash
   rating band **and** time control to the bot for meaningful z-scores.
 - A "unit" needs `--min-moves` analysed moves (default 10) to count, so very
   short games are dropped.
+- Baselines built before a feature existed simply show `n/a` for it — rebuild
+  the baseline (same corpus, same depth) to populate new features. Engine
+  analysis is cached by FEN, so a rebuild only recomputes the aggregation, not
+  the Stockfish work.

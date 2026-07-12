@@ -1,18 +1,26 @@
-"""Tkinter GUI for the human-likeness diagnostic.
+"""Tkinter GUI for the human-likeness diagnostic and the self-play simulator.
 
 Run:  venv/bin/python -m cheat_detection.gui
 
-Enter the bot's Lichess account, rating band and time control, point at a
-baseline (or a human corpus to build one), and hit Run. The heavy analysis
-runs in a worker thread; progress streams to the log, and the result renders
-as a z-score chart plus a feature table. A previously saved report.json can be
-opened directly for instant viewing.
+Diagnostic tab: enter the bot's Lichess account, rating band and time control,
+point at a baseline (or a human corpus to build one), and hit Run. The heavy
+analysis runs in a worker thread; progress streams to the log, and the result
+renders as a z-score chart plus a feature table. A previously saved
+report.json can be opened directly for instant viewing.
+
+Simulation tab: configure a self-play matchup — each bot's name, rating,
+difficulty, quickness and mouse speed, with fixed or alternating colours —
+and run `simulation.run` as a subprocess; its progress streams into the tab's
+log, and the finished PGN can be handed straight to the Diagnostic tab.
 """
 
 from __future__ import annotations
 
 import os
 import queue
+import signal
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -37,15 +45,25 @@ class DiagnosticGUI:
         self.q: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self.last_result = None
+        self.sim_proc: subprocess.Popen | None = None
+
+        nb = ttk.Notebook(self.root)
+        nb.pack(fill="both", expand=True)
+        self.nb = nb
+        self.tab_diag = ttk.Frame(nb)
+        self.tab_sim = ttk.Frame(nb)
+        nb.add(self.tab_diag, text="Diagnostic")
+        nb.add(self.tab_sim, text="Simulation")
 
         self._build_inputs()
         self._build_examples()
         self._build_body()
+        self._build_sim_tab()
         self.root.after(120, self._drain_queue)
 
     # ---------------------------------------------------------------- inputs
     def _build_inputs(self):
-        f = ttk.LabelFrame(self.root, text="Configuration", padding=8)
+        f = ttk.LabelFrame(self.tab_diag, text="Configuration", padding=8)
         f.pack(fill="x", padx=8, pady=(8, 4))
 
         self.v_user = tk.StringVar(value="JXu2019")
@@ -62,8 +80,13 @@ class DiagnosticGUI:
         self.v_basemax = tk.StringVar(value="250")
         self.v_depth = tk.StringVar(value="10")
         self.v_multipv = tk.StringVar(value="5")
+        self.v_workers = tk.StringVar(value="1")
         self.v_test = tk.StringVar(value="effect-size")
         self.v_alpha = tk.StringVar(value="0.05")
+        self.v_oppmin = tk.StringVar(value="")
+        self.v_oppmax = tk.StringVar(value="")
+        self.v_diffmin = tk.StringVar(value="")
+        self.v_diffmax = tk.StringVar(value="")
 
         def row(r, label, var, width=22, browse=None):
             ttk.Label(f, text=label).grid(row=r, column=0, sticky="w", padx=4, pady=2)
@@ -103,7 +126,9 @@ class DiagnosticGUI:
         for lbl, var, w in [("Bot games", self.v_botmax, 6),
                             ("Baseline games", self.v_basemax, 6),
                             ("Depth", self.v_depth, 5),
-                            ("MultiPV", self.v_multipv, 5)]:
+                            ("MultiPV", self.v_multipv, 5),
+                            # parallel engine processes; ~cores/2 is a good max
+                            ("Workers", self.v_workers, 5)]:
             ttk.Label(adv, text=lbl).pack(side="left", padx=(8, 2))
             ttk.Entry(adv, textvariable=var, width=w).pack(side="left")
         # effect-size: flag |z| >= 2 vs human spread (sample-size independent).
@@ -114,8 +139,22 @@ class DiagnosticGUI:
         ttk.Label(adv, text="α").pack(side="left", padx=(8, 2))
         ttk.Entry(adv, textvariable=self.v_alpha, width=5).pack(side="left")
 
+        # Optional pair-level unit filters; applied to BOTH the human baseline
+        # (when it's built this run) and the bot's games, so the populations
+        # stay comparable. Blank = off.
+        flt = ttk.Frame(f)
+        flt.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        ttk.Label(flt, text="Filters (optional):  opponent Elo").pack(side="left")
+        for var in (self.v_oppmin, self.v_oppmax):
+            ttk.Entry(flt, textvariable=var, width=6).pack(side="left", padx=2)
+        ttk.Label(flt, text="Elo diff (self−opp)").pack(side="left", padx=(10, 0))
+        for var in (self.v_diffmin, self.v_diffmax):
+            ttk.Entry(flt, textvariable=var, width=6).pack(side="left", padx=2)
+        ttk.Label(flt, text="e.g. diff max −200 = outrated by ≥200",
+                  foreground="#888").pack(side="left", padx=(8, 0))
+
         btns = ttk.Frame(f)
-        btns.grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        btns.grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.run_btn = ttk.Button(btns, text="Run diagnostic", command=self._on_run)
         self.run_btn.pack(side="left", padx=4)
         ttk.Button(btns, text="Open report JSON...",
@@ -133,7 +172,7 @@ class DiagnosticGUI:
     # -------------------------------------------------------------- examples
     def _build_examples(self):
         f = ttk.LabelFrame(
-            self.root,
+            self.tab_diag,
             text="Data source examples — read-only, copy/paste (shows the granularity needed)",
             padding=8)
         f.pack(fill="x", padx=8, pady=(0, 4))
@@ -181,7 +220,7 @@ class DiagnosticGUI:
 
     # ------------------------------------------------------------------ body
     def _build_body(self):
-        body = ttk.Frame(self.root)
+        body = ttk.Frame(self.tab_diag)
         body.pack(fill="both", expand=True, padx=8, pady=4)
 
         left = ttk.Frame(body)
@@ -204,16 +243,17 @@ class DiagnosticGUI:
 
         right = ttk.Frame(body)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
-        cols = ("feature", "human", "bot", "z", "p")
+        cols = ("feature", "human", "bot", "z", "p", "vratio", "vp")
         self.tree = ttk.Treeview(right, columns=cols, show="headings", height=16)
         for c, txt, w in [("feature", "Feature", 200), ("human", "Human m±sd", 115),
-                          ("bot", "Bot", 75), ("z", "z", 55), ("p", "p (Welch)", 75)]:
+                          ("bot", "Bot", 75), ("z", "z", 55), ("p", "p (Welch)", 75),
+                          ("vratio", "σ ratio", 60), ("vp", "var p", 65)]:
             self.tree.heading(c, text=txt)
             self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_feature_select)
 
-        logf = ttk.LabelFrame(self.root, text="Log", padding=4)
+        logf = ttk.LabelFrame(self.tab_diag, text="Log", padding=4)
         logf.pack(fill="x", padx=8, pady=(0, 8))
         self.log = tk.Text(logf, height=8, wrap="word")
         self.log.pack(side="left", fill="both", expand=True)
@@ -229,6 +269,151 @@ class DiagnosticGUI:
         self.ax.set_yticks([])
         self.canvas.draw()
 
+    # ---------------------------------------------------------- simulation tab
+    def _build_sim_tab(self):
+        from common.constants import DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS
+        t = self.tab_sim
+
+        gen = ttk.LabelFrame(t, text="Match", padding=8)
+        gen.pack(fill="x", padx=8, pady=(8, 4))
+        self.s_games = tk.StringVar(value="20")
+        self.s_tc = tk.StringVar(value="60+0")
+        self.s_seed = tk.StringVar(value="0")
+        self.s_workers = tk.StringVar(value="5")
+        self.s_sides = tk.StringVar(value="alternate")
+        self.s_out = tk.StringVar(value="")
+        row = ttk.Frame(gen)
+        row.pack(anchor="w")
+        for lbl, var, w in [("Games", self.s_games, 6), ("TC", self.s_tc, 7),
+                            ("Seed", self.s_seed, 7), ("Workers", self.s_workers, 5)]:
+            ttk.Label(row, text=lbl).pack(side="left", padx=(8, 2))
+            ttk.Entry(row, textvariable=var, width=w).pack(side="left")
+        ttk.Label(row, text="Sides").pack(side="left", padx=(8, 2))
+        ttk.Combobox(row, textvariable=self.s_sides, width=10, state="readonly",
+                     values=["fixed", "alternate"]).pack(side="left")
+        row2 = ttk.Frame(gen)
+        row2.pack(anchor="w", fill="x", pady=(4, 0))
+        ttk.Label(row2, text="Output PGN (blank = auto)").pack(side="left", padx=(8, 2))
+        ttk.Entry(row2, textvariable=self.s_out, width=52).pack(side="left")
+        ttk.Label(row2, foreground="#888",
+                  text="  workers each own an engine pair — keep ≲ cores/3"
+                  ).pack(side="left")
+
+        # Per-bot personas. Blank fields fall back to common.constants defaults.
+        bots = ttk.Frame(t)
+        bots.pack(fill="x", padx=8, pady=4)
+        self.s_bot = {}
+        defaults = {"name": ("SimBotWhite", "SimBotBlack"), "rating": ("2450", "2450"),
+                    "difficulty": ("", ""), "quickness": ("", ""), "mouse": ("", "")}
+        hints = {"difficulty": f"blank = {DIFFICULTY}",
+                 "quickness": f"blank = {QUICKNESS}",
+                 "mouse": f"blank = {MOUSE_QUICKNESS}"}
+        for i, tag in enumerate(("a", "b")):
+            lf = ttk.LabelFrame(
+                bots, padding=8,
+                text=f"Bot {tag.upper()}"
+                     + (" (white when sides=fixed)" if tag == "a" else ""))
+            lf.pack(side="left", fill="both", expand=True, padx=(0 if i == 0 else 8, 0))
+            self.s_bot[tag] = {}
+            for r, field in enumerate(("name", "rating", "difficulty",
+                                       "quickness", "mouse")):
+                var = tk.StringVar(value=defaults[field][i])
+                self.s_bot[tag][field] = var
+                ttk.Label(lf, text=field.capitalize()).grid(
+                    row=r, column=0, sticky="w", padx=2, pady=1)
+                ttk.Entry(lf, textvariable=var, width=14).grid(
+                    row=r, column=1, sticky="w", padx=2, pady=1)
+                if field in hints:
+                    ttk.Label(lf, text=hints[field], foreground="#888").grid(
+                        row=r, column=2, sticky="w", padx=4)
+
+        btns = ttk.Frame(t)
+        btns.pack(anchor="w", padx=8, pady=4)
+        self.sim_run_btn = ttk.Button(btns, text="Run simulation",
+                                      command=self._on_sim_run)
+        self.sim_run_btn.pack(side="left", padx=4)
+        self.sim_stop_btn = ttk.Button(btns, text="Stop", state="disabled",
+                                       command=self._on_sim_stop)
+        self.sim_stop_btn.pack(side="left", padx=4)
+        self.sim_analyze_btn = ttk.Button(btns, text="Analyze in Diagnostic tab →",
+                                          state="disabled",
+                                          command=self._sim_to_diagnostic)
+        self.sim_analyze_btn.pack(side="left", padx=12)
+        self.sim_status = ttk.Label(btns, text="idle", foreground="#888")
+        self.sim_status.pack(side="left", padx=12)
+
+        logf = ttk.LabelFrame(t, text="Simulation log", padding=4)
+        logf.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.sim_log = tk.Text(logf, height=18, wrap="word")
+        self.sim_log.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(logf, command=self.sim_log.yview)
+        sb.pack(side="right", fill="y")
+        self.sim_log.configure(yscrollcommand=sb.set)
+
+    def _sim_cmd(self) -> tuple[list[str], str]:
+        """Build the simulation.run argv from the fields; returns (argv, out_path)."""
+        tc = self.s_tc.get().strip()
+        seed = int(self.s_seed.get())
+        out = self.s_out.get().strip() or os.path.join(
+            os.path.dirname(_HERE), "simulation", "games",
+            f"gui_{tc.replace('+', 'plus')}_seed{seed}.pgn")
+        argv = [sys.executable, "-u", "-m", "simulation.run", "--plain",
+                "--games", str(int(self.s_games.get())),
+                "--tc", tc, "--seed", str(seed),
+                "--workers", str(int(self.s_workers.get())),
+                "--sides", self.s_sides.get(), "--out", out]
+        for tag in ("a", "b"):
+            for field, flag in [("name", "name"), ("rating", "rating"),
+                                ("difficulty", "difficulty"),
+                                ("quickness", "quickness"), ("mouse", "mouse")]:
+                v = self.s_bot[tag][field].get().strip()
+                if v:
+                    argv += [f"--{tag}-{flag}", v]
+        return argv, out
+
+    def _on_sim_run(self):
+        if self.sim_proc and self.sim_proc.poll() is None:
+            messagebox.showinfo("Busy", "A simulation is already running.")
+            return
+        try:
+            argv, out = self._sim_cmd()
+        except ValueError as e:
+            messagebox.showerror("Bad input", str(e))
+            return
+        self.sim_out_path = out
+        self.sim_log.delete("1.0", "end")
+        self.q.put(("simlog", "$ " + " ".join(argv[3:])))  # skip python -u -m
+        self.sim_run_btn.configure(state="disabled")
+        self.sim_stop_btn.configure(state="normal")
+        self.sim_analyze_btn.configure(state="disabled")
+        self.sim_status.configure(text="running...")
+        # Subprocess (not a thread): engines are heavy and crash-isolated this
+        # way, and --plain progress streams line-by-line on stderr.
+        self.sim_proc = subprocess.Popen(
+            argv, cwd=os.path.dirname(_HERE),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, start_new_session=True)
+
+        def pump(proc):
+            for line in proc.stdout:
+                self.q.put(("simlog", line.rstrip("\n")))
+            self.q.put(("simdone", proc.wait()))
+
+        threading.Thread(target=pump, args=(self.sim_proc,), daemon=True).start()
+
+    def _on_sim_stop(self):
+        if self.sim_proc and self.sim_proc.poll() is None:
+            # Kill the whole group: run.py spawns worker processes + Stockfish.
+            os.killpg(os.getpgid(self.sim_proc.pid), signal.SIGTERM)
+            self.q.put(("simlog", "[stopped by user]"))
+
+    def _sim_to_diagnostic(self):
+        self.v_botpgn.set(self.sim_out_path)
+        self.v_user.set(self.s_bot["a"]["name"].get().strip() or "SimBotWhite")
+        self.nb.select(self.tab_diag)
+        self._log("Loaded simulation PGN into Bot PGN; account set to bot A "
+                  "(rerun with bot B's name to profile the other side).")
+
     # ------------------------------------------------------------- run/thread
     def _log(self, msg): self.q.put(("log", msg))
 
@@ -236,6 +421,7 @@ class DiagnosticGUI:
         cfg = AnalysisConfig()
         cfg.depth = int(self.v_depth.get())
         cfg.multipv = int(self.v_multipv.get())
+        cfg.workers = int(self.v_workers.get() or 1)
         cfg.test_mode = "welch" if self.v_test.get() == "Welch t-test" else "effect_size"
         cfg.flag_pvalue = float(self.v_alpha.get())
         return cfg
@@ -244,6 +430,13 @@ class DiagnosticGUI:
         if self.worker and self.worker.is_alive():
             messagebox.showinfo("Busy", "A diagnostic is already running.")
             return
+        def band(vmin, vmax):
+            """(min, max) from two entry fields; blank pair = None, blank end = open."""
+            a, b = vmin.get().strip().replace("−", "-"), vmax.get().strip().replace("−", "-")
+            if not a and not b:
+                return None
+            return (int(a) if a else -9999, int(b) if b else 9999)
+
         try:
             spec = DiagnosticSpec(
                 username=self.v_user.get().strip(),
@@ -256,6 +449,8 @@ class DiagnosticGUI:
                 bot_max_games=int(self.v_botmax.get()),
                 baseline_max_games=int(self.v_basemax.get()) if self.v_basemax.get() else None,
                 fetch_max_games=int(self.v_botmax.get()),
+                opponent_band=band(self.v_oppmin, self.v_oppmax),
+                diff_range=band(self.v_diffmin, self.v_diffmax),
             )
             if spec.time_control:
                 from .fetch_lichess import parse_time_control
@@ -303,6 +498,19 @@ class DiagnosticGUI:
                     self.phase_lbl.configure(text="done")
                     self.last_result = payload
                     self._render(payload.report)
+                elif kind == "simlog":
+                    self.sim_log.insert("end", payload + "\n")
+                    self.sim_log.see("end")
+                    if payload.startswith("[progress]"):
+                        self.sim_status.configure(text=payload[len("[progress] "):])
+                elif kind == "simdone":
+                    self.sim_run_btn.configure(state="normal")
+                    self.sim_stop_btn.configure(state="disabled")
+                    ok = payload == 0
+                    self.sim_status.configure(
+                        text="done" if ok else f"exited with code {payload}")
+                    if ok:
+                        self.sim_analyze_btn.configure(state="normal")
         except queue.Empty:
             pass
         self.root.after(120, self._drain_queue)
@@ -323,9 +531,10 @@ class DiagnosticGUI:
             flag_desc = f"{n_flag} feature(s) significant at p<{alpha:g} (Welch)"
         else:
             flag_desc = f"{n_flag} feature(s) beyond 2σ"
+        n_vflag = sum(1 for f in feats if f.get("var_flagged"))
         self.verdict.configure(
             text=f"Overall divergence: mean |z| = {mean_abs_z:.2f}  ({verdict}); "
-                 f"{flag_desc}")
+                 f"{flag_desc}; {n_vflag} with un-human game-to-game variance")
 
         self._draw_overview()
 
@@ -343,10 +552,14 @@ class DiagnosticGUI:
             bot = "n/a" if f.get("bot_value") is None else f"{f['bot_value']:.3f}"
             z = "n/a" if f.get("zscore") is None else f"{f['zscore']:.2f}"
             p = "n/a" if f.get("p_value") is None else f"{f['p_value']:.4f}"
-            tag = "flag" if f.get("flagged") else ""
-            self.tree.insert("", "end", iid=f["key"], values=(label, human, bot, z, p),
-                             tags=(tag,))
+            vr = "n/a" if f.get("var_ratio") is None else f"{f['var_ratio']:.2f}"
+            vp = "n/a" if f.get("var_pvalue") is None else f"{f['var_pvalue']:.4f}"
+            tag = ("flag" if f.get("flagged")
+                   else "varflag" if f.get("var_flagged") else "")
+            self.tree.insert("", "end", iid=f["key"],
+                             values=(label, human, bot, z, p, vr, vp), tags=(tag,))
         self.tree.tag_configure("flag", background="#ffe0e0")
+        self.tree.tag_configure("varflag", background="#fff2d8")
 
     def _draw_overview(self):
         """Horizontal z-score bars for all features, sorted by |z|."""

@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .config import AnalysisConfig
-from .engine_analysis import EngineAnalyzer
 from .features import FEATURE_KEYS
-from .pipeline import Unit, iter_units
+from .parallel import collect_units
+from .pipeline import Unit
 
 
 @dataclass
@@ -26,6 +26,8 @@ class Baseline:
     # Per-unit raw values (feature -> [value, ...]); powers distribution views.
     # Optional: baselines built before this field exists load as None.
     values: Optional[dict[str, list[float]]] = None
+    # Provenance of extra unit filters (opponent_band / diff_range), if any.
+    filters: Optional[dict] = None
 
     def to_json(self, path: str) -> None:
         payload = {
@@ -35,8 +37,14 @@ class Baseline:
         }
         if self.values is not None:
             payload["values"] = self.values
-        with open(path, "w", encoding="utf-8") as fh:
+        if self.filters is not None:
+            payload["filters"] = self.filters
+        # Atomic write: a concurrent report may be loading this baseline.
+        import os
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2)
+        os.replace(tmp, path)
 
     @staticmethod
     def from_json(path: str) -> "Baseline":
@@ -47,6 +55,7 @@ class Baseline:
             n_units=d["n_units"],
             stats=d["stats"],
             values=d.get("values"),
+            filters=d.get("filters"),
         )
 
 
@@ -82,21 +91,29 @@ def build_baseline(
     max_games: Optional[int] = None,
     min_moves: int = 10,
     on_progress: Optional[Callable[[int], None]] = None,
+    opponent_band: Optional[tuple[int, int]] = None,
+    diff_range: Optional[tuple[Optional[int], Optional[int]]] = None,
 ) -> Baseline:
     """Analyse a human PGN dump and summarise it into a Baseline."""
-    units: list[Unit] = []
-    with EngineAnalyzer(cfg) as analyzer:
-        for unit in iter_units(
-            pgn_path, analyzer, cfg,
-            rating_band=rating_band,
-            max_games=max_games,
-            min_moves=min_moves,
-            on_progress=on_progress,
-        ):
-            units.append(unit)
+    units: list[Unit] = collect_units(
+        pgn_path, cfg,
+        rating_band=rating_band,
+        max_games=max_games,
+        min_moves=min_moves,
+        on_progress=on_progress,
+        opponent_band=opponent_band,
+        diff_range=diff_range,
+    )
+    filters = None
+    if opponent_band is not None or diff_range is not None:
+        filters = {
+            "opponent_band": list(opponent_band) if opponent_band else None,
+            "diff_range": list(diff_range) if diff_range else None,
+        }
     return Baseline(
         rating_band=rating_band,
         n_units=len(units),
         stats=_summarize(units),
         values=collect_values(units),
+        filters=filters,
     )

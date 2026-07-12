@@ -37,49 +37,79 @@ class SimGame:
     initial_time: float
     increment: float
     moves: list[SimMove] = field(default_factory=list)
+    # Who actually sat on each side this game (set by GameRunner; supports
+    # per-game colour alternation).
+    white_name: str = "SimBotWhite"
+    black_name: str = "SimBotBlack"
+    white_elo: int = 2450
+    black_elo: int = 2450
+
+
+@dataclass
+class BotSpec:
+    """One bot's persona: everything that can differ between the two sides."""
+    name: str = "SimBot"
+    rating: int = 2450
+    difficulty: int = None           # engine playing_level; None -> DIFFICULTY
+    quickness: float = None          # move-time pacing; None -> QUICKNESS
+    mouse_quickness: float = None    # gesture speed; None -> MOUSE_QUICKNESS
+
+    def __post_init__(self):
+        from common.constants import DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS
+        if self.difficulty is None:
+            self.difficulty = DIFFICULTY
+        if self.quickness is None:
+            self.quickness = QUICKNESS
+        if self.mouse_quickness is None:
+            self.mouse_quickness = MOUSE_QUICKNESS
 
 
 @dataclass
 class SimConfig:
     initial_time: float = 60.0
     increment: float = 0.0
-    quickness: float = None          # None -> common.constants.QUICKNESS
-    mouse_quickness: float = None    # None -> common.constants.MOUSE_QUICKNESS
     resolution_scale: float = None   # None -> common.constants.RESOLUTION_SCALE
-    white_rating: int = 2450
-    black_rating: int = 2450
+    bot_a: BotSpec = field(default_factory=BotSpec)
+    bot_b: BotSpec = field(default_factory=BotSpec)
     max_plies: int = 400
 
     def __post_init__(self):
-        from common.constants import (QUICKNESS, MOUSE_QUICKNESS,
-                                      RESOLUTION_SCALE)
-        if self.quickness is None:
-            self.quickness = QUICKNESS
-        if self.mouse_quickness is None:
-            self.mouse_quickness = MOUSE_QUICKNESS
+        from common.constants import RESOLUTION_SCALE
         if self.resolution_scale is None:
             self.resolution_scale = RESOLUTION_SCALE
 
 
 class GameRunner:
     """Plays simulated games; reuses the two (expensive) Engine instances
-    across games, resetting per-game client state each time."""
+    across games, resetting per-game client state each time.
 
-    def __init__(self, white_engine, black_engine, cfg: SimConfig):
+    ``engine_a``/``engine_b`` belong to ``cfg.bot_a``/``cfg.bot_b`` (they were
+    built with that bot's difficulty and quickness); ``a_plays_white`` maps the
+    bots onto the board per game, so colours can alternate without rebuilding
+    engines.
+    """
+
+    def __init__(self, engine_a, engine_b, cfg: SimConfig):
         self.cfg = cfg
-        self.engines = {chess.WHITE: white_engine, chess.BLACK: black_engine}
+        self.engine_a = engine_a
+        self.engine_b = engine_b
 
-    def play_game(self, seed: int,
+    def play_game(self, seed: int, a_plays_white: bool = True,
                   on_progress: Optional[callable] = None) -> SimGame:
         cfg = self.cfg
         rng = random.Random(seed)
-        latency = LatencyModel(rng, cfg.mouse_quickness, cfg.resolution_scale)
+        bots = {chess.WHITE: cfg.bot_a if a_plays_white else cfg.bot_b,
+                chess.BLACK: cfg.bot_b if a_plays_white else cfg.bot_a}
+        engines = {chess.WHITE: self.engine_a if a_plays_white else self.engine_b,
+                   chess.BLACK: self.engine_b if a_plays_white else self.engine_a}
         clients = {
             side: SimClient(
-                self.engines[side], side, latency, rng, cfg.quickness,
+                engines[side], side,
+                LatencyModel(rng, bots[side].mouse_quickness, cfg.resolution_scale),
+                rng, bots[side].quickness,
                 cfg.initial_time,
-                rating=cfg.white_rating if side == chess.WHITE else cfg.black_rating,
-                opp_rating=cfg.black_rating if side == chess.WHITE else cfg.white_rating,
+                rating=bots[side].rating,
+                opp_rating=bots[not side].rating,
             )
             for side in (chess.WHITE, chess.BLACK)
         }
@@ -92,7 +122,11 @@ class GameRunner:
         last_moves: list[str] = []
         clocks = {chess.WHITE: [cfg.initial_time], chess.BLACK: [cfg.initial_time]}
         game = SimGame(result="*", termination="", seed=seed,
-                       initial_time=cfg.initial_time, increment=cfg.increment)
+                       initial_time=cfg.initial_time, increment=cfg.increment,
+                       white_name=bots[chess.WHITE].name,
+                       black_name=bots[chess.BLACK].name,
+                       white_elo=bots[chess.WHITE].rating,
+                       black_elo=bots[chess.BLACK].rating)
 
         while True:
             if board.is_game_over(claim_draw=True):

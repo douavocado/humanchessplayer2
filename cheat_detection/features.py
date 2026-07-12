@@ -67,6 +67,7 @@ class MoveFeatures:
     n_legal: int
     is_blunder: bool
     emt: Optional[float]
+    clock_before: Optional[float]
 
 
 def extract_move_features(
@@ -114,6 +115,7 @@ def extract_move_features(
         n_legal=board.legal_moves.count(),
         is_blunder=wc_loss >= cfg.blunder_wc_loss,
         emt=rec.emt,
+        clock_before=rec.clock_before,
     )
 
 
@@ -148,7 +150,9 @@ def _pearson(xs: list[float], ys: list[float]) -> Optional[float]:
 # The feature keys the report and baseline compare on. Keep names stable.
 FEATURE_KEYS = [
     "t1_rate", "t2_rate", "t3_rate",
+    "t1_rate_ambiguous", "t1_rate_forced",
     "acpl", "acpl_opening", "acpl_middlegame", "acpl_endgame",
+    "acpl_timepressure", "blunder_rate_timepressure",
     "mean_wc_loss", "blunder_rate",
     "movetime_mean", "movetime_std", "movetime_cv",
     "instant_move_rate", "instant_in_sharp_rate",
@@ -170,12 +174,35 @@ def aggregate_features(moves: list[MoveFeatures], cfg: AnalysisConfig) -> dict[s
     out["t2_rate"] = sum(m.matched_top2 for m in moves) / n
     out["t3_rate"] = sum(m.matched_top3 for m in moves) / n
 
+    # Selective accuracy: matching the engine on a forced/obvious move says
+    # nothing; matching it when several near-equal candidates existed is the
+    # discriminating signal (human T1 collapses there, engine T1 doesn't).
+    ambiguous = [m for m in moves if m.ambiguity >= 2]
+    forced = [m for m in moves if m.ambiguity == 1]
+    out["t1_rate_ambiguous"] = (
+        sum(m.matched_top1 for m in ambiguous) / len(ambiguous) if ambiguous else None
+    )
+    out["t1_rate_forced"] = (
+        sum(m.matched_top1 for m in forced) / len(forced) if forced else None
+    )
+
     # Accuracy overall and by phase.
     out["acpl"] = _mean([m.cp_loss for m in moves])
     for phase in ("opening", "middlegame", "endgame"):
         out[f"acpl_{phase}"] = _mean([m.cp_loss for m in moves if m.phase == phase])
     out["mean_wc_loss"] = _mean([m.wc_loss for m in moves])
     out["blunder_rate"] = sum(m.is_blunder for m in moves) / n
+
+    # Time-pressure degradation: humans get markedly worse in a scramble;
+    # a bot whose quality is flat regardless of clock is a strong tell.
+    pressured = [
+        m for m in moves
+        if m.clock_before is not None and m.clock_before < cfg.time_pressure_secs
+    ]
+    out["acpl_timepressure"] = _mean([m.cp_loss for m in pressured])
+    out["blunder_rate_timepressure"] = (
+        sum(m.is_blunder for m in pressured) / len(pressured) if pressured else None
+    )
 
     # Timing distribution (only moves with a known emt).
     timed = [m for m in moves if m.emt is not None]

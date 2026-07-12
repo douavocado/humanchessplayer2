@@ -15,9 +15,9 @@ from typing import Callable, Optional
 
 from .baseline import Baseline, build_baseline
 from .config import AnalysisConfig
-from .engine_analysis import EngineAnalyzer
 from .fetch_lichess import fetch_user_games
-from .pipeline import Unit, iter_units
+from .parallel import collect_units
+from .pipeline import Unit
 from .report import FeatureComparison, build_report, compare
 
 LogFn = Optional[Callable[[str], None]]
@@ -46,22 +46,23 @@ def generate_report(
     min_moves: int = 10,
     on_log: LogFn = None,
     on_progress: ProgFn = None,
+    opponent_band: Optional[tuple[int, int]] = None,
+    diff_range: Optional[tuple[Optional[int], Optional[int]]] = None,
 ) -> DiagnosticResult:
     """Analyse the bot's games and compare to a loaded baseline."""
     log = on_log or _noop
     players = {player.lower()} if player else None
 
     log(f"Analysing bot games from {os.path.basename(bot_pgn)} ...")
-    bot_units: list[Unit] = []
-    with EngineAnalyzer(cfg) as analyzer:
-        for unit in iter_units(
-            bot_pgn, analyzer, cfg,
-            player_filter=players,
-            max_games=max_games,
-            min_moves=min_moves,
-            on_progress=on_progress,
-        ):
-            bot_units.append(unit)
+    bot_units: list[Unit] = collect_units(
+        bot_pgn, cfg,
+        player_filter=players,
+        max_games=max_games,
+        min_moves=min_moves,
+        on_progress=on_progress,
+        opponent_band=opponent_band,
+        diff_range=diff_range,
+    )
 
     if not bot_units:
         raise ValueError(
@@ -83,12 +84,24 @@ def ensure_baseline(
     min_moves: int = 10,
     on_log: LogFn = None,
     on_progress: ProgFn = None,
+    opponent_band: Optional[tuple[int, int]] = None,
+    diff_range: Optional[tuple[Optional[int], Optional[int]]] = None,
 ) -> Baseline:
     """Load an existing baseline JSON, or build one from a corpus PGN."""
     log = on_log or _noop
     if os.path.exists(baseline_path):
         log(f"Loading existing baseline: {os.path.basename(baseline_path)}")
-        return Baseline.from_json(baseline_path)
+        baseline = Baseline.from_json(baseline_path)
+        wanted = {
+            "opponent_band": list(opponent_band) if opponent_band else None,
+            "diff_range": list(diff_range) if diff_range else None,
+        }
+        if (opponent_band or diff_range) and (baseline.filters or {}) != wanted:
+            log("WARNING: opponent/diff filters set, but the loaded baseline "
+                f"was built with filters={baseline.filters} — the human side "
+                "won't match the filtered bot population. Rebuild the baseline "
+                "(delete the JSON) for a like-for-like comparison.")
+        return baseline
     if not corpus_pgn:
         raise FileNotFoundError(
             f"Baseline {baseline_path} not found and no corpus given to build it."
@@ -97,6 +110,7 @@ def ensure_baseline(
     baseline = build_baseline(
         corpus_pgn, rating_band, cfg,
         max_games=max_games, min_moves=min_moves, on_progress=on_progress,
+        opponent_band=opponent_band, diff_range=diff_range,
     )
     os.makedirs(os.path.dirname(os.path.abspath(baseline_path)), exist_ok=True)
     baseline.to_json(baseline_path)
@@ -116,6 +130,10 @@ class DiagnosticSpec:
     bot_max_games: int = 300
     baseline_max_games: Optional[int] = None
     fetch_max_games: int = 300
+    # Optional unit filters, applied to BOTH the baseline humans and the bot's
+    # units so the two populations stay comparable (e.g. underdogs vs underdogs).
+    opponent_band: Optional[tuple[int, int]] = None
+    diff_range: Optional[tuple[Optional[int], Optional[int]]] = None
 
 
 def run_diagnostic(
@@ -153,6 +171,7 @@ def run_diagnostic(
     baseline = ensure_baseline(
         cfg, spec.baseline_path, spec.corpus_pgn, spec.rating_band,
         max_games=spec.baseline_max_games, on_log=on_log, on_progress=on_progress,
+        opponent_band=spec.opponent_band, diff_range=spec.diff_range,
     )
 
     # 3. Report.
@@ -160,6 +179,7 @@ def run_diagnostic(
     return generate_report(
         cfg, bot_pgn, spec.username, baseline,
         max_games=spec.bot_max_games, on_log=on_log, on_progress=on_progress,
+        opponent_band=spec.opponent_band, diff_range=spec.diff_range,
     )
 
 

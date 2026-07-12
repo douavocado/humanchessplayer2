@@ -26,6 +26,33 @@ venv/bin/python -m cheat_detection.analyze report \
     --baseline cheat_detection/baselines/bullet_1plus0_2300_2600.json
 ```
 
+## Tailored matchups
+
+The two bots ("a" and "b") can differ in every persona knob — `--a-*`/`--b-*`
+override the shared flags per bot:
+
+```bash
+venv/bin/python -m simulation.run --games 50 --tc 60+0 --sides alternate \
+    --a-name FastBot --a-rating 2500 --a-quickness 1.4 --a-mouse 1.5 \
+    --b-name SlowBot --b-rating 2350 --b-quickness 0.7 --b-mouse 0.8
+```
+
+- **rating** — PGN Elo + fed to the engines (affects mood/eagerness),
+- **difficulty** — engine `playing_level`,
+- **quickness** — move-time pacing (per engine instance; higher = quicker),
+- **mouse** — gesture speed (`MOUSE_QUICKNESS`).
+
+`--sides alternate` swaps colours every game (bot a is white in games
+0, 2, 4…) so a matchup is colour-balanced; `fixed` (default) keeps bot a on
+white. PGN headers carry the right name/Elo per game either way, and the
+manifest records both personas. `--plain` replaces the tqdm bar with plain
+stderr lines (used by the GUI).
+
+The same matchup form lives in the **Simulation tab** of the cheat_detection
+GUI (`venv/bin/python -m cheat_detection.gui`): configure both bots, run (a
+subprocess of `simulation.run`), watch progress in the tab's log, then hand
+the finished PGN to the Diagnostic tab with one button.
+
 Games are reproducible: game *i* uses `--seed + i`, which seeds both the
 engine's move RNG (`make_move(seed=...)`) and every latency draw. A manifest
 JSON (results, terminations, per-game move-kind counts) is written beside the

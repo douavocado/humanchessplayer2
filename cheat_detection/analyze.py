@@ -20,10 +20,9 @@ import sys
 
 from .baseline import Baseline, build_baseline
 from .config import AnalysisConfig
-from .engine_analysis import EngineAnalyzer
 from .fetch_lichess import fetch_user_games
 from .orchestrate import DiagnosticSpec, run_diagnostic, save_result
-from .pipeline import iter_units
+from .parallel import collect_units
 from .report import build_report
 
 
@@ -36,6 +35,9 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--multipv", type=int, help="candidate moves per position (default 5)")
     p.add_argument("--threads", type=int, help="Stockfish threads")
     p.add_argument("--hash", type=int, dest="hash_mb", help="Stockfish hash (MB)")
+    p.add_argument("--workers", type=int,
+                   help="parallel analysis processes, each with its own Stockfish "
+                        "(default 1 = sequential; try ~cores/2 with --threads 2)")
     p.add_argument("--min-moves", type=int, default=10,
                    help="minimum analysed moves for a unit to count (default 10)")
     p.add_argument("--test", choices=["effect-size", "welch"], dest="test_mode",
@@ -45,9 +47,26 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
                    help="significance level for --test welch (default 0.05)")
 
 
+def _add_filter_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--opponent-rating", type=int, nargs=2, metavar=("MIN", "MAX"),
+                   help="only count a player's game when the OPPONENT's Elo is "
+                        "in this band (e.g. 2600 2900)")
+    p.add_argument("--rating-diff", type=int, nargs=2, metavar=("MIN", "MAX"),
+                   help="only count a player's game when (own Elo - opponent Elo) "
+                        "is in this range; e.g. -9999 -200 keeps only players "
+                        "outrated by at least 200")
+
+
+def _filters_from_args(args) -> dict:
+    return {
+        "opponent_band": tuple(args.opponent_rating) if args.opponent_rating else None,
+        "diff_range": tuple(args.rating_diff) if args.rating_diff else None,
+    }
+
+
 def _config_from_args(args) -> AnalysisConfig:
     cfg = AnalysisConfig()
-    for attr in ("depth", "multipv", "threads", "hash_mb", "flag_pvalue"):
+    for attr in ("depth", "multipv", "threads", "hash_mb", "workers", "flag_pvalue"):
         v = getattr(args, attr, None)
         if v is not None:
             setattr(cfg, attr, v)
@@ -64,6 +83,7 @@ def cmd_baseline(args) -> int:
         args.pgn, band, cfg,
         max_games=args.max_games, min_moves=args.min_moves,
         on_progress=_progress_printer("baseline"),
+        **_filters_from_args(args),
     )
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     baseline.to_json(args.out)
@@ -76,16 +96,14 @@ def cmd_report(args) -> int:
     baseline = Baseline.from_json(args.baseline)
     players = {p.lower() for p in args.player} if args.player else None
 
-    bot_units = []
-    with EngineAnalyzer(cfg) as analyzer:
-        for unit in iter_units(
-            args.pgn, analyzer, cfg,
-            player_filter=players,
-            max_games=args.max_games,
-            min_moves=args.min_moves,
-            on_progress=_progress_printer("report"),
-        ):
-            bot_units.append(unit)
+    bot_units = collect_units(
+        args.pgn, cfg,
+        player_filter=players,
+        max_games=args.max_games,
+        min_moves=args.min_moves,
+        on_progress=_progress_printer("report"),
+        **_filters_from_args(args),
+    )
 
     if not bot_units:
         print("No qualifying games found for the bot. Check --player and PGN.",
@@ -126,6 +144,7 @@ def cmd_run(args) -> int:
         bot_max_games=args.max_games,
         baseline_max_games=args.baseline_max_games,
         fetch_max_games=args.fetch_max_games,
+        **_filters_from_args(args),
     )
     workdir = args.workdir or os.path.join(os.path.dirname(__file__), "runs")
     try:
@@ -170,6 +189,7 @@ def main(argv=None) -> int:
     prun.add_argument("--out-md", help="write markdown report here")
     prun.add_argument("--out-json", help="write JSON report here")
     _add_engine_args(prun)
+    _add_filter_args(prun)
     prun.set_defaults(func=cmd_run)
 
     pf = sub.add_parser("fetch-games", help="download a Lichess user's games as PGN")
@@ -187,6 +207,7 @@ def main(argv=None) -> int:
     pb.add_argument("--out", required=True, help="output baseline JSON path")
     pb.add_argument("--max-games", type=int, help="cap games analysed (for speed)")
     _add_engine_args(pb)
+    _add_filter_args(pb)
     pb.set_defaults(func=cmd_baseline)
 
     pr = sub.add_parser("report", help="report bot vs. human baseline")
@@ -197,6 +218,7 @@ def main(argv=None) -> int:
     pr.add_argument("--out-json", help="write JSON report here")
     pr.add_argument("--max-games", type=int, help="cap games analysed")
     _add_engine_args(pr)
+    _add_filter_args(pr)
     pr.set_defaults(func=cmd_report)
 
     args = parser.parse_args(argv)

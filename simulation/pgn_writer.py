@@ -22,8 +22,7 @@ TERMINATION_HEADER = {
 }
 
 
-def game_to_pgn(sim: SimGame, white_name: str, black_name: str,
-                white_elo: int, black_elo: int, round_no: int = 1,
+def game_to_pgn(sim: SimGame, round_no: int = 1,
                 date: str = "????.??.??") -> chess.pgn.Game:
     game = chess.pgn.Game()
     inc = int(sim.increment)
@@ -31,10 +30,12 @@ def game_to_pgn(sim: SimGame, white_name: str, black_name: str,
     game.headers["Site"] = "local simulation"
     game.headers["Date"] = date
     game.headers["Round"] = str(round_no)
-    game.headers["White"] = white_name
-    game.headers["Black"] = black_name
-    game.headers["WhiteElo"] = str(white_elo)
-    game.headers["BlackElo"] = str(black_elo)
+    # Names/ratings live on the SimGame: with colour alternation they differ
+    # game to game.
+    game.headers["White"] = sim.white_name
+    game.headers["Black"] = sim.black_name
+    game.headers["WhiteElo"] = str(sim.white_elo)
+    game.headers["BlackElo"] = str(sim.black_elo)
     game.headers["TimeControl"] = f"{int(sim.initial_time)}+{inc}"
     game.headers["Result"] = sim.result
     game.headers["Termination"] = TERMINATION_HEADER.get(sim.termination, "Normal")
@@ -47,11 +48,9 @@ def game_to_pgn(sim: SimGame, white_name: str, black_name: str,
     return game
 
 
-def write_games(sims: list[SimGame], out_path: str, white_name: str,
-                black_name: str, white_elo: int, black_elo: int,
+def write_games(sims: list[SimGame], out_path: str,
                 date: str = "????.??.??") -> None:
     with open(out_path, "w", encoding="utf-8") as fh:
         for i, sim in enumerate(sims, start=1):
-            game = game_to_pgn(sim, white_name, black_name,
-                               white_elo, black_elo, round_no=i, date=date)
+            game = game_to_pgn(sim, round_no=i, date=date)
             fh.write(str(game) + "\n\n")

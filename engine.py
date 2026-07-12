@@ -64,7 +64,11 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: str = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin"):
+    def __init__(self, playing_level:int = 6, log_file: str = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", quickness: float = None):
+        # Per-instance move-time pacing; None keeps the global QUICKNESS, so
+        # live behaviour is unchanged. The simulator sets it to give the two
+        # bots of a self-play pair different pacing.
+        self.quickness = QUICKNESS if quickness is None else quickness
         self.input_info = {
             "side": None,
             "fens": None,
@@ -1451,7 +1455,7 @@ class Engine:
         """
         self.log += "Deciding time taken to make the move from receiving input. \n"
         self_initial_time = self.input_info["self_initial_time"]
-        base_time = max(QUICKNESS*self_initial_time**1.1/(100 + self_initial_time**0.7),0.1)
+        base_time = max(self.quickness*self_initial_time**1.1/(100 + self_initial_time**0.7),0.1)
         self.log += "Initial base time without calculations: {} \n".format(base_time)
         # we move faster depending on whether we are proportionally behind on time
         # or move slower if we are ahead

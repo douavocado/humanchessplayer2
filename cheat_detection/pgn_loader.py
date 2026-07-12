@@ -27,6 +27,7 @@ class MoveRecord:
     mover: bool                 # chess.WHITE or chess.BLACK (True == White)
     mover_name: str
     emt: Optional[float]        # elapsed move time in seconds, if derivable
+    clock_before: Optional[float]  # clock the mover started thinking with, seconds
     clock_after: Optional[float]  # clock remaining after the move, seconds
 
 
@@ -94,6 +95,7 @@ def parse_game(game: chess.pgn.Game) -> Optional[GameRecord]:
 
         clock_after = node.clock()  # seconds remaining after this move, or None
         emt = node.emt()            # explicit emt tag, if any
+        clock_before = prev_clock[mover]  # includes any increment from the previous move
 
         if emt is None and clock_after is not None and prev_clock[mover] is not None:
             # emt = time_before - time_after + increment
@@ -112,6 +114,7 @@ def parse_game(game: chess.pgn.Game) -> Optional[GameRecord]:
             mover=mover,
             mover_name=white if mover == chess.WHITE else black,
             emt=emt,
+            clock_before=clock_before,
             clock_after=clock_after,
         ))
         board.push(node.move)
