@@ -84,7 +84,8 @@ class SimClient:
             entry = self.ponder_dic.get(board_fen)
             if entry is not None:
                 wait = ponder_response_wait(self.initial_time, self.quickness,
-                                            self.rng)
+                                            self.rng,
+                                            pace_sf=self.engine.game_pace_sf or 1.0)
                 self.queued_premove = entry.get("premove")
                 return MoveDecision(entry["move"],
                                     wait + self._gesture(entry["move"], own_time),
@@ -100,7 +101,8 @@ class SimClient:
                         prob = math.sqrt(1 / self.initial_time)
                         if self.initial_time < 200 and self.rng.random() < prob:
                             wait = ponder_response_wait(self.initial_time,
-                                                        self.quickness, self.rng)
+                                                        self.quickness, self.rng,
+                                                        pace_sf=self.engine.game_pace_sf or 1.0)
                             return MoveDecision(
                                 last_uci,
                                 wait + self._gesture(last_uci, own_time),

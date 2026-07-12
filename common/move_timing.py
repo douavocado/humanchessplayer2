@@ -70,11 +70,20 @@ def drag_probability(own_time: float) -> float:
 
 
 def ponder_response_wait(initial_time: float, quickness: float,
-                         rng: Optional[_random.Random] = None) -> float:
+                         rng: Optional[_random.Random] = None,
+                         pace_sf: float = 1.0) -> float:
     """Wait before playing a pre-pondered (PONDER_DIC) response — the human
-    'recognise the expected reply' pause, scaled by time control."""
-    base_time = 0.3 * quickness * initial_time ** 1.1 / (100 + initial_time ** 0.7)
-    return base_time * (0.8 + 0.4 * _rng(rng).random())
+    'recognise the expected reply' pause, scaled by time control.
+
+    ``pace_sf`` is the engine's per-game pace draw (game_pace_sf): ponder
+    hits are ~30% of all moves and sit right at the 1-second "instant move"
+    boundary, so coupling this wait to the game's pace is what gives the
+    instant-move rate its game-to-game spread (a fast game recognises
+    expected replies near-instantly, a grinding game double-checks them).
+    The wide jitter serves the same feature within a game.
+    """
+    base_time = 0.27 * quickness * initial_time ** 1.1 / (100 + initial_time ** 0.7)
+    return base_time * pace_sf * (0.45 + 0.9 * _rng(rng).random())
 
 
 def scramble_response_wait(rng: Optional[_random.Random] = None) -> float:

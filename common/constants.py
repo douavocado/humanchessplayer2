@@ -71,20 +71,25 @@ QUICKNESS = 2.5 # adjust depending on computer fastness. The bigger the number t
 # and applies it to every think time that game (engine.py:_sample_game_pace).
 # Humans' average pace swings game to game (mood, opponent, focus); without
 # this the bot's per-game mean move time is unnaturally consistent. 0 disables.
-GAME_PACE_SIGMA = 0.28
-GAME_PACE_CLIP = (0.55, 1.8)
+GAME_PACE_SIGMA = 0.36
+GAME_PACE_CLIP = (0.5, 2.0)
 # Same idea for premove appetite: one multiplier per game scaling every
 # premove-search probability in make_move (full and takeback-only alike).
 # Some games the bot premoves everything, some games barely at all --
 # humans' premove usage swings similarly with mood/opponent. 0 disables.
-GAME_PREMOVE_SIGMA = 0.4
-GAME_PREMOVE_CLIP = (0.3, 1.7)
+# Premoves are the main source of 0-second moves (a decided think time can't
+# beat the engine-compute floor), so this distribution's mean and spread set
+# the instant-move rate and its game-to-game variance.
+GAME_PREMOVE_SIGMA = 0.55
+GAME_PREMOVE_CLIP = (0.3, 2.4)
 # Per-game intuition gate: the probability of snapping (not deep-thinking) a
 # sharp position, drawn uniformly from this range at each game boundary
-# (mean 0.65, the old fixed value). Trust-the-gut games snap ~85% of critical
-# moves; grinding games stop and think on most of them. Widens the
-# game-to-game spread of the long-think tail (move-time std).
-GAME_SNAP_GATE_RANGE = (0.45, 0.85)
+# (mean 0.75). Trust-the-gut games snap ~95% of critical moves; grinding
+# games stop and think on a good share of them. Widens the game-to-game
+# spread of the long-think tail (move-time std). Raised from (0.45, 0.85):
+# the bot's time-vs-sharpness correlation overshot the human baseline
+# (~0.07 vs ~0.02) -- humans barely slow down for sharp positions in bullet.
+GAME_SNAP_GATE_RANGE = (0.55, 0.95)
 # "Hesitation before the mistake" (engine.py:_adjust_time_for_move_loss):
 # humans think longer in positions where they end up erring, giving a
 # positive per-game correlation between move time and move loss (~ +0.10 in
@@ -92,12 +97,30 @@ GAME_SNAP_GATE_RANGE = (0.45, 0.85)
 # from the human-probability sampling, independent of the decided think time.
 # When the chosen move gives up at least WC_LOSS win probability, the think
 # time is stretched by a Uniform(*RANGE) factor with probability PROB (the
-# rest stay fast: snap blunders exist). Skipped when own clock < MIN_TIME
-# or mood is "hurry" -- scramble errors are fast and must stay fast.
-MISTAKE_HESITATION_WC_LOSS = 0.08
-MISTAKE_HESITATION_PROB = 0.55
-MISTAKE_HESITATION_RANGE = (1.3, 2.2)
-MISTAKE_HESITATION_MIN_TIME = 15
+# rest stay fast: snap blunders exist). Skipped when own clock < MIN_TIME --
+# scramble errors are fast and must stay fast. The mirror side: when the
+# chosen move is clean (loss <= SNAP_WC_LOSS), the think time is trimmed by
+# Uniform(*SNAP_RANGE) with probability SNAP_PROB -- humans bang out moves
+# they are sure of. The trim keeps the mean move time level despite the
+# stretches and adds correlation from the fast side.
+MISTAKE_HESITATION_WC_LOSS = 0.05
+MISTAKE_HESITATION_PROB = 0.75
+MISTAKE_HESITATION_RANGE = (1.4, 2.6)
+MISTAKE_HESITATION_MIN_TIME = 10
+MISTAKE_SNAP_WC_LOSS = 0.02
+MISTAKE_SNAP_PROB = 0.6
+MISTAKE_SNAP_RANGE = (0.65, 0.9)
+# Flag-race autopilot (engine.py:get_stockfish_move): in a deep scramble a
+# human does not distinguish "+mate" from "+800" -- both read as "winning" --
+# and plays on instinct: shuffling, missing mates, occasionally stalemating
+# or throwing the win outright. Without this the bot's endgame ACPL tail is
+# unhumanly thin (humans: ~20% of games contain a 300+ acpl endgame, tail to
+# 9000+ from thrown mates; the bot's safe fast paths produce almost none).
+# Below FLAG_RACE_TIME seconds, evals are capped at FLAG_RACE_EVAL_CAP in
+# the move-appeal formula, so among winning moves the choice is driven by
+# mouse distance and noise, exactly like a human flag race.
+FLAG_RACE_TIME = 10
+FLAG_RACE_EVAL_CAP = 450
 DIFFICULTY = 3 # engine difficulty
 MOUSE_QUICKNESS = 4 # number between 0 and 10. Bigger the number the slower we are with mouse movements
 RESOLUTION_SCALE = 2.0  # Set to 2.0 for 4K, 1.0 for 1080p - adjusts mouse curve point density

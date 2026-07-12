@@ -25,6 +25,8 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP, GAME_SNAP_GATE_RANGE,
                               MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
                               MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
+                              MISTAKE_SNAP_WC_LOSS, MISTAKE_SNAP_PROB, MISTAKE_SNAP_RANGE,
+                              FLAG_RACE_TIME, FLAG_RACE_EVAL_CAP,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH, WEIRD_MOVE_SD_DIC, LOWER_THRESH_SF,
                               PROTECT_KING_SF, CAPTURE_EN_PRIS_SF, BREAK_PIN_SF, CAPTURE_SF,
@@ -121,6 +123,9 @@ class Engine:
         # moves (see _compute_sharpness). Drives the "complicated position"
         # time-scaling in _get_time_taken. 0.25 is the neutral / critical point.
         self.sharpness = None
+        # The sharpness scan itself ({move_uci: win_chance} from the deep
+        # narrow scan), kept for _chosen_move_wc_loss. None if the scan failed.
+        self.sharpness_scan = None
         # Per-game character (see _sample_game_character): one draw per game
         # each, resampled at every game boundary, None until the first
         # update_info. game_pace_sf scales every base think time in
@@ -184,10 +189,14 @@ class Engine:
             Returns True/False
         """
         
-        # TODO: for now just return true with high probability if in time trouble
+        # In time trouble, increasingly skip the human filters: the fast
+        # stockfish path (get_stockfish_move) is both quicker and carries the
+        # flag-race autopilot fallibility -- humans in a scramble play on
+        # instinct, they don't run their full decision process. Denominator
+        # sets the routing share (14: ~64% at 1s, ~36% at 5s).
         own_time = max(self.input_info["self_clock_times"][-1],1)
         if own_time < 10:
-            if np.random.random() < (10-own_time)/25:
+            if np.random.random() < (10-own_time)/14:
                 return False
             else:
                 return True
@@ -225,7 +234,10 @@ class Engine:
         opp_time = max(self.input_info["opp_clock_times"][-1],1)
         top_engine_move = max(move_eval_dic.keys(), key= lambda x: move_eval_dic[x])
         if opp_time > own_time and max(move_eval_dic.values()) >= 2490 and self.mood == "hurry": #mate in less than 15 and we are under time pressure
-            if np.random.random() < 0.8:                
+            # Humans dash out a spotted mate in a flag race -- but far from
+            # always (see FLAG_RACE_* in constants: throwing the won endgame
+            # is a signature human catastrophe the analyser looks for).
+            if np.random.random() < 0.4:
                 if log:
                     self.log += "We have sufficient time ({}) and we have spotted mate in {}. Playing top engine move to close the game. \n".format(own_time, 2500-move_eval_dic[top_engine_move])
                 return top_engine_move
@@ -236,7 +248,7 @@ class Engine:
             no_pieces = len(chess.SquareSet(board.occupied))
             if no_pieces < 10 and self.mood == "hurry": # less than 10 pieces including kings
                 # with some probability play best move
-                if np.random.random() < 0.4:                
+                if np.random.random() < 0.15:
                     if log:
                         self.log += "Less than 10 pieces on the board, playing top engine move to close the game. \n"
                     return top_engine_move
@@ -261,7 +273,16 @@ class Engine:
         if log:
             self.log += "Evaluated the moves square distance to move: {} \n".format(move_distance_dic)
         own_time = max(self.input_info["self_clock_times"][-1],1)
-        move_appealing_dic = {move_uci : 10 + move_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] for move_uci in move_eval_dic.keys()}
+        # Flag-race autopilot: in a deep scramble a human reads "+mate" and
+        # "+800" both as "winning" and picks on instinct (distance + noise),
+        # occasionally missing the mate or throwing the win. Capping the eval
+        # term reproduces that; without it a mate (2500) outweighs the noise
+        # so completely that the bot never produces the human catastrophe tail.
+        if own_time < FLAG_RACE_TIME:
+            appeal_eval_dic = {m: min(v, FLAG_RACE_EVAL_CAP) for m, v in move_eval_dic.items()}
+        else:
+            appeal_eval_dic = move_eval_dic
+        move_appealing_dic = {move_uci : 10 + appeal_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] for move_uci in move_eval_dic.keys()}
         if log:
             self.log += "Combining both the dictionary preferences, we have their move preferences: {} \n".format(move_appealing_dic)
         # Add noise to introduce randomness. The lower our time, the more the noise
@@ -1313,6 +1334,7 @@ class Engine:
         def winning_chances(cp):
             return 1.0 / (1.0 + np.exp(-0.00368208 * cp))
 
+        self.sharpness_scan = None
         try:
             no_lines = min(SHARPNESS_SCAN_MULTIPV, len(list(self.current_board.legal_moves)))
             if no_lines == 0:
@@ -1330,6 +1352,14 @@ class Engine:
             ]
             if not wcs:
                 return 0.25
+            # Keep the per-move win chances: this scan is the engine's only
+            # deep, narrow view of the position, and _chosen_move_wc_loss
+            # reads it (the full-width analysis is capped at 20ms, so its
+            # evals are too noisy to judge the chosen move's loss).
+            self.sharpness_scan = {
+                entry["pv"][0].uci(): wc
+                for entry, wc in zip(analysis, wcs) if entry.get("pv")
+            }
             return max(wcs) - min(wcs)
         except Exception as e:
             self.log += "WARNING: sharpness scan failed ({}); defaulting to neutral. \n".format(e)
@@ -1662,40 +1692,59 @@ class Engine:
         return time_taken
 
     def _chosen_move_wc_loss(self, move_uci):
-        """ Win-probability given up by the chosen move vs the engine's best,
-            from the initial full-width analysis (calculate_analytics scans
-            every legal move, so the chosen move is always in there). Same
-            logistic as _compute_sharpness. Returns None if it can't be read.
+        """ Win-probability given up by the chosen move vs the engine's best.
+
+            Prefers the deep narrow sharpness scan (multipv 5, no time cap):
+            if the chosen move is one of its lines the loss is read directly;
+            if it fell outside the top 5, the scan's spread is a lower bound
+            on the loss (the move is worse than every scanned line). The
+            full-width analysis is only a fallback estimate -- it is capped
+            at 20ms, so its per-move evals are very noisy. Returns None if
+            nothing can be read.
         """
-        if not self.stockfish_analysis:
-            return None
-        side = self.input_info["side"]
-        best_wc, move_wc = None, None
-        for entry in self.stockfish_analysis:
-            cp = entry["score"].pov(side).score(mate_score=10000)
-            wc = 1.0 / (1.0 + np.exp(-0.00368208 * cp))
-            if best_wc is None or wc > best_wc:
-                best_wc = wc
-            if entry["pv"][0].uci() == move_uci:
-                move_wc = wc
-        if best_wc is None or move_wc is None:
-            return None
-        return best_wc - move_wc
+        scan = self.sharpness_scan
+        shallow = None
+        if self.stockfish_analysis:
+            side = self.input_info["side"]
+            best_wc, move_wc = None, None
+            for entry in self.stockfish_analysis:
+                cp = entry["score"].pov(side).score(mate_score=10000)
+                wc = 1.0 / (1.0 + np.exp(-0.00368208 * cp))
+                if best_wc is None or wc > best_wc:
+                    best_wc = wc
+                if entry["pv"][0].uci() == move_uci:
+                    move_wc = wc
+            if best_wc is not None and move_wc is not None:
+                shallow = best_wc - move_wc
+        if scan:
+            scan_best = max(scan.values())
+            if move_uci in scan:
+                return scan_best - scan[move_uci]
+            # Chosen move is outside the scan's top lines: at least as bad as
+            # the worst scanned line. Floor the shallow estimate with that.
+            lower_bound = scan_best - min(scan.values())
+            if shallow is None:
+                return lower_bound
+            return max(shallow, lower_bound)
+        return shallow
 
     def _adjust_time_for_move_loss(self, move_uci, time_take):
-        """ The hesitation before the mistake. Humans think longer in
-            positions where they end up erring (difficulty consumes clock AND
-            induces the error), giving a positive per-game correlation
-            between move time and move loss. The engine's errors come from
-            the human-probability sampling, independent of the decided think
-            time, so the link is restored here: when the chosen move gives up
-            real win probability, the already-decided think time is
-            (sometimes) stretched. The rest stay fast -- snap blunders exist.
+        """ The hesitation before the mistake -- and its mirror, the decisive
+            snap. Humans think longer in positions where they end up erring
+            (difficulty consumes clock AND induces the error), giving a
+            positive per-game correlation between move time and move loss.
+            The engine's errors come from the human-probability sampling,
+            independent of the decided think time, so the link is restored
+            here: when the chosen move gives up real win probability, the
+            already-decided think time is (sometimes) stretched; when it is
+            clean, it is (sometimes) trimmed -- humans bang out moves they
+            are sure of. The trim keeps the mean move time level despite the
+            stretches. Not every mistake hesitates: snap blunders exist.
 
-            Returns the (possibly stretched) time_take.
+            Returns the adjusted time_take.
         """
         own_time = max(self.input_info["self_clock_times"][-1], 1)
-        if own_time < MISTAKE_HESITATION_MIN_TIME or self.mood == "hurry":
+        if own_time < MISTAKE_HESITATION_MIN_TIME:
             # scramble errors are fast and must stay fast
             return time_take
         try:
@@ -1703,17 +1752,25 @@ class Engine:
         except Exception as e:
             self.log += "WARNING: could not compute chosen-move loss ({}); skipping hesitation. \n".format(e)
             return time_take
-        if wc_loss is None or wc_loss < MISTAKE_HESITATION_WC_LOSS:
+        if wc_loss is None:
             return time_take
-        if np.random.random() >= MISTAKE_HESITATION_PROB:
-            self.log += "Chosen move loses {:.3f} win prob but snapping it anyway (no hesitation). \n".format(wc_loss)
-            return time_take
-        stretch = np.random.uniform(*MISTAKE_HESITATION_RANGE)
-        new_time = min(time_take * stretch, own_time*0.7 + 1)
-        self.log += "Chosen move loses {:.3f} win prob; hesitating before the mistake (x{:.2f}: {:.2f}s -> {:.2f}s). \n".format(
-            wc_loss, stretch, time_take, new_time)
-        print(f"[ENGINE] Hesitating before a mistake (wc loss {wc_loss:.3f}): {time_take:.2f}s -> {new_time:.2f}s")
-        return new_time
+        if wc_loss >= MISTAKE_HESITATION_WC_LOSS:
+            if np.random.random() >= MISTAKE_HESITATION_PROB:
+                self.log += "Chosen move loses {:.3f} win prob but snapping it anyway (no hesitation). \n".format(wc_loss)
+                return time_take
+            stretch = np.random.uniform(*MISTAKE_HESITATION_RANGE)
+            new_time = min(time_take * stretch, own_time*0.7 + 1)
+            self.log += "Chosen move loses {:.3f} win prob; hesitating before the mistake (x{:.2f}: {:.2f}s -> {:.2f}s). \n".format(
+                wc_loss, stretch, time_take, new_time)
+            print(f"[ENGINE] Hesitating before a mistake (wc loss {wc_loss:.3f}): {time_take:.2f}s -> {new_time:.2f}s")
+            return new_time
+        if wc_loss <= MISTAKE_SNAP_WC_LOSS and np.random.random() < MISTAKE_SNAP_PROB:
+            trim = np.random.uniform(*MISTAKE_SNAP_RANGE)
+            new_time = time_take * trim
+            self.log += "Chosen move is clean (loss {:.3f}); playing it decisively (x{:.2f}: {:.2f}s -> {:.2f}s). \n".format(
+                wc_loss, trim, time_take, new_time)
+            return new_time
+        return time_take
 
     def _set_mood(self):
         """ Given input information, we determine our mood which influences the rest of our
@@ -2234,6 +2291,16 @@ class Engine:
             # more of everything, a reluctant game sometimes doesn't even
             # queue the obvious takeback.
             premove_sf = self.game_premove_sf if self.game_premove_sf is not None else 1.0
+            # Confidence against weaker opposition shows up in the snap/premove
+            # channel, not the think-time channel (a decided think time can't
+            # beat the engine-compute floor, so scaling it barely moves the
+            # instant-move rate; humans facing a weaker opponent premove and
+            # bang out moves more). ~+15% propensity at +200 Elo, symmetric.
+            opp_rating = self.input_info["opp_rating"]
+            self_rating = self.input_info["self_rating"]
+            if opp_rating is not None and self_rating is not None:
+                rating_ratio = (self_rating - opp_rating) / self_rating
+                premove_sf *= 1 + np.tanh(2 * rating_ratio)
             if self.mood == "hurry" and own_time < 20:
                 full_premove_prob = 0.3*self_initial_time/(own_time + 0.3*self_initial_time)
             elif self_initial_time <= 60 and phase_of_game(self.current_board) == "opening":

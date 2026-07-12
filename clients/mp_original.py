@@ -1874,7 +1874,8 @@ def run_game(arena=False):
                 LOG += "Found current position in ponder dic. Responding with corresponding move: {} and premove: {} \n".format(response_uci, premove)
                 
                 # wait a certain amount of time that depends on the time control
-                wait_time = ponder_response_wait(GAME_INFO["self_initial_time"], QUICKNESS)
+                wait_time = ponder_response_wait(GAME_INFO["self_initial_time"], QUICKNESS,
+                                                 pace_sf=ENGINE.game_pace_sf or 1.0)
                 LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                 time.sleep(wait_time)
                 successful = make_move(response_uci, premove=premove)
@@ -1906,7 +1907,8 @@ def run_game(arena=False):
                         if initial_time < 200 and np.random.random() < prob:
                             # then we do it
                             LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), last_board.fen())
-                            wait_time = ponder_response_wait(initial_time, QUICKNESS)
+                            wait_time = ponder_response_wait(initial_time, QUICKNESS,
+                                                             pace_sf=ENGINE.game_pace_sf or 1.0)
                             LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                             time.sleep(wait_time)
                             successful = make_move(last_pondered_move_obj.uci())
