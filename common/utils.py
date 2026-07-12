@@ -33,20 +33,36 @@ _IMPOSSIBLE_PLACEMENT_STATUS = (
     | chess.Status.EMPTY
 )
 
-def scraped_fen_sanity_issues(fen_or_board):
+def scraped_fen_sanity_issues(fen_or_board, turn_reliable=False):
     """ Check a screen-scraped position for piece placements that are
         impossible in a real game, e.g. a missing king when a capture
         animation covers it. Stockfish segfaults if asked to analyse such
         a position, so these must never be adopted as the tracked board.
 
-        Only placement is checked: turn, castling rights and en-passant
-        are synthesised by the scraper and may be transiently wrong on
-        perfectly usable scrapes.
+        Only placement is checked by default: turn, castling rights and
+        en-passant are synthesised by the scraper and may be transiently
+        wrong on perfectly usable scrapes. In particular the raw scrape FEN
+        always claims white to move, so any position where black stands in
+        check would false-positive an OPPOSITE_CHECK test (that exact bug
+        froze a live game on 2026-07-12: we were black, in check from
+        Nxe5+, and every scan was rejected until we flagged).
+
+        Pass turn_reliable=True only where the board's turn is
+        authoritative (e.g. the engine after update_info has established
+        side to move). Then OPPOSITE_CHECK -- the side NOT to move in
+        check -- is also flagged: it arises from a mid-animation scrape
+        (our checking move rendered, the opponent's king-move reply not
+        yet) and Stockfish segfaults on it deterministically, defeating
+        the restart-and-retry handler (live crash, also 2026-07-12:
+        31.Bh4+ Kc8 scraped with the king still on d8, white to move).
 
         Returns a (possibly empty) list of human-readable issue strings.
     """
     board = fen_or_board if isinstance(fen_or_board, chess.Board) else chess.Board(fen_or_board)
-    bad = board.status() & _IMPOSSIBLE_PLACEMENT_STATUS
+    mask = _IMPOSSIBLE_PLACEMENT_STATUS
+    if turn_reliable:
+        mask |= chess.Status.OPPOSITE_CHECK
+    bad = board.status() & mask
     return [flag.name for flag in chess.Status if flag & bad]
 
 

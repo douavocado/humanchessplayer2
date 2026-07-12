@@ -1235,8 +1235,11 @@ class Engine:
         # Stockfish segfaults on structurally impossible positions (e.g. a
         # missing king from a corrupt screen scrape), taking any restarted
         # engine down with it. Refuse to analyse instead; the client treats
-        # this as "rescan the board", not a fatal error.
-        sanity_issues = scraped_fen_sanity_issues(self.current_board)
+        # this as "rescan the board", not a fatal error. Turn is
+        # authoritative here (update_info asserted turn == side), so the
+        # turn-dependent OPPOSITE_CHECK test is safe to include -- unlike at
+        # the client's scrape sites, where the raw FEN's turn is a guess.
+        sanity_issues = scraped_fen_sanity_issues(self.current_board, turn_reliable=True)
         if sanity_issues:
             self.log += "ERROR: Refusing stockfish analysis of structurally impossible position {} ({}). \n".format(
                 self.current_board.fen(), sanity_issues)
