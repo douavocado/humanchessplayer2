@@ -138,6 +138,11 @@ def ensure_baseline(
         max_games=max_games, min_moves=min_moves, on_progress=on_progress,
         opponent_band=opponent_band, diff_range=diff_range,
     )
+    if baseline.n_units < 100:
+        log(f"WARNING: only {baseline.n_units} human units matched — z-scores "
+            "and the variance test will be noisy. Widen the rating/filter "
+            "bands, or raise/clear the baseline game cap "
+            f"(currently {max_games or 'unlimited'}).")
     os.makedirs(os.path.dirname(os.path.abspath(baseline_path)), exist_ok=True)
     baseline.to_json(baseline_path)
     log(f"Baseline built: {baseline.n_units} human units -> {baseline_path}")

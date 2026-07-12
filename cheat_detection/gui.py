@@ -78,7 +78,9 @@ class DiagnosticGUI:
             value=os.path.join(_HERE, "corpora", "bullet_1plus0_2300_plus.pgn"))
         self.v_botpgn = tk.StringVar(value="")
         self.v_botmax = tk.StringVar(value="300")
-        self.v_basemax = tk.StringVar(value="250")
+        # Blank = use the whole corpus. A cap starves *filtered* baselines:
+        # 250 games hold only ~a dozen units of a narrow opponent/diff slice.
+        self.v_basemax = tk.StringVar(value="")
         self.v_depth = tk.StringVar(value="10")
         self.v_multipv = tk.StringVar(value="5")
         self.v_workers = tk.StringVar(value="1")
