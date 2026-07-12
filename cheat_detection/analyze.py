@@ -4,7 +4,7 @@ Quick path -- one command does fetch -> baseline -> report:
 
     venv/bin/python -m cheat_detection.analyze run \
         --user my_bot_account --rating 2300 2600 --perf bullet \
-        --corpus cheat_detection/corpora/bullet_1plus0_2300_2600.pgn \
+        --corpus cheat_detection/corpora/bullet_1plus0_2300_plus.pgn \
         --baseline cheat_detection/baselines/bullet_2300_2600.json \
         --out-md report.md
 

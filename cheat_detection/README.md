@@ -117,9 +117,11 @@ Since the eval cache already holds the corpus's positions, building extra
 baselines with different filters costs seconds (aggregation only) — slice one
 big corpus into as many comparison populations as you like. Filters are
 recorded in the baseline JSON; in `run`/the GUI they apply to **both** the
-human baseline (when built this run) and the bot's games so the two
-populations stay comparable, and loading a pre-built baseline whose recorded
-filters differ from the requested ones logs a warning.
+human baseline and the bot's games so the two populations stay comparable.
+If the named baseline exists but was built with *different* filters, it is
+left untouched and a filter-tagged sibling (`<stem>__opp..._diff....json`)
+is loaded or built from the corpus instead — so pointing at the main
+unfiltered baseline with filters set just does the right thing.
 
 The eval cache is keyed by FEN alone (depth/multipv live in the filename), so
 it is shared across every time control, rating band, and corpus — each new
@@ -156,8 +158,8 @@ a single call. This is what the GUI drives under the hood:
 ```bash
 venv/bin/python -m cheat_detection.analyze run \
     --user JXu2019 --rating 2300 2600 --perf bullet \
-    --baseline cheat_detection/baselines/bullet_1plus0_2300_2600.json \
-    --corpus   cheat_detection/corpora/bullet_1plus0_2300_2600.pgn \
+    --baseline cheat_detection/baselines/bullet_1plus0_2300_plus.json \
+    --corpus   cheat_detection/corpora/bullet_1plus0_2300_plus.pgn \
     --max-games 300 --baseline-max-games 250 \
     --out-md report.md
 ```

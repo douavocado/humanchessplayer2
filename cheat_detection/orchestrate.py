@@ -75,6 +75,18 @@ def generate_report(
     return DiagnosticResult(md, report_dict, comps, bot_units, baseline)
 
 
+def _filter_tag(opponent_band, diff_range) -> str:
+    """Filename tag encoding the unit filters, e.g. 'opp2300-2400_diff-300--150'."""
+    def end(v, default):
+        return default if v is None else v
+    parts = []
+    if opponent_band:
+        parts.append(f"opp{opponent_band[0]}-{opponent_band[1]}")
+    if diff_range:
+        parts.append(f"diff{end(diff_range[0], '')}-{end(diff_range[1], '')}")
+    return "_".join(parts)
+
+
 def ensure_baseline(
     cfg: AnalysisConfig,
     baseline_path: str,
@@ -87,26 +99,40 @@ def ensure_baseline(
     opponent_band: Optional[tuple[int, int]] = None,
     diff_range: Optional[tuple[Optional[int], Optional[int]]] = None,
 ) -> Baseline:
-    """Load an existing baseline JSON, or build one from a corpus PGN."""
+    """Load an existing baseline JSON, or build one from a corpus PGN.
+
+    If opponent/diff filters are requested but ``baseline_path`` holds a
+    baseline built with different filters, the mismatched file is left alone
+    and a filter-tagged sibling (``<stem>__<tag>.json``) is loaded or built
+    instead — comparing a filtered bot population against an unfiltered
+    baseline would bias every feature.
+    """
     log = on_log or _noop
+    wanted = {
+        "opponent_band": list(opponent_band) if opponent_band else None,
+        "diff_range": list(diff_range) if diff_range else None,
+    }
     if os.path.exists(baseline_path):
-        log(f"Loading existing baseline: {os.path.basename(baseline_path)}")
         baseline = Baseline.from_json(baseline_path)
-        wanted = {
-            "opponent_band": list(opponent_band) if opponent_band else None,
-            "diff_range": list(diff_range) if diff_range else None,
-        }
-        if (opponent_band or diff_range) and (baseline.filters or {}) != wanted:
-            log("WARNING: opponent/diff filters set, but the loaded baseline "
-                f"was built with filters={baseline.filters} — the human side "
-                "won't match the filtered bot population. Rebuild the baseline "
-                "(delete the JSON) for a like-for-like comparison.")
-        return baseline
+        have = baseline.filters or {"opponent_band": None, "diff_range": None}
+        if not (opponent_band or diff_range) or have == wanted:
+            log(f"Loading existing baseline: {os.path.basename(baseline_path)}")
+            return baseline
+        stem, ext = os.path.splitext(baseline_path)
+        tagged = f"{stem}__{_filter_tag(opponent_band, diff_range)}{ext}"
+        log(f"{os.path.basename(baseline_path)} was built with "
+            f"filters={baseline.filters}, not the requested ones — using "
+            f"filter-tagged baseline {os.path.basename(tagged)} instead.")
+        if os.path.exists(tagged):
+            log(f"Loading existing baseline: {os.path.basename(tagged)}")
+            return Baseline.from_json(tagged)
+        baseline_path = tagged
     if not corpus_pgn:
         raise FileNotFoundError(
             f"Baseline {baseline_path} not found and no corpus given to build it."
         )
-    log(f"Building baseline from {os.path.basename(corpus_pgn)} (this is the slow step)...")
+    log(f"Building baseline from {os.path.basename(corpus_pgn)} (fast if the "
+        "corpus is already in the eval cache)...")
     baseline = build_baseline(
         corpus_pgn, rating_band, cfg,
         max_games=max_games, min_moves=min_moves, on_progress=on_progress,

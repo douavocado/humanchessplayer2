@@ -104,8 +104,11 @@ def _brown_forsythe(hvals: Optional[list[float]], bvals: Optional[list[float]]) 
 
     if not hvals or not bvals or len(hvals) < 3 or len(bvals) < 3:
         return None
-    hdev = [abs(x - _median(hvals)) for x in hvals]
-    bdev = [abs(x - _median(bvals)) for x in bvals]
+    # Hoisted: computing the median inside the comprehension made this
+    # quadratic — ~50 CPU-minutes against a 51k-unit baseline.
+    hmed, bmed = _median(hvals), _median(bvals)
+    hdev = [abs(x - hmed) for x in hvals]
+    bdev = [abs(x - bmed) for x in bvals]
     nh, nb = len(hdev), len(bdev)
     mh, mb = sum(hdev) / nh, sum(bdev) / nb
     ss = sum((x - mh) ** 2 for x in hdev) + sum((x - mb) ** 2 for x in bdev)

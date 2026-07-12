@@ -68,13 +68,14 @@ class DiagnosticGUI:
 
         self.v_user = tk.StringVar(value="JXu2019")
         self.v_rmin = tk.StringVar(value="2300")
-        self.v_rmax = tk.StringVar(value="2600")
+        self.v_rmax = tk.StringVar(value="9999")
         self.v_perf = tk.StringVar(value="bullet")
         self.v_tc = tk.StringVar(value="60+0")
+        # Defaults = the 2300+ any-player corpus/baseline (51.3k units, 60+0).
         self.v_baseline = tk.StringVar(
-            value=os.path.join(_HERE, "baselines", "bullet_1plus0_2300_2600.json"))
+            value=os.path.join(_HERE, "baselines", "bullet_1plus0_2300_plus.json"))
         self.v_corpus = tk.StringVar(
-            value=os.path.join(_HERE, "corpora", "bullet_1plus0_2300_2600.pgn"))
+            value=os.path.join(_HERE, "corpora", "bullet_1plus0_2300_plus.pgn"))
         self.v_botpgn = tk.StringVar(value="")
         self.v_botmax = tk.StringVar(value="300")
         self.v_basemax = tk.StringVar(value="250")
@@ -145,12 +146,14 @@ class DiagnosticGUI:
         flt = ttk.Frame(f)
         flt.grid(row=7, column=0, columnspan=3, sticky="w", pady=(4, 0))
         ttk.Label(flt, text="Filters (optional):  opponent Elo").pack(side="left")
-        for var in (self.v_oppmin, self.v_oppmax):
-            ttk.Entry(flt, textvariable=var, width=6).pack(side="left", padx=2)
+        for lbl, var in (("min", self.v_oppmin), ("max", self.v_oppmax)):
+            ttk.Label(flt, text=lbl, foreground="#888").pack(side="left", padx=(4, 1))
+            ttk.Entry(flt, textvariable=var, width=6).pack(side="left")
         ttk.Label(flt, text="Elo diff (self−opp)").pack(side="left", padx=(10, 0))
-        for var in (self.v_diffmin, self.v_diffmax):
-            ttk.Entry(flt, textvariable=var, width=6).pack(side="left", padx=2)
-        ttk.Label(flt, text="e.g. diff max −200 = outrated by ≥200",
+        for lbl, var in (("min", self.v_diffmin), ("max", self.v_diffmax)):
+            ttk.Label(flt, text=lbl, foreground="#888").pack(side="left", padx=(4, 1))
+            ttk.Entry(flt, textvariable=var, width=6).pack(side="left")
+        ttk.Label(flt, text="blank = open end; e.g. diff max −200 = outrated by ≥200",
                   foreground="#888").pack(side="left", padx=(8, 0))
 
         btns = ttk.Frame(f)
