@@ -26,7 +26,7 @@ from common.move_timing import (MOVE_DELAY, DRAG_MOVE_DELAY, CLICK_MOVE_DELAY,
                                 click_settle_sleep, drag_probability,
                                 ponder_response_wait, scramble_response_wait,
                                 resign_pause)
-from common.utils import patch_fens, check_safe_premove, scraped_fen_sanity_issues, InvalidPositionError
+from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
@@ -1896,7 +1896,7 @@ def run_game(arena=False):
                 
                 # wait a certain amount of time that depends on the time control
                 wait_time = ponder_response_wait(GAME_INFO["self_initial_time"], QUICKNESS,
-                                                 pace_sf=ENGINE.game_pace_sf or 1.0)
+                                                 pace_sf=ENGINE.ponder_pace_sf)
                 LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                 time.sleep(wait_time)
                 successful = make_move(response_uci, premove=premove)
@@ -1929,7 +1929,7 @@ def run_game(arena=False):
                             # then we do it
                             LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(last_pondered_move_obj), last_board.fen())
                             wait_time = ponder_response_wait(initial_time, QUICKNESS,
-                                                             pace_sf=ENGINE.game_pace_sf or 1.0)
+                                                             pace_sf=ENGINE.ponder_pace_sf)
                             LOG += "Spending {} seconds wait for ponder dic response. \n".format(wait_time)
                             time.sleep(wait_time)
                             successful = make_move(last_pondered_move_obj.uci())
@@ -1951,11 +1951,17 @@ def run_game(arena=False):
             # when we are super low on time, we are likely to premove even more.
             # even when it is not a safe pondered move, we may still do it if is legal
             # with some probability
-            prob = (30 - own_time)/50
+            # Fire eagerness and hang-blindness both follow this game's
+            # character: a snappy game fires more stale moves, a low-skill
+            # game doesn't check where they land (skill-gated veto -- an
+            # unconditional veto collapsed the blunder tail to 0.37x human).
+            prob = (30 - own_time)/50 * (ENGINE.game_scramble_fire_sf or 1.0)
+            veto_p = ENGINE.scramble_veto_p
             # we consider last 10 pondered moves here instead
             candidate_moves = [chess.Move.from_uci(x["move"]) for x in list(PONDER_DIC.values())[-10:] if chess.Move.from_uci(x["move"]) in dummy_board.legal_moves]
             for move_obj in candidate_moves:
-                if check_safe_premove(last_board, move_obj.uci()) or np.random.random() < prob:
+                if check_safe_premove(last_board, move_obj.uci()) or \
+                        (np.random.random() < prob and not (np.random.random() < veto_p and scramble_fire_veto(dummy_board, move_obj.uci()))):
                     # then we do it
                     LOG += "Did not find position in ponder_dic, but the last ponder move {} was considered a safe premove in position {}. By chance making this pondered move anyway. \n".format(curr_board.san(move_obj), curr_board.fen())
                     wait_time = scramble_response_wait()

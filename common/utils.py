@@ -79,6 +79,27 @@ def extend_mate_score(score, mate_score=2500, extension=100):
     else:
         return score
 
+def scramble_fire_veto(board_now: chess.Board, move_uci: str) -> bool:
+    """ Whether a blind scramble fire (a stale pondered move played on the
+        current board without thought) must be suppressed: the moved piece
+        would land on a square where it can be captured at a profit.
+
+        Humans banging out stale premoves in a flag race still see the board
+        in front of them -- they blunder to *changes* they missed, not by
+        dropping a piece onto a square that has been attacked for a full
+        second. This keeps the deliberately-fallible blind fires (missed
+        zwischenzugs, wrong plans) while cutting the see-it-and-hang-it ones
+        humans do not produce. board_now must have our side to move.
+
+        Returns True when the fire should be suppressed.
+    """
+    move_obj = chess.Move.from_uci(move_uci)
+    piece_at = board_now.piece_type_at(move_obj.to_square)
+    gain = PIECE_VALS[piece_at] if piece_at is not None else 0
+    dummy_board = board_now.copy()
+    dummy_board.push(move_obj)
+    return calculate_threatened_levels(move_obj.to_square, dummy_board) - gain > 0.6
+
 def check_safe_premove(board:chess.Board, premove_uci: str):
     """ Given a position and a generated premove_uci, decide whether the move is deemed
         'safe'. That is opponent cannot/unlikely to play a move which leads to a significant

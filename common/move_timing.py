@@ -75,10 +75,11 @@ def ponder_response_wait(initial_time: float, quickness: float,
     """Wait before playing a pre-pondered (PONDER_DIC) response — the human
     'recognise the expected reply' pause, scaled by time control.
 
-    ``pace_sf`` is the engine's per-game pace draw (game_pace_sf): ponder
+    ``pace_sf`` is the engine's combined per-game draw for this wait
+    (Engine.ponder_pace_sf = game_pace_sf x game_ponder_snap_sf): ponder
     hits are ~30% of all moves and sit right at the 1-second "instant move"
-    boundary, so coupling this wait to the game's pace is what gives the
-    instant-move rate its game-to-game spread (a fast game recognises
+    boundary, so coupling this wait to the game's character is what gives
+    the instant-move rate its game-to-game spread (a fast game recognises
     expected replies near-instantly, a grinding game double-checks them).
     The wide jitter serves the same feature within a game.
     """

@@ -23,10 +23,15 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
                               QUICKNESS, GAME_PACE_SIGMA, GAME_PACE_CLIP,
                               GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP, GAME_SNAP_GATE_RANGE,
+                              GAME_PREMOVE_MEAN, GAME_PONDER_SNAP_MEAN,
+                              GAME_PONDER_SNAP_SIGMA, GAME_PONDER_SNAP_CLIP,
+                              SCRAMBLE_FIRE_SF_SIGMA, SCRAMBLE_FIRE_SF_CLIP,
+                              SCRAMBLE_VETO_P_BASE, SCRAMBLE_VETO_P_RANGE,
                               MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
                               MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
                               MISTAKE_SNAP_WC_LOSS, MISTAKE_SNAP_PROB, MISTAKE_SNAP_RANGE,
                               FLAG_RACE_TIME, FLAG_RACE_EVAL_CAP,
+                              FLAG_RACE_CAP_MIN, FLAG_RACE_CAP_MAX, FLAG_RACE_BLIND_P_MAX,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH, WEIRD_MOVE_SD_DIC, LOWER_THRESH_SF,
                               PROTECT_KING_SF, CAPTURE_EN_PRIS_SF, BREAK_PIN_SF, CAPTURE_SF,
@@ -134,6 +139,9 @@ class Engine:
         self.game_pace_sf = None
         self.game_premove_sf = None
         self.game_snap_gate = None
+        self.game_ponder_snap_sf = None
+        self.game_scramble_skill = None
+        self.game_scramble_fire_sf = None
         self._last_seen_ply = None
         # A bool to track whether we have updated analytics following updating info
         self.analytics_updated = False
@@ -278,8 +286,28 @@ class Engine:
         # occasionally missing the mate or throwing the win. Capping the eval
         # term reproduces that; without it a mate (2500) outweighs the noise
         # so completely that the bot never produces the human catastrophe tail.
+        # The cap and the blind-move chance follow this game's scramble skill
+        # (see _sample_game_character and FLAG_RACE_* in constants): most
+        # games scramble cleanly, a minority blunder-prone, and a blind move
+        # drops the eval term entirely -- pure hand-distance + noise -- which
+        # is how a won ending actually gets thrown.
         if own_time < FLAG_RACE_TIME:
-            appeal_eval_dic = {m: min(v, FLAG_RACE_EVAL_CAP) for m, v in move_eval_dic.items()}
+            skill = self.game_scramble_skill
+            if skill is None:
+                eval_cap = FLAG_RACE_EVAL_CAP
+                blind_p = 0.0
+            else:
+                eval_cap = FLAG_RACE_CAP_MIN + skill * (FLAG_RACE_CAP_MAX - FLAG_RACE_CAP_MIN)
+                blind_p = FLAG_RACE_BLIND_P_MAX * (1 - skill) ** 2
+            if np.random.random() < blind_p:
+                appeal_eval_dic = {m: 0 for m in move_eval_dic}
+                if log:
+                    self.log += "Scramble blind move (skill {:.2f}, p {:.3f}): dropping evals, picking on hand distance and noise alone. \n".format(skill, blind_p)
+            else:
+                appeal_eval_dic = {m: min(v, eval_cap) for m, v in move_eval_dic.items()}
+                if log:
+                    self.log += "Scramble eval cap for this game: {:.0f} (skill {}). \n".format(
+                        eval_cap, "unsampled" if skill is None else "{:.2f}".format(skill))
         else:
             appeal_eval_dic = move_eval_dic
         move_appealing_dic = {move_uci : 10 + appeal_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] for move_uci in move_eval_dic.keys()}
@@ -1147,12 +1175,12 @@ class Engine:
             
     
     @staticmethod
-    def _lognormal_sf(sigma, clip):
-        """ One mean-preserving lognormal draw (median slightly below 1),
-            clipped. sigma <= 0 disables (returns exactly 1.0). """
+    def _lognormal_sf(sigma, clip, mean=1.0):
+        """ One lognormal draw with the given mean (median slightly below
+            it), clipped. sigma <= 0 disables (returns exactly `mean`). """
         if sigma <= 0:
-            return 1.0
-        return float(np.clip(np.random.lognormal(-sigma**2 / 2, sigma), *clip))
+            return float(mean)
+        return float(np.clip(mean * np.random.lognormal(-sigma**2 / 2, sigma), *clip))
 
     def _sample_game_character(self):
         """ Draws this game's character multipliers -- game-to-game variation
@@ -1165,14 +1193,57 @@ class Engine:
             - game_snap_gate: the intuition-gate probability in
               _get_time_taken, so one game snaps most sharp positions on gut
               feel and another stops to think on most of them.
+            - game_ponder_snap_sf: applied (with pace) to the ponder-response
+              wait only, so one game bangs out recognised replies and another
+              double-checks them -- the second channel of the instant-move
+              rate's game-to-game spread.
+            - game_scramble_skill: this game's flag-race composure, setting
+              the scramble eval cap and blind-move probability in
+              get_stockfish_move; one game scrambles cleanly, another throws
+              a won ending.
         """
         self.game_pace_sf = self._lognormal_sf(GAME_PACE_SIGMA, GAME_PACE_CLIP)
-        self.game_premove_sf = self._lognormal_sf(GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP)
+        # One latent snappiness draw drives both fast-path channels with
+        # opposite signs (premove propensity up <=> ponder wait down):
+        # independent draws half-cancel in the realised per-game instant
+        # rate, coupling them makes the spreads add. Marginals are the same
+        # lognormals as before (mean * exp(sigma*z - sigma^2/2)).
+        z_snap = float(np.random.randn())
+        self.game_premove_sf = float(np.clip(
+            GAME_PREMOVE_MEAN * np.exp(GAME_PREMOVE_SIGMA * z_snap - GAME_PREMOVE_SIGMA**2 / 2),
+            *GAME_PREMOVE_CLIP))
+        self.game_ponder_snap_sf = float(np.clip(
+            GAME_PONDER_SNAP_MEAN * np.exp(-GAME_PONDER_SNAP_SIGMA * z_snap - GAME_PONDER_SNAP_SIGMA**2 / 2),
+            *GAME_PONDER_SNAP_CLIP))
+        # Same latent, positive sign, deliberately un-normalised mean (~1.13):
+        # a snappy game also fires more stale ponder moves in the scramble.
+        self.game_scramble_fire_sf = float(np.clip(
+            np.exp(SCRAMBLE_FIRE_SF_SIGMA * z_snap), *SCRAMBLE_FIRE_SF_CLIP))
         self.game_snap_gate = float(np.random.uniform(*GAME_SNAP_GATE_RANGE))
-        self.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f} \n".format(
-            self.game_pace_sf, self.game_premove_sf, self.game_snap_gate)
+        self.game_scramble_skill = float(np.random.uniform(0, 1))
+        self.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f}, ponder snap {:.3f}, scramble fire {:.3f}, scramble skill {:.3f} \n".format(
+            self.game_pace_sf, self.game_premove_sf, self.game_snap_gate,
+            self.game_ponder_snap_sf, self.game_scramble_fire_sf, self.game_scramble_skill)
         print(f"[ENGINE] Sampled per-game character: pace {self.game_pace_sf:.3f}, "
-              f"premove propensity {self.game_premove_sf:.3f}, snap gate {self.game_snap_gate:.3f}")
+              f"premove propensity {self.game_premove_sf:.3f}, snap gate {self.game_snap_gate:.3f}, "
+              f"ponder snap {self.game_ponder_snap_sf:.3f}, scramble fire {self.game_scramble_fire_sf:.3f}, "
+              f"scramble skill {self.game_scramble_skill:.3f}")
+
+    @property
+    def scramble_veto_p(self):
+        """ Probability the scramble safety vetos apply this game (see
+            SCRAMBLE_VETO_P_* in constants); 1.0 before the first draw.
+            Clients read this so live and sim can't drift. """
+        if self.game_scramble_skill is None:
+            return 1.0
+        return SCRAMBLE_VETO_P_BASE + SCRAMBLE_VETO_P_RANGE * self.game_scramble_skill
+
+    @property
+    def ponder_pace_sf(self):
+        """ Combined per-game scale for the ponder-response wait (pace x
+            ponder-snap), 1.0 before the first per-game draw. Clients and the
+            simulator both read this so the coupling can't drift. """
+        return (self.game_pace_sf or 1.0) * (self.game_ponder_snap_sf or 1.0)
 
     def new_game(self):
         """ Signals a game boundary: resamples per-game character (pace,
@@ -1980,9 +2051,31 @@ class Engine:
                 else:
                     self.log += "Discovered game phase is opening, and premove {} is not considered a safe premove. Filtering out. \n".format(candidate_premove)
                     premove_uci = None
+            elif self._own_time_or_none() is not None and self._own_time_or_none() < FLAG_RACE_TIME \
+                    and np.random.random() < self.scramble_veto_p:
+                # In a flag race a queued premove fires on the server
+                # unconditionally, so unsafe ones are a main source of
+                # instant blunders (measured: bot emt-0 TP blunder rate
+                # 0.136 vs human 0.072 -- humans' scramble premoves are
+                # instinct-safe takebacks and king steps). Vet like the
+                # opening branch, but gated on this game's scramble skill:
+                # unconditional vetting collapsed the catastrophe tail
+                # (endgame ACPL std ratio fell to 0.37x) -- a panicky game
+                # must still queue the occasional howler. Takeback premoves
+                # returned earlier are deliberately exempt.
+                if check_safe_premove(board, candidate_premove) == True:
+                    premove_uci = candidate_premove
+                else:
+                    self.log += "Scramble premove {} is not a safe premove, filtering out. \n".format(candidate_premove)
+                    premove_uci = None
             else:
                 premove_uci = candidate_premove
         return premove_uci
+
+    def _own_time_or_none(self):
+        """ Our latest clock reading, or None before the first update. """
+        times = self.input_info.get("self_clock_times") if self.input_info else None
+        return times[-1] if times else None
     
     def stockfish_ponder(self, board:chess.Board, time_allowed : float, ponder_width:int, use_ponder:bool = False, root_moves:list= None):
         """ Given a board position that is not our side turn, we ponder moves using

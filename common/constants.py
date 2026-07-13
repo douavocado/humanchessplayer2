@@ -79,9 +79,54 @@ GAME_PACE_CLIP = (0.5, 2.0)
 # humans' premove usage swings similarly with mood/opponent. 0 disables.
 # Premoves are the main source of 0-second moves (a decided think time can't
 # beat the engine-compute floor), so this distribution's mean and spread set
-# the instant-move rate and its game-to-game variance.
-GAME_PREMOVE_SIGMA = 0.55
-GAME_PREMOVE_CLIP = (0.3, 2.4)
+# the instant-move rate and its game-to-game variance. Because the sf
+# multiplies *probabilities*, the top of the draw saturates (a 3.0x game
+# can't premove more than "always") -- the realized game-to-game spread
+# comes mostly from the low side, hence the near-zero bottom clip (a game
+# that barely premoves at all). Widened from (0.55, (0.3, 2.4)): the bot's
+# per-game instant-move-rate std was 0.69x the human baseline's and, unlike
+# most variance features, that one is also under-dispersed relative to
+# innocent *single accounts* (see cheat_detection single-account
+# calibration, 2026-07-12).
+GAME_PREMOVE_SIGMA = 0.8
+GAME_PREMOVE_CLIP = (0.1, 3.0)
+# Mean bias on the premove draw. The lognormal is mean-preserving in the
+# *multiplier*, but premove probabilities saturate at the top while the low
+# tail genuinely removes premoves, so a mean-1.0 draw *lowers* the realised
+# instant-move rate (measured -1.7pp when the spread was widened). This
+# bias restores the mean without narrowing the spread.
+GAME_PREMOVE_MEAN = 1.25
+# Per-game scale on the ponder-response wait only (move_timing.
+# ponder_response_wait): ponder hits are ~30% of moves and sit at the
+# 1-second instant-move boundary, so this widens the instant-move rate's
+# game-to-game spread through the second fast-path channel. Kept separate
+# from GAME_PACE_SIGMA deliberately: general think-time spread
+# (movetime_mean std ratio) is already at innocent-account levels, and
+# widening pace itself would push it past them. 0 disables.
+GAME_PONDER_SNAP_SIGMA = 0.7
+GAME_PONDER_SNAP_CLIP = (0.3, 2.6)
+# Per-game scale on the <10s stale-ponder fire probability (the
+# "(30-t)/50" scramble branch in both clients), driven by the same
+# snappiness latent as the premove/ponder draws: humans differ hugely in
+# scramble style (some fire everything, some think even at 5s -- corpus
+# per-game scramble instant-rate std 0.195 vs the bot's 0.127 before
+# this). exp(sigma*z), deliberately not mean-normalised: its mean ~1.13
+# also lifts the scramble instant rate toward the human 0.51.
+SCRAMBLE_FIRE_SF_SIGMA = 0.5
+SCRAMBLE_FIRE_SF_CLIP = (0.5, 1.8)
+# Mean bias < 1 (faster average ponder response): the instant-move cutoff
+# is a threshold (1s integer clock), so a symmetric multiplier on the wait
+# lowers P(instant) net -- bias the wait down to compensate, same reasoning
+# as GAME_PREMOVE_MEAN above. (0.85 -> 0.75: the >=10s instant rate still
+# sat 4.6pp under the human 0.285 after v3.)
+#
+# The premove and ponder-snap draws share ONE latent normal per game with
+# opposite signs (a snappy game premoves more AND answers recognised
+# replies faster). Independent draws half-cancel in the realised per-game
+# instant rate; measured spread stayed at ~0.72x the human baseline's
+# until the two channels were coupled. Marginals keep the sigmas/means
+# above; only the correlation changes.
+GAME_PONDER_SNAP_MEAN = 0.75
 # Per-game intuition gate: the probability of snapping (not deep-thinking) a
 # sharp position, drawn uniformly from this range at each game boundary
 # (mean 0.75). Trust-the-gut games snap ~95% of critical moves; grinding
@@ -116,11 +161,43 @@ MISTAKE_SNAP_RANGE = (0.65, 0.9)
 # or throwing the win outright. Without this the bot's endgame ACPL tail is
 # unhumanly thin (humans: ~20% of games contain a 300+ acpl endgame, tail to
 # 9000+ from thrown mates; the bot's safe fast paths produce almost none).
-# Below FLAG_RACE_TIME seconds, evals are capped at FLAG_RACE_EVAL_CAP in
-# the move-appeal formula, so among winning moves the choice is driven by
-# mouse distance and noise, exactly like a human flag race.
+# Below FLAG_RACE_TIME seconds, evals are capped in the move-appeal
+# formula, so among winning moves the choice is driven by mouse distance
+# and noise, exactly like a human flag race.
+#
+# The cap is per-game, not constant: a flat cap made the bot blunder too
+# often but too gently and too evenly across games (TP blunder rate mean
+# 0.134 vs human 0.082, over-dispersed 1.24x, while the TP/endgame ACPL
+# tails stayed thin -- humans blunder *less often but occasionally
+# catastrophically*, and unevenly game to game). Each game draws
+# game_scramble_skill u ~ Uniform(0,1) (engine.py:_sample_game_character):
+#   eval cap        = CAP_MIN + u * (CAP_MAX - CAP_MIN)   (mean ~700)
+#   blind-move prob = BLIND_P_MAX * (1-u)^2 per scramble decision
+# A "blind move" drops the eval term entirely for that decision -- pure
+# hand-distance + noise -- which is what hangs a mate or throws a won
+# ending and creates the human 3000+ ACPL catastrophe tail that capped
+# evals structurally cannot. The (1-u)^2 shaping concentrates disasters in
+# a minority of games. Costs real win rate in flag races - that's the
+# point. FLAG_RACE_EVAL_CAP is the fallback before the first per-game draw.
 FLAG_RACE_TIME = 10
 FLAG_RACE_EVAL_CAP = 450
+# CAP_MIN raised from 300 after v1 validation: a floor below the old flat
+# 450 made low-skill games sloppier than before *on top of* their blind
+# moves, raising the TP blunder-rate mean and over-dispersion instead of
+# lowering them. With a higher floor the frequent-medium-error channel
+# shrinks and the blind moves alone carry the catastrophe tail.
+FLAG_RACE_CAP_MIN = 550
+FLAG_RACE_CAP_MAX = 1100
+FLAG_RACE_BLIND_P_MAX = 0.10
+# How strongly the scramble safety vetos (scramble_fire_veto in the
+# clients, check_safe_premove in get_premove's flag-race branch) apply:
+# p = BASE + RANGE * game_scramble_skill. Tuning history: absolute vetos
+# (p=1) cut TP blunders to 0.112 but collapsed the ACPL body/tail
+# (endgame std ratio 0.37x); a full 0..1 skill gate restored the tail but
+# re-opened the hang-fire channel (TP blunder mean 0.136, dispersion
+# 1.41x). Mostly-on with mild skill leak is the calibrated middle.
+SCRAMBLE_VETO_P_BASE = 0.75
+SCRAMBLE_VETO_P_RANGE = 0.25
 DIFFICULTY = 3 # engine difficulty
 MOUSE_QUICKNESS = 4 # number between 0 and 10. Bigger the number the slower we are with mouse movements
 RESOLUTION_SCALE = 2.0  # Set to 2.0 for 4K, 1.0 for 1080p - adjusts mouse curve point density

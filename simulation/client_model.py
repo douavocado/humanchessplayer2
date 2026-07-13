@@ -28,7 +28,7 @@ from common.move_timing import (
     resign_pause,
     scramble_response_wait,
 )
-from common.utils import check_safe_premove
+from common.utils import check_safe_premove, scramble_fire_veto
 from common.board_information import phase_of_game
 
 from .latency_model import LatencyModel
@@ -85,7 +85,7 @@ class SimClient:
             if entry is not None:
                 wait = ponder_response_wait(self.initial_time, self.quickness,
                                             self.rng,
-                                            pace_sf=self.engine.game_pace_sf or 1.0)
+                                            pace_sf=self.engine.ponder_pace_sf)
                 self.queued_premove = entry.get("premove")
                 return MoveDecision(entry["move"],
                                     wait + self._gesture(entry["move"], own_time),
@@ -102,7 +102,7 @@ class SimClient:
                         if self.initial_time < 200 and self.rng.random() < prob:
                             wait = ponder_response_wait(self.initial_time,
                                                         self.quickness, self.rng,
-                                                        pace_sf=self.engine.game_pace_sf or 1.0)
+                                                        pace_sf=self.engine.ponder_pace_sf)
                             return MoveDecision(
                                 last_uci,
                                 wait + self._gesture(last_uci, own_time),
@@ -111,13 +111,20 @@ class SimClient:
             last_board = chess.Board(fens[-2])
             dummy = board.copy()
             dummy.turn = self.side
-            prob = (30 - own_time) / 50
+            # Fire eagerness and hang-blindness both follow this game's
+            # character: a snappy game fires more stale moves, a low-skill
+            # game doesn't check where they land (skill-gated veto -- an
+            # unconditional veto collapsed the blunder tail to 0.37x human).
+            prob = (30 - own_time) / 50 * (self.engine.game_scramble_fire_sf or 1.0)
+            veto_p = self.engine.scramble_veto_p
             candidates = [chess.Move.from_uci(e["move"])
                           for e in list(self.ponder_dic.values())[-10:]
                           if chess.Move.from_uci(e["move"]) in dummy.legal_moves]
             for move_obj in candidates:
                 if check_safe_premove(last_board, move_obj.uci()) or \
-                        self.rng.random() < prob:
+                        (self.rng.random() < prob
+                         and not (self.rng.random() < veto_p
+                                  and scramble_fire_veto(dummy, move_obj.uci()))):
                     wait = scramble_response_wait(self.rng)
                     return MoveDecision(
                         move_obj.uci(),
