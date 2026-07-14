@@ -150,8 +150,24 @@ GAME_PONDER_SNAP_MEAN = 0.75
 # non-error moves better with the engine's top choices without widening
 # search breadth (no compute cost, unlike a DIFFICULTY bump). Added when
 # the 2500-2800 comparison put every top-N match rate at z -0.4..-0.5
-# while the error/blunder means were already on target.
-HUMAN_EVAL_NOISE_SCALE = 0.85
+# while the error/blunder means were already on target. (0.85 measurably
+# moved t1..t3 by +0.05-0.13 z with error means unchanged; 0.75 is the
+# second dose -- the cluster still sat at z -0.33..-0.46.)
+HUMAN_EVAL_NOISE_SCALE = 0.75
+# Per-game ponder *coverage* cap (Engine.ponder max_ponder_no when no
+# explicit width is passed), drawn per game off the snappiness latent:
+# round(clip(BASE + SPREAD*z_snap + PRIVATE*eps, *CLIP)). A dead lever at
+# the old 0.1s/position ponder cost (budget pinned realised width at ~1);
+# at PONDER_TIME_PER_POSITION 0.05-0.06 the cap binds again, so a
+# per-game draw modulates realised coverage -- the between-game
+# ponder-hit-rate spread behind instant_move_rate variance, the one flag
+# that persists at innocent-account sample size (57%). The LOW end does
+# the work: a "narrow reader" game at width 1-2 gets structurally fewer
+# hits; the wide end saturates against the time budget.
+GAME_PONDER_WIDTH_BASE = 2.8
+GAME_PONDER_WIDTH_SPREAD = 1.0
+GAME_PONDER_WIDTH_PRIVATE = 0.4
+GAME_PONDER_WIDTH_CLIP = (1, 5)
 # Per-game intuition gate: the probability of snapping (not deep-thinking) a
 # sharp position, drawn uniformly from this range at each game boundary
 # (mean 0.75). Trust-the-gut games snap ~95% of critical moves; grinding

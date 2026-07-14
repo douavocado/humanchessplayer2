@@ -27,6 +27,8 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               GAME_PONDER_SNAP_SIGMA, GAME_PONDER_SNAP_CLIP,
                               SCRAMBLE_FIRE_SF_SIGMA, SCRAMBLE_FIRE_SF_CLIP,
                               HUMAN_EVAL_NOISE_SCALE,
+                              GAME_PONDER_WIDTH_BASE, GAME_PONDER_WIDTH_SPREAD,
+                              GAME_PONDER_WIDTH_PRIVATE, GAME_PONDER_WIDTH_CLIP,
                               SCRAMBLE_VETO_P_BASE, SCRAMBLE_VETO_P_RANGE,
                               MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
                               MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
@@ -143,6 +145,7 @@ class Engine:
         self.game_ponder_snap_sf = None
         self.game_scramble_skill = None
         self.game_scramble_fire_sf = None
+        self.game_ponder_width = None
         self._last_seen_ply = None
         # A bool to track whether we have updated analytics following updating info
         self.analytics_updated = False
@@ -1223,9 +1226,19 @@ class Engine:
             np.exp(SCRAMBLE_FIRE_SF_SIGMA * z_snap), *SCRAMBLE_FIRE_SF_CLIP))
         self.game_snap_gate = float(np.random.uniform(*GAME_SNAP_GATE_RANGE))
         self.game_scramble_skill = float(np.random.uniform(0, 1))
-        self.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f}, ponder snap {:.3f}, scramble fire {:.3f}, scramble skill {:.3f} \n".format(
+        # Ponder coverage rides the same snappiness latent: how many
+        # opponent replies this game prepares for. Only effective now that
+        # PONDER_TIME_PER_POSITION lets the budget fill widths > 1 (see
+        # constants) -- the low end (width 1-2 games) carries the
+        # between-game instant-rate spread.
+        self.game_ponder_width = int(round(np.clip(
+            GAME_PONDER_WIDTH_BASE + GAME_PONDER_WIDTH_SPREAD * z_snap
+            + GAME_PONDER_WIDTH_PRIVATE * float(np.random.randn()),
+            *GAME_PONDER_WIDTH_CLIP)))
+        self.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f}, ponder snap {:.3f}, scramble fire {:.3f}, scramble skill {:.3f}, ponder width {} \n".format(
             self.game_pace_sf, self.game_premove_sf, self.game_snap_gate,
-            self.game_ponder_snap_sf, self.game_scramble_fire_sf, self.game_scramble_skill)
+            self.game_ponder_snap_sf, self.game_scramble_fire_sf, self.game_scramble_skill,
+            self.game_ponder_width)
         print(f"[ENGINE] Sampled per-game character: pace {self.game_pace_sf:.3f}, "
               f"premove propensity {self.game_premove_sf:.3f}, snap gate {self.game_snap_gate:.3f}, "
               f"ponder snap {self.game_ponder_snap_sf:.3f}, scramble fire {self.game_scramble_fire_sf:.3f}, "
@@ -2139,9 +2152,12 @@ class Engine:
 
         if ponder_width is None:
             # As a maximum number of ponder moves (to prevent too quick responses),
-            # depends on the time control.
+            # per-game coverage draw when available (see _sample_game_character),
+            # else by time control.
             initial_time = self.input_info["self_initial_time"]
-            if initial_time <= 180:
+            if self.game_ponder_width is not None:
+                max_ponder_no = self.game_ponder_width
+            elif initial_time <= 180:
                 max_ponder_no = 3
             else:
                 max_ponder_no = 4

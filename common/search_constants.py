@@ -139,4 +139,4 @@ MAX_CALC_DEPTH_COEFF = 2.5
 # rate, the dominant instant-move channel: 2500-2800 humans fire 60% of
 # sub-10s moves instantly off preparation. Cost: shallower per-position
 # evals for the pondered replies.
-PONDER_TIME_PER_POSITION = 0.06
+PONDER_TIME_PER_POSITION = 0.05
