@@ -766,3 +766,30 @@ if __name__ == '__main__':
     #print(is_attacked_by_pinned(b, chess.E7, chess.BLACK))
     print(is_under_mate_threat(b, chess.BLACK))
 
+
+
+def opponent_can_promote(board: chess.Board):
+    """ True if the side NOT to move has a pawn promotion available right
+        now (i.e. were it their turn) -- the trigger for the
+        promotion-stopping boost in the move-probability alteration. """
+    null_board = board.copy()
+    null_board.turn = not board.turn
+    return any(mv.promotion is not None for mv in null_board.legal_moves)
+
+
+def stops_opponent_promotion(board: chess.Board, move_uci: str):
+    """ True if after our move_uci no opponent promotion survives: the pawn
+        is captured, the promotion square is blocked, or every promoted
+        piece is immediately winnable (threatened beyond its defence).
+        Callers should gate on opponent_can_promote(board) first. """
+    dummy_board = board.copy()
+    dummy_board.push_uci(move_uci)
+    for mv in dummy_board.legal_moves:
+        if mv.promotion is None:
+            continue
+        after = dummy_board.copy()
+        after.push(mv)
+        if calculate_threatened_levels(mv.to_square, after) <= 0.6:
+            # a promoted piece survives on this square
+            return False
+    return True

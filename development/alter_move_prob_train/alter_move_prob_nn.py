@@ -6,9 +6,11 @@ import torch.nn as nn
 from common.board_information import (
     phase_of_game, PIECE_VALS, king_danger, get_threatened_board, is_capturing_move, is_capturable,
     is_attacked_by_pinned, is_check_move, is_takeback, is_newly_attacked, is_offer_exchange,
-    is_open_file, calculate_threatened_levels, is_weird_move
+    is_open_file, calculate_threatened_levels, is_weird_move,
+    opponent_can_promote, stops_opponent_promotion
 )
 from common.utils import patch_fens
+from common.constants import PROMOTION_STOP_SF
 
 
 class AlterMoveProbNN(nn.Module):
@@ -682,7 +684,27 @@ class AlterMoveProbNN(nn.Module):
                         new_threatened_moves.append(board.san(chess.Move.from_uci(move_uci)))
                         break
             log += f"Found moves that respond to newly threatened pieces: {new_threatened_moves} \n"
-        
+
+        # An opponent pawn one step from promotion is the loudest threat on
+        # the board -- humans drop everything for it, but the base NN
+        # under-ranks quiet stopping moves (king walks especially) and the
+        # weird-move penalty buries them: a live game (2026-07-14) lost a
+        # won endgame playing g3 while d2 queened because Ke2 (the only
+        # non-losing move) never reached the root set. Boost moves after
+        # which no promotion survives: pawn captured, promotion square
+        # blocked, or the promoted piece immediately winnable. Hand-set
+        # constant (common.constants.PROMOTION_STOP_SF), not a learned
+        # parameter -- the training data barely contains these positions,
+        # which is exactly why the base model misses them.
+        if opponent_can_promote(board):
+            promotion_stopping_moves = []
+            for move_uci in move_dic.keys():
+                if stops_opponent_promotion(board, move_uci):
+                    altered_move_dic[move_uci] = max(altered_move_dic[move_uci] - threshold, 0) + threshold
+                    altered_move_dic[move_uci] = altered_move_dic[move_uci] * PROMOTION_STOP_SF
+                    promotion_stopping_moves.append(board.san(chess.Move.from_uci(move_uci)))
+            log += f"Found moves that stop the opponent promoting: {promotion_stopping_moves} \n"
+
         # Offering exchanges/exchanging when material up appealing
         # likewise offering exchanges when material down unappealing
         exchange_sf = self.params_dict.get("exchange_sf", 1.0)

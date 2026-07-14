@@ -37,6 +37,15 @@ CHECK_SF_DIC = {"confident": 1.2022,
                 "hurry": 1.9,
                 "flagging": 1.6}
 TAKEBACK_SF = 2.6469
+# Boost for moves that deal with an opponent pawn ONE STEP from promoting
+# (block/capture/cover the promotion square so a promoted piece cannot
+# survive). A human sees a pawn on the 2nd rank like a gun on the table,
+# but the NN under-ranks quiet king moves toward it and the weird-move
+# penalty then crushes them -- a live game (2026-07-14) lost a won
+# endgame because Ke2 (the only non-losing move, stopping d1=Q) never
+# made the 8-move root set and g3 was played instead. Applied with the
+# visibility floor, like takebacks/strengthening moves.
+PROMOTION_STOP_SF = 3.5
 NEW_THREATENED_SF_DIC = {"confident":1.6287,
                         "cocky": 1.3,
                         "cautious": 1.8,

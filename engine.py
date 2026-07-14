@@ -40,6 +40,7 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               PROTECT_KING_SF, CAPTURE_EN_PRIS_SF, BREAK_PIN_SF, CAPTURE_SF,
                               CAPTURE_SF_KING_DANGER, CAPTURABLE_SF, CHECK_SF_DIC, TAKEBACK_SF,
                               NEW_THREATENED_SF_DIC, EXCHANGE_SF_DIC, EXCHANGE_K_DANGER_SF_DIC,
+                              PROMOTION_STOP_SF,
                               PASSED_PAWN_END_SF, SOLO_FACTOR_SF, THREATENED_LVL_DIFF_SF,
                               DEPTH_PENALTY, ZERO_DEPTH_PENALTY, CAPTURE_BONUS
                               )
@@ -48,7 +49,8 @@ from common.board_information import (
     phase_of_game, PIECE_VALS, get_lucas_analytics, is_capturing_move, is_capturable,
     is_attacked_by_pinned, is_check_move, is_takeback, is_newly_attacked, get_threatened_board,
     is_offer_exchange, king_danger, is_open_file, calculate_threatened_levels, check_best_takeback_exists,
-    is_weird_move, is_under_mate_threat
+    is_weird_move, is_under_mate_threat,
+    opponent_can_promote, stops_opponent_promotion
             )
 from common.search_constants import (
     BREADTH_TIME_BONUS_TIERS, EFF_MOB_TACTICAL_CUTOFF, EFF_MOB_FORCED_CUTOFF,
@@ -700,7 +702,24 @@ class Engine:
                         break
             if log:
                 self.log += "Found moves that respond to newly threatened pieces: {} \n".format(new_threatened_moves)
-            
+
+        # An opponent pawn one step from promotion is the loudest threat on
+        # the board -- humans drop everything for it, but the NN under-ranks
+        # quiet stopping moves (king walks especially) and the weird-move
+        # penalty above then buries them, which once cost a won game (g3
+        # played while d2 queened; Ke2 never reached the root set). Boost
+        # moves after which no promotion survives: pawn captured, promotion
+        # square blocked, or the promoted piece is immediately winnable.
+        if opponent_can_promote(board):
+            promotion_stopping_moves = []
+            for move_uci in move_dic.keys():
+                if stops_opponent_promotion(board, move_uci):
+                    move_dic[move_uci] = max(move_dic[move_uci], lower_threshold_prob)
+                    move_dic[move_uci] *= PROMOTION_STOP_SF
+                    promotion_stopping_moves.append(board.san(chess.Move.from_uci(move_uci)))
+            if log:
+                self.log += "Found moves that stop the opponent promoting: {} \n".format(promotion_stopping_moves)
+
         # Offering exchanges/exchanging when material up appealing
         # likewise offering exchanges when material down unappealing
         # calculates threatened levels of every move after its moved at to_square when material imbalance
