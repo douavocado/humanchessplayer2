@@ -21,11 +21,12 @@ from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH, 
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
-                              QUICKNESS, GAME_PACE_SIGMA, GAME_PACE_CLIP,
+                              QUICKNESS, GAME_PACE_SIGMA, GAME_PACE_CLIP, GAME_PACE_MEAN,
                               GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP, GAME_SNAP_GATE_RANGE,
                               GAME_PREMOVE_MEAN, GAME_PONDER_SNAP_MEAN,
                               GAME_PONDER_SNAP_SIGMA, GAME_PONDER_SNAP_CLIP,
                               SCRAMBLE_FIRE_SF_SIGMA, SCRAMBLE_FIRE_SF_CLIP,
+                              HUMAN_EVAL_NOISE_SCALE,
                               SCRAMBLE_VETO_P_BASE, SCRAMBLE_VETO_P_RANGE,
                               MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
                               MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
@@ -53,7 +54,7 @@ from common.search_constants import (
     ENDGAME_LOW_MOB_BREADTH_FLOOR, ENDGAME_LOW_MOB_BREADTH_BONUS,
     ENDGAME_BREADTH_FLOOR, ENDGAME_BREADTH_BONUS, STANDARD_BREADTH_DELTA,
     MOOD_BREADTH_DELTAS, SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH,
-    PREMOVE_SCAN_MULTIPV, MAX_CALC_DEPTH_COEFF,
+    PREMOVE_SCAN_MULTIPV, MAX_CALC_DEPTH_COEFF, PONDER_TIME_PER_POSITION,
 )
 from common.utils import (flip_uci, patch_fens, check_safe_premove, extend_mate_score,
                           scraped_fen_sanity_issues, InvalidPositionError)
@@ -980,9 +981,9 @@ class Engine:
         eval_only_dic = {}
         noise_phase = noise_dic[game_phase]
         for move_uci in new_human_move_evals.keys():
-            eval_, depth_considered = new_human_move_evals[move_uci]            
-            base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20            
-            noise_sd = 4*base_noise_sd/(target_time*(depth_considered+4))
+            eval_, depth_considered = new_human_move_evals[move_uci]
+            base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20
+            noise_sd = HUMAN_EVAL_NOISE_SCALE*4*base_noise_sd/(target_time*(depth_considered+4))
             
             noise = np.random.randn()*noise_sd*noise_phase - DEPTH_PENALTY*(2- depth_considered)
             if depth_considered == 0:
@@ -1202,7 +1203,8 @@ class Engine:
               get_stockfish_move; one game scrambles cleanly, another throws
               a won ending.
         """
-        self.game_pace_sf = self._lognormal_sf(GAME_PACE_SIGMA, GAME_PACE_CLIP)
+        self.game_pace_sf = self._lognormal_sf(GAME_PACE_SIGMA, GAME_PACE_CLIP,
+                                               mean=GAME_PACE_MEAN)
         # One latent snappiness draw drives both fast-path channels with
         # opposite signs (premove propensity up <=> ponder wait down):
         # independent draws half-cancel in the realised per-game instant
@@ -2229,8 +2231,8 @@ class Engine:
                             return None
                     eval_ = new_eval - 100
                     re_evaluate_dic[move_uci][0] = new_eval - 100 # penalty
-                base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20                             
-                noise_sd = 4*base_noise_sd/(time_allowed*(depth_considered+4))
+                base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20
+                noise_sd = HUMAN_EVAL_NOISE_SCALE*4*base_noise_sd/(time_allowed*(depth_considered+4))
                 
                 noise = np.random.randn()*noise_sd*noise_phase        
                 re_evaluate_dic[move_uci][0] += noise                
@@ -2423,7 +2425,7 @@ class Engine:
         # If we have extra time than that of alloted then we may do some pondering for the position after our move
         time_spent = move_end - move_start
         
-        time_per_position = 0.1 # max time spent per ponder position
+        time_per_position = PONDER_TIME_PER_POSITION # nominal cost per ponder position (see search_constants)
         time_left = return_dic["time_take"] - time_spent
         search_width = self._decide_breadth(time_left) # this is slightly incorrect, but close enough
         if time_left > time_per_position*search_width * 1.15:

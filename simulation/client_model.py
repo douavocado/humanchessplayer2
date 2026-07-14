@@ -111,6 +111,20 @@ class SimClient:
             last_board = chess.Board(fens[-2])
             dummy = board.copy()
             dummy.turn = self.side
+            # Exact ponder hit first (mirrors the live client): the
+            # opponent played the prepared-for move, so fire the prepared
+            # reply. Quality scramble instants come from preparation --
+            # humans' sub-10s instants are their safest bucket, the bot's
+            # blind stale fires were its worst.
+            entry = self.ponder_dic.get(board_fen)
+            if entry is not None and \
+                    chess.Move.from_uci(entry["move"]) in dummy.legal_moves:
+                wait = scramble_response_wait(self.rng)
+                self.queued_premove = entry.get("premove")
+                return MoveDecision(
+                    entry["move"],
+                    wait + self._gesture(entry["move"], own_time),
+                    "scramble_hit")
             # Fire eagerness and hang-blindness both follow this game's
             # character: a snappy game fires more stale moves, a low-skill
             # game doesn't check where they land (skill-gated veto -- an

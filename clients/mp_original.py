@@ -1948,6 +1948,29 @@ def run_game(arena=False):
             curr_board = chess.Board(current_board_fen)
             dummy_board = curr_board.copy()
             dummy_board.turn = GAME_INFO["playing_side"]
+            # Exact ponder hit first: the opponent played the move we
+            # prepared for, so bang out the prepared reply like a human
+            # scrambling. Strong humans fire ~60% of their sub-10s moves
+            # instantly and those are their SAFEST moves (2500-2800 corpus:
+            # emt0 blunder rate 0.070 vs 0.077 thought) -- quality instants
+            # come from preparation, not from more blind stale fires.
+            if current_board_fen in PONDER_DIC:
+                response_dic = PONDER_DIC[current_board_fen]
+                response_uci = response_dic["move"]
+                if chess.Move.from_uci(response_uci) in dummy_board.legal_moves:
+                    LOG += "Found current position in ponder dic during scramble. Firing prepared response: {} and premove: {} \n".format(response_uci, response_dic["premove"])
+                    wait_time = scramble_response_wait()
+                    LOG += "Spending {} seconds wait for scramble ponder response. \n".format(wait_time)
+                    time.sleep(wait_time)
+                    successful = make_move(response_uci, premove=response_dic["premove"])
+                    if successful == True:
+                        LOG += "Made pondered moves successfully. \n"
+                    else:
+                        # We try one more time, in case it was mouse slip
+                        LOG += "Did not make pondered move successfully, trying once more. \n"
+                        successful = make_move(response_uci, premove=response_dic["premove"])
+                    write_log()
+                    continue
             # when we are super low on time, we are likely to premove even more.
             # even when it is not a safe pondered move, we may still do it if is legal
             # with some probability

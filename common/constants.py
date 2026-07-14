@@ -73,6 +73,13 @@ QUICKNESS = 2.5 # adjust depending on computer fastness. The bigger the number t
 # this the bot's per-game mean move time is unnaturally consistent. 0 disables.
 GAME_PACE_SIGMA = 0.36
 GAME_PACE_CLIP = (0.5, 2.0)
+# Mean bias on the pace draw. 0.90 for the 2500-2800 comparison band:
+# that population averages 1.16s/move vs the bot's 1.26s (z +0.3..+0.4
+# across four 300-game runs) -- stronger bullet players simply move
+# faster. The realised trim is smaller than x0.90 because the engine
+# compute floor bounds short think times; also nudges near-boundary moves
+# under the 1s instant cutoff and lifts movetime_cv toward the human mean.
+GAME_PACE_MEAN = 0.90
 # Same idea for premove appetite: one multiplier per game scaling every
 # premove-search probability in make_move (full and takeback-only alike).
 # Some games the bot premoves everything, some games barely at all --
@@ -94,7 +101,11 @@ GAME_PREMOVE_CLIP = (0.1, 3.0)
 # *multiplier*, but premove probabilities saturate at the top while the low
 # tail genuinely removes premoves, so a mean-1.0 draw *lowers* the realised
 # instant-move rate (measured -1.7pp when the spread was widened). This
-# bias restores the mean without narrowing the spread.
+# bias restores the mean without narrowing the spread. (Tried 1.40 for the
+# 2500-2800 band's higher instant rate: it re-broke the TP blunder rate the
+# v5 vetos had fixed -- the extra propensity lands in the hurry-mood <20s
+# premove channel, which fires blind. Lift instants via ponder coverage /
+# snap mean instead; those act above 10s.)
 GAME_PREMOVE_MEAN = 1.25
 # Per-game scale on the ponder-response wait only (move_timing.
 # ponder_response_wait): ponder hits are ~30% of moves and sit at the
@@ -118,7 +129,8 @@ SCRAMBLE_FIRE_SF_CLIP = (0.5, 1.8)
 # is a threshold (1s integer clock), so a symmetric multiplier on the wait
 # lowers P(instant) net -- bias the wait down to compensate, same reasoning
 # as GAME_PREMOVE_MEAN above. (0.85 -> 0.75: the >=10s instant rate still
-# sat 4.6pp under the human 0.285 after v3.)
+# sat 4.6pp under the human 0.285 after v3; 0.75 -> 0.65 for the 2500-2800
+# band, whose instant rate is higher again -- 0.335 vs the bot's 0.279.)
 #
 # The premove and ponder-snap draws share ONE latent normal per game with
 # opposite signs (a snappy game premoves more AND answers recognised
@@ -127,6 +139,19 @@ SCRAMBLE_FIRE_SF_CLIP = (0.5, 1.8)
 # until the two channels were coupled. Marginals keep the sigmas/means
 # above; only the correlation changes.
 GAME_PONDER_SNAP_MEAN = 0.75
+# (Tried 0.65 plus a per-game ponder-width cap draw for the 2500-2800
+# band's higher instant rate: neither moved the realised instant rate --
+# in bullet the ponder width is bound by the time budget in Engine.ponder,
+# not the cap, and the lower snap mean only compressed instant_in_sharp
+# variance. Quality scramble instants (the exact-hit fast path in the
+# clients) are the working lever instead.)
+# Global scale on the human-move eval noise sd (engine.py, both the
+# get_stockfish_move and ponder noise sites). < 1 aligns the bot's
+# non-error moves better with the engine's top choices without widening
+# search breadth (no compute cost, unlike a DIFFICULTY bump). Added when
+# the 2500-2800 comparison put every top-N match rate at z -0.4..-0.5
+# while the error/blunder means were already on target.
+HUMAN_EVAL_NOISE_SCALE = 0.85
 # Per-game intuition gate: the probability of snapping (not deep-thinking) a
 # sharp position, drawn uniformly from this range at each game boundary
 # (mean 0.75). Trust-the-gut games snap ~95% of critical moves; grinding

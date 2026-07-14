@@ -125,3 +125,18 @@ PREMOVE_SCAN_MULTIPV = 10
 # follow-up, but depth is capped because the human-probability model degrades
 # with depth — too-deep recursion increases the chance of silly moves.
 MAX_CALC_DEPTH_COEFF = 2.5
+
+# ---------------------------------------------------------------------------
+# 6. Ponder budget
+# ---------------------------------------------------------------------------
+# Nominal cost per pondered position (engine.py:make_move -> ponder). The
+# leftover think budget divided by this sets variations_allowed, which in
+# turn sets how many opponent replies the ponder covers (the depth>=2 rule
+# in Engine.ponder). At 0.1 a typical bullet move's leftover budget only
+# ever covered ONE reply -- the realised ponder width was budget-bound, not
+# cap-bound (raising max_ponder_no measurably did nothing, ralph iter1/2).
+# Lowering the per-position cost is the structural lever on the ponder-hit
+# rate, the dominant instant-move channel: 2500-2800 humans fire 60% of
+# sub-10s moves instantly off preparation. Cost: shallower per-position
+# evals for the pondered replies.
+PONDER_TIME_PER_POSITION = 0.06
