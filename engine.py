@@ -2157,6 +2157,11 @@ class Engine:
             initial_time = self.input_info["self_initial_time"]
             if self.game_ponder_width is not None:
                 max_ponder_no = self.game_ponder_width
+                if max_ponder_no <= 0:
+                    # A no-ponder game (see GAME_PONDER_WIDTH_CLIP): this
+                    # game never prepares replies at all.
+                    self.log += "Ponder width 0 this game: skipping ponder. \n"
+                    return None
             elif initial_time <= 180:
                 max_ponder_no = 3
             else:

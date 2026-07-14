@@ -164,10 +164,15 @@ HUMAN_EVAL_NOISE_SCALE = 0.75
 # that persists at innocent-account sample size (57%). The LOW end does
 # the work: a "narrow reader" game at width 1-2 gets structurally fewer
 # hits; the wide end saturates against the time budget.
-GAME_PONDER_WIDTH_BASE = 2.8
-GAME_PONDER_WIDTH_SPREAD = 1.0
+# Width 0 = a game that never pre-thinks (tilted/tired): the saturating
+# multiplier channels can't make a strong LOW tail in per-game instant
+# rate, but a ~5% no-ponder game fraction can -- that low tail is what
+# the one remaining persistent variance flag (instant_move_rate) needs.
+# BASE up 2.8 -> 3.0 compensates the mean for the width-0 games.
+GAME_PONDER_WIDTH_BASE = 3.0
+GAME_PONDER_WIDTH_SPREAD = 1.4
 GAME_PONDER_WIDTH_PRIVATE = 0.4
-GAME_PONDER_WIDTH_CLIP = (1, 5)
+GAME_PONDER_WIDTH_CLIP = (0, 5)
 # Per-game intuition gate: the probability of snapping (not deep-thinking) a
 # sharp position, drawn uniformly from this range at each game boundary
 # (mean 0.75). Trust-the-gut games snap ~95% of critical moves; grinding
@@ -190,11 +195,14 @@ GAME_SNAP_GATE_RANGE = (0.55, 0.95)
 # they are sure of. The trim keeps the mean move time level despite the
 # stretches and adds correlation from the fast side.
 MISTAKE_HESITATION_WC_LOSS = 0.05
-MISTAKE_HESITATION_PROB = 0.75
+# 0.75 -> 0.88 and snap 0.6 -> 0.7 for the 2500-2800 band: its
+# time-vs-loss correlation is stronger (pop mean 0.109; the bot sat at
+# player_z -1.3..-1.6, the largest residual after the means centred).
+MISTAKE_HESITATION_PROB = 0.88
 MISTAKE_HESITATION_RANGE = (1.4, 2.6)
 MISTAKE_HESITATION_MIN_TIME = 10
 MISTAKE_SNAP_WC_LOSS = 0.02
-MISTAKE_SNAP_PROB = 0.6
+MISTAKE_SNAP_PROB = 0.7
 MISTAKE_SNAP_RANGE = (0.65, 0.9)
 # Flag-race autopilot (engine.py:get_stockfish_move): in a deep scramble a
 # human does not distinguish "+mate" from "+800" -- both read as "winning" --
