@@ -138,6 +138,12 @@ def check_safe_premove(board:chess.Board, premove_uci: str):
         if calculate_threatened_levels(opp_move_obj.to_square, dummy_board) - to_mat > 0.6:
             continue
         else:
+            # An opponent reply can invalidate the premove (capture or
+            # displace the moving piece, block a pawn push): the site just
+            # cancels the premove then, so it contributes no risk -- and
+            # push() would raise on the non-pseudo-legal move.
+            if move_obj not in dummy_board.legal_moves:
+                continue
             # see if eval much worse
             dummy_board.push(move_obj)
             new_threatened_board = get_threatened_board(dummy_board, colour=not board.turn, piece_types=[1,2,3,4,5])
