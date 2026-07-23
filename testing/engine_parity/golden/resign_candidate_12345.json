@@ -8,6 +8,7 @@
   "lucas_win_prob": 43.743653374960715,
   "mood": "confident",
   "move_made": "e2e1",
+  "premove": null,
   "sharpness": 0.3826512446263816,
   "stockfish_move": "e2f3",
   "time_take": 0.15218684391309603

@@ -91,6 +91,10 @@ def run_scenario(scenario, seed):
         snapshot["move_made"] = move_result["move_made"]
         snapshot["time_take"] = move_result["time_take"]
         snapshot["mood"] = engine.mood
+        # make_move's premove search (get_premove) doesn't feed back into
+        # move_made/time_take, so a crash there would fail this test but a
+        # logic change to its output wouldn't -- record it explicitly.
+        snapshot["premove"] = move_result.get("premove")
         return snapshot
     finally:
         engine.close_engines()
