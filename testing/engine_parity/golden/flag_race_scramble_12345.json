@@ -1,0 +1,13 @@
+{
+  "check_obvious_move": [
+    null,
+    false
+  ],
+  "decide_human_filters": true,
+  "decide_resign": false,
+  "lucas_win_prob": 51.9391599056063,
+  "mood": "hurry",
+  "move_made": "e8g8",
+  "sharpness": 0.036749285344509164,
+  "time_take": 0.1
+}
