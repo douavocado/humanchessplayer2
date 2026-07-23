@@ -19,17 +19,10 @@ from models.models import MoveScorer, StockFishSelector
 from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
 
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
-                              MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH, 
+                              MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH,
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
-                              QUICKNESS, GAME_PACE_SIGMA, GAME_PACE_CLIP, GAME_PACE_MEAN,
-                              GAME_PREMOVE_SIGMA, GAME_PREMOVE_CLIP, GAME_SNAP_GATE_RANGE,
-                              GAME_PREMOVE_MEAN, GAME_PONDER_SNAP_MEAN,
-                              GAME_PONDER_SNAP_SIGMA, GAME_PONDER_SNAP_CLIP,
-                              SCRAMBLE_FIRE_SF_SIGMA, SCRAMBLE_FIRE_SF_CLIP,
+                              QUICKNESS,
                               HUMAN_EVAL_NOISE_SCALE,
-                              GAME_PONDER_WIDTH_BASE, GAME_PONDER_WIDTH_SPREAD,
-                              GAME_PONDER_WIDTH_PRIVATE, GAME_PONDER_WIDTH_CLIP,
-                              SCRAMBLE_VETO_P_BASE, SCRAMBLE_VETO_P_RANGE,
                               FLAG_RACE_TIME,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH,
@@ -44,7 +37,7 @@ from common.search_constants import (
 )
 from common.utils import (check_safe_premove, extend_mate_score)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
-from engine_components import simple_decisions, state, mood_manager, stockfish_move_logic, human_move_logic, decision_logic
+from engine_components import simple_decisions, state, mood_manager, stockfish_move_logic, human_move_logic, decision_logic, game_character
 
 # TODO: Intelligent premoves
 # TODO: 3-fold repetition logic
@@ -542,14 +535,6 @@ class Engine:
         return return_dic
             
     
-    @staticmethod
-    def _lognormal_sf(sigma, clip, mean=1.0):
-        """ One lognormal draw with the given mean (median slightly below
-            it), clipped. sigma <= 0 disables (returns exactly `mean`). """
-        if sigma <= 0:
-            return float(mean)
-        return float(np.clip(mean * np.random.lognormal(-sigma**2 / 2, sigma), *clip))
-
     def _sample_game_character(self):
         """ Draws this game's character multipliers -- game-to-game variation
             that per-move noise cannot produce:
@@ -570,59 +555,21 @@ class Engine:
               get_stockfish_move; one game scrambles cleanly, another throws
               a won ending.
         """
-        self.game_pace_sf = self._lognormal_sf(GAME_PACE_SIGMA, GAME_PACE_CLIP,
-                                               mean=GAME_PACE_MEAN)
-        # One latent snappiness draw drives both fast-path channels with
-        # opposite signs (premove propensity up <=> ponder wait down):
-        # independent draws half-cancel in the realised per-game instant
-        # rate, coupling them makes the spreads add. Marginals are the same
-        # lognormals as before (mean * exp(sigma*z - sigma^2/2)).
-        z_snap = float(np.random.randn())
-        self.game_premove_sf = float(np.clip(
-            GAME_PREMOVE_MEAN * np.exp(GAME_PREMOVE_SIGMA * z_snap - GAME_PREMOVE_SIGMA**2 / 2),
-            *GAME_PREMOVE_CLIP))
-        self.game_ponder_snap_sf = float(np.clip(
-            GAME_PONDER_SNAP_MEAN * np.exp(-GAME_PONDER_SNAP_SIGMA * z_snap - GAME_PONDER_SNAP_SIGMA**2 / 2),
-            *GAME_PONDER_SNAP_CLIP))
-        # Same latent, positive sign, deliberately un-normalised mean (~1.13):
-        # a snappy game also fires more stale ponder moves in the scramble.
-        self.game_scramble_fire_sf = float(np.clip(
-            np.exp(SCRAMBLE_FIRE_SF_SIGMA * z_snap), *SCRAMBLE_FIRE_SF_CLIP))
-        self.game_snap_gate = float(np.random.uniform(*GAME_SNAP_GATE_RANGE))
-        self.game_scramble_skill = float(np.random.uniform(0, 1))
-        # Ponder coverage rides the same snappiness latent: how many
-        # opponent replies this game prepares for. Only effective now that
-        # PONDER_TIME_PER_POSITION lets the budget fill widths > 1 (see
-        # constants) -- the low end (width 1-2 games) carries the
-        # between-game instant-rate spread.
-        self.game_ponder_width = int(round(np.clip(
-            GAME_PONDER_WIDTH_BASE + GAME_PONDER_WIDTH_SPREAD * z_snap
-            + GAME_PONDER_WIDTH_PRIVATE * float(np.random.randn()),
-            *GAME_PONDER_WIDTH_CLIP)))
-        self.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f}, ponder snap {:.3f}, scramble fire {:.3f}, scramble skill {:.3f}, ponder width {} \n".format(
-            self.game_pace_sf, self.game_premove_sf, self.game_snap_gate,
-            self.game_ponder_snap_sf, self.game_scramble_fire_sf, self.game_scramble_skill,
-            self.game_ponder_width)
-        print(f"[ENGINE] Sampled per-game character: pace {self.game_pace_sf:.3f}, "
-              f"premove propensity {self.game_premove_sf:.3f}, snap gate {self.game_snap_gate:.3f}, "
-              f"ponder snap {self.game_ponder_snap_sf:.3f}, scramble fire {self.game_scramble_fire_sf:.3f}, "
-              f"scramble skill {self.game_scramble_skill:.3f}")
+        return game_character.sample_game_character(self)
 
     @property
     def scramble_veto_p(self):
         """ Probability the scramble safety vetos apply this game (see
             SCRAMBLE_VETO_P_* in constants); 1.0 before the first draw.
             Clients read this so live and sim can't drift. """
-        if self.game_scramble_skill is None:
-            return 1.0
-        return SCRAMBLE_VETO_P_BASE + SCRAMBLE_VETO_P_RANGE * self.game_scramble_skill
+        return game_character.scramble_veto_p(self)
 
     @property
     def ponder_pace_sf(self):
         """ Combined per-game scale for the ponder-response wait (pace x
             ponder-snap), 1.0 before the first per-game draw. Clients and the
             simulator both read this so the coupling can't drift. """
-        return (self.game_pace_sf or 1.0) * (self.game_ponder_snap_sf or 1.0)
+        return game_character.ponder_pace_sf(self)
 
     def new_game(self):
         """ Signals a game boundary: resamples per-game character (pace,
