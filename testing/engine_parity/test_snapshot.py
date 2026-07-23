@@ -75,6 +75,10 @@ def run_scenario(scenario, seed):
             "decide_resign": engine._decide_resign(),
             "decide_human_filters": engine._decide_human_filters(),
             "check_obvious_move": [obvious_move, obvious_move_found],
+            # decide_human_filters isn't guaranteed False for any of the
+            # fixed scenarios/seeds, so make_move alone never exercises
+            # get_stockfish_move -- probe it directly too.
+            "stockfish_move": engine.get_stockfish_move(log=False),
         }
 
         move_result = engine.make_move(log=False, seed=seed)

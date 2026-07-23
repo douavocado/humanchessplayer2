@@ -33,8 +33,7 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
                               MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
                               MISTAKE_SNAP_WC_LOSS, MISTAKE_SNAP_PROB, MISTAKE_SNAP_RANGE,
-                              FLAG_RACE_TIME, FLAG_RACE_EVAL_CAP,
-                              FLAG_RACE_CAP_MIN, FLAG_RACE_CAP_MAX, FLAG_RACE_BLIND_P_MAX,
+                              FLAG_RACE_TIME,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH, WEIRD_MOVE_SD_DIC, LOWER_THRESH_SF,
                               PROTECT_KING_SF, CAPTURE_EN_PRIS_SF, BREAK_PIN_SF, CAPTURE_SF,
@@ -62,7 +61,7 @@ from common.search_constants import (
 )
 from common.utils import (flip_uci, patch_fens, check_safe_premove, extend_mate_score)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
-from engine_components import simple_decisions, state, mood_manager
+from engine_components import simple_decisions, state, mood_manager, stockfish_move_logic
 
 # TODO: Intelligent premoves
 # TODO: 3-fold repetition logic
@@ -181,117 +180,11 @@ class Engine:
         """ Uses board information to get a move strictly from stockfish with no human
             filters. Very fast, and only called for in necessary situations (when in
             super low time)
-            
+
             Returns a move_uci string of move made
         """
-        # If no kwargs given, then assume we are using the current position
-        if board is None:
-            board = self.current_board.copy()
-        
-        if analysis is None :
-            analysis = self.stockfish_analysis
-        
-        if last_move_uci is None:
-            if len(self.input_info["last_moves"]) >= 2:
-                last_move_uci = self.input_info["last_moves"][-2]
-        # take a random sample from the moves given by our stockfish analysis object
-        # grade each move by their evaluation, and if previous moves are given (our
-        # own moves) then grade them also based on proximity and distance moved by mouse
-        total_moves = len(analysis)
-        sample_n = max(int(total_moves*0.6),1)
-        if log:
-            self.log += "Choosing to sample {} moves from analysis object. \n".format(sample_n)
-        sampled_moves = random.sample(analysis, sample_n)
-        move_eval_dic = {entry["pv"][0].uci(): extend_mate_score(entry["score"].pov(board.turn).score(mate_score=2500)) for entry in sampled_moves}
-        # if we are winning by a big margin such that we have mate in less than 10 moves, and we have sufficient time, than with large probability we play the
-        # zeroing moves. This helps us out in closing games
-        own_time = max(self.input_info["self_clock_times"][-1],1)
-        opp_time = max(self.input_info["opp_clock_times"][-1],1)
-        top_engine_move = max(move_eval_dic.keys(), key= lambda x: move_eval_dic[x])
-        if opp_time > own_time and max(move_eval_dic.values()) >= 2490 and self.mood == "hurry": #mate in less than 15 and we are under time pressure
-            # Humans dash out a spotted mate in a flag race -- but far from
-            # always (see FLAG_RACE_* in constants: throwing the won endgame
-            # is a signature human catastrophe the analyser looks for).
-            if np.random.random() < 0.4:
-                if log:
-                    self.log += "We have sufficient time ({}) and we have spotted mate in {}. Playing top engine move to close the game. \n".format(own_time, 2500-move_eval_dic[top_engine_move])
-                return top_engine_move
-            else:
-                if log:
-                    self.log += "We spotted mate in {}, but by chance we don't go for top move. \n".format(2500-move_eval_dic[top_engine_move])
-        else:
-            no_pieces = len(chess.SquareSet(board.occupied))
-            if no_pieces < 10 and self.mood == "hurry": # less than 10 pieces including kings
-                # with some probability play best move
-                if np.random.random() < 0.15:
-                    if log:
-                        self.log += "Less than 10 pieces on the board, playing top engine move to close the game. \n"
-                    return top_engine_move
-                else:
-                    if log:
-                        self.log += "Less than 10 pieces on the board, but by chance not playing top engine move. \n"
-        if log:
-            self.log += "Sampled the following moves and their corresponding evals: {} \n".format(move_eval_dic)
-        move_distance_dic = {}
-        for move_uci in move_eval_dic.keys():
-            distance = 0
-            move_obj = chess.Move.from_uci(move_uci)
-            # if we are given information about our own previous move, then include that distance too
-            # we weight the move getting to our next piece than the distance travelled by that distance
-            if last_move_uci is not None:
-                own_last_move_obj = chess.Move.from_uci(last_move_uci)
-                to_square = own_last_move_obj.to_square
-                distance += chess.square_distance(to_square, move_obj.from_square)
-            distance += 0.5*chess.square_distance(move_obj.from_square, move_obj.to_square)
-            move_distance_dic[move_uci] = distance
-        
-        if log:
-            self.log += "Evaluated the moves square distance to move: {} \n".format(move_distance_dic)
-        own_time = max(self.input_info["self_clock_times"][-1],1)
-        # Flag-race autopilot: in a deep scramble a human reads "+mate" and
-        # "+800" both as "winning" and picks on instinct (distance + noise),
-        # occasionally missing the mate or throwing the win. Capping the eval
-        # term reproduces that; without it a mate (2500) outweighs the noise
-        # so completely that the bot never produces the human catastrophe tail.
-        # The cap and the blind-move chance follow this game's scramble skill
-        # (see _sample_game_character and FLAG_RACE_* in constants): most
-        # games scramble cleanly, a minority blunder-prone, and a blind move
-        # drops the eval term entirely -- pure hand-distance + noise -- which
-        # is how a won ending actually gets thrown.
-        if own_time < FLAG_RACE_TIME:
-            skill = self.game_scramble_skill
-            if skill is None:
-                eval_cap = FLAG_RACE_EVAL_CAP
-                blind_p = 0.0
-            else:
-                eval_cap = FLAG_RACE_CAP_MIN + skill * (FLAG_RACE_CAP_MAX - FLAG_RACE_CAP_MIN)
-                blind_p = FLAG_RACE_BLIND_P_MAX * (1 - skill) ** 2
-            if np.random.random() < blind_p:
-                appeal_eval_dic = {m: 0 for m in move_eval_dic}
-                if log:
-                    self.log += "Scramble blind move (skill {:.2f}, p {:.3f}): dropping evals, picking on hand distance and noise alone. \n".format(skill, blind_p)
-            else:
-                appeal_eval_dic = {m: min(v, eval_cap) for m, v in move_eval_dic.items()}
-                if log:
-                    self.log += "Scramble eval cap for this game: {:.0f} (skill {}). \n".format(
-                        eval_cap, "unsampled" if skill is None else "{:.2f}".format(skill))
-        else:
-            appeal_eval_dic = move_eval_dic
-        move_appealing_dic = {move_uci : 10 + appeal_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] for move_uci in move_eval_dic.keys()}
-        if log:
-            self.log += "Combining both the dictionary preferences, we have their move preferences: {} \n".format(move_appealing_dic)
-        # Add noise to introduce randomness. The lower our time, the more the noise
-        # note own time has to be less than 15 seconds for valid calculation.
-        noise_level = (15-own_time)/15
-        move_appealing_dic = {move_uci: move_appealing_dic[move_uci] + noise_level*np.random.randn() for move_uci in move_appealing_dic.keys()}
-        if log:
-            self.log += "Appealingness after adding noise: {} \n".format(move_appealing_dic)
-        
-        move_chosen = max(move_appealing_dic.keys(), key=lambda x: move_appealing_dic[x])
-        if log:
-            self.log += "Chosen stockfish move under time pressure: {} \n".format(move_chosen)
-        return move_chosen
-    
+        return stockfish_move_logic.get_stockfish_move(self, board=board, analysis=analysis, last_move_uci=last_move_uci, log=log)
+
     def adjust_human_prob(self, move_dic, board : chess.Board = None):
         """ Given move_dic from human probabilities, we normalise the probabilities
             i.e. make them less extreme depending on how low on time we are as well

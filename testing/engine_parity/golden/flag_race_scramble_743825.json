@@ -8,6 +8,7 @@
   "lucas_win_prob": 51.9391599056063,
   "mood": "hurry",
   "move_made": "e8g8",
-  "sharpness": 0.017478841292253522,
-  "time_take": 0.15063893308417425
+  "sharpness": 0.011038456852227263,
+  "stockfish_move": "e8e7",
+  "time_take": 0.14906336432191608
 }
