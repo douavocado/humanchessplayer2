@@ -46,7 +46,7 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               )
 
 from common.board_information import (
-    phase_of_game, PIECE_VALS, get_lucas_analytics, is_capturing_move, is_capturable,
+    phase_of_game, PIECE_VALS, is_capturing_move, is_capturable,
     is_attacked_by_pinned, is_check_move, is_takeback, is_newly_attacked, get_threatened_board,
     is_offer_exchange, king_danger, is_open_file, calculate_threatened_levels, check_best_takeback_exists,
     is_weird_move, is_under_mate_threat,
@@ -57,13 +57,12 @@ from common.search_constants import (
     KING_DANGER_THRESHOLD, KING_DANGER_BREADTH_BONUS, TACTICAL_MIDGAME_BREADTH_DELTA,
     ENDGAME_LOW_MOB_BREADTH_FLOOR, ENDGAME_LOW_MOB_BREADTH_BONUS,
     ENDGAME_BREADTH_FLOOR, ENDGAME_BREADTH_BONUS, STANDARD_BREADTH_DELTA,
-    MOOD_BREADTH_DELTAS, SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH,
+    MOOD_BREADTH_DELTAS,
     PREMOVE_SCAN_MULTIPV, MAX_CALC_DEPTH_COEFF, PONDER_TIME_PER_POSITION,
 )
-from common.utils import (flip_uci, patch_fens, check_safe_premove, extend_mate_score,
-                          scraped_fen_sanity_issues, InvalidPositionError)
+from common.utils import (flip_uci, patch_fens, check_safe_premove, extend_mate_score)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
-from engine_components import simple_decisions
+from engine_components import simple_decisions, state
 
 # TODO: Intelligent premoves
 # TODO: 3-fold repetition logic
@@ -1248,12 +1247,11 @@ class Engine:
             the boundary exact for games that start deeper into the book than
             the last one ended.
         """
-        self._last_seen_ply = None
-        self._sample_game_character()
+        return state.new_game(self)
 
     def update_info(self, info_dic : dict, auto_update_analytics:bool = True):
         """ The engine is fed the following thins in the info_dic, which a dictionary
-            of board information: 
+            of board information:
                 - side: either chess.WHITE or chess.BLACK - indicates what side we are
                 - fens: List of fens ordered with most recent fen last. Engine makes
                         use of at most 5 previous fens.
@@ -1261,124 +1259,20 @@ class Engine:
                         with most recent last. From this we can also work out last move times.
                 - self_initial_time and opp_initial_time: Starting clock times for self and opp
                 - last_moves: A list of moves made with most recent last. These moves are in uci
-                        string format.    
-            
+                        string format.
+
             This function should be called the first thing before making any calculations.
         """
-        
-        self.log += "Received and updating info_dic: \n"
-        self.log += str(info_dic) + "\n"        
-        self.input_info.update(info_dic)
-        
-        # if more than one historic fen and moves are given, then use this movestack to
-        # also account for repetition
-        if len(self.input_info["last_moves"]) >= 1:
-            test_board = chess.Board(self.input_info["fens"][-len(self.input_info["last_moves"])-1])
-            for move_uci in self.input_info["last_moves"]:
-                if chess.Move.from_uci(move_uci) in test_board.legal_moves:
-                    test_board.push_uci(move_uci)
-                else:
-                    self.log += "ERROR: Could not sync last moves of input info with fen history at move {}. Defaulting to last known fen and wiping history. \n".format(move_uci)
-                    self.current_board = chess.Board(self.input_info["fens"][-1])
-                    self.input_info["fens"] = self.input_info["fens"][-1:]
-                    self.input_info["last_moves"] = []
-                    break
-            if test_board.fen() == self.input_info["fens"][-1]:
-                self.current_board = test_board.copy()
-            elif len(self.input_info["last_moves"]) > 0:
-                self.log += "ERROR: Played through last_move list but got fen {} instead of {}. Defaulting to last known fen. \n".format(test_board.fen(), chess.Board(self.input_info["fens"][-1]))
-                self.current_board = chess.Board(self.input_info["fens"][-1])
-        else:
-            self.log += "No last moves given, so resorting to last fen in history with no move_stack. \n"
-            self.current_board = chess.Board(self.input_info["fens"][-1])
-        # make sure the last fen entry is indeed our turn
-        assert self.current_board.turn == self.input_info["side"]
+        return state.update_info(self, info_dic, auto_update_analytics)
 
-        # Detect a game boundary: the engine instance persists across games
-        # (live sessions and simulation batches alike), so when the ply count
-        # goes backwards we are in a new game -- resample per-game character.
-        ply = self.current_board.ply()
-        if self.game_pace_sf is None or (self._last_seen_ply is not None and ply < self._last_seen_ply):
-            self._sample_game_character()
-        self._last_seen_ply = ply
-
-        self.analytics_updated = False
-        
-        if auto_update_analytics == True:
-            self.calculate_analytics()
-        
-        
     def calculate_analytics(self):
         """ Before any move making or human analysis is performed, statistics must be computed for
             the infomation dict self.input_info. This function must be called after every
             update_info, or everytime the info dic is updated.
-            
+
             Returns None
         """
-        self.log += "Calculating analytics for current information dictionary. \n"
-        self.log += f"Evaluating from the board (capital letters are white pieces), FEN: {self.current_board.fen()}: \n"
-        self.log += str(self.current_board) + "\n"
-        
-        # Performing a quick initial analysis of the position
-        self.log += "Performing initial quick analysis perhaps used later by stockfish. \n"
-        start = time.time()
-        no_lines = len(list(self.current_board.legal_moves))
-
-        # Stockfish segfaults on structurally impossible positions (e.g. a
-        # missing king from a corrupt screen scrape), taking any restarted
-        # engine down with it. Refuse to analyse instead; the client treats
-        # this as "rescan the board", not a fatal error. Turn is
-        # authoritative here (update_info asserted turn == side), so the
-        # turn-dependent OPPOSITE_CHECK test is safe to include -- unlike at
-        # the client's scrape sites, where the raw FEN's turn is a guess.
-        sanity_issues = scraped_fen_sanity_issues(self.current_board, turn_reliable=True)
-        if sanity_issues:
-            self.log += "ERROR: Refusing stockfish analysis of structurally impossible position {} ({}). \n".format(
-                self.current_board.fen(), sanity_issues)
-            raise InvalidPositionError(
-                "Position {} is structurally impossible: {}".format(
-                    self.current_board.fen(), sanity_issues))
-
-        try:
-            analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
-        except chess.engine.EngineTerminatedError:
-            # Engine crashed - try to restart it
-            self.log += "WARNING: Stockfish engine crashed, attempting restart... \n"
-            print("[ENGINE] WARNING: Stockfish engine crashed, attempting restart...")
-            try:
-                self.stockfish_engine = chess.engine.SimpleEngine.popen_uci(self._stockfish_path)
-                analysis = self.stockfish_engine.analyse(self.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
-                self.log += "Engine restart successful. \n"
-                print("[ENGINE] Engine restart successful.")
-            except Exception as e:
-                self.log += f"ERROR: Failed to restart engine: {e} \n"
-                print(f"[ENGINE] ERROR: Failed to restart engine: {e}")
-                raise
-        
-        if isinstance(analysis, dict): # sometimes analysis only gives one result and is not a list.
-            analysis = [analysis]
-        self.stockfish_analysis = analysis
-        end = time.time()
-        self.log += "Analysis computed in {} seconds. \n".format(end-start)
-        # Getting lucas analytics for the position
-        self.log += "Calculating lucas analytics for the position. \n"
-        xcomp, xmlr, xemo, xnar, xact = get_lucas_analytics(self.current_board, analysis=self.stockfish_analysis)
-        lucas_dict = {"complexity": xcomp, "win_prob": xmlr, "eff_mob": xemo, "narrowness": xnar, "activity": xact}
-        self.lucas_analytics.update(lucas_dict)
-        self.log += "Lucas analytics: {} \n".format(lucas_dict)
-
-        # Sharpness of the position (eval-stakes among the plausible moves).
-        # This is the criterion for "complicated position" used when deciding
-        # how long to think (see _get_time_taken).
-        self.sharpness = self._compute_sharpness()
-        self.log += "Position sharpness: {} \n".format(self.sharpness)
-        print(f"[ENGINE] Position sharpness: {self.sharpness:.3f}")
-
-        # Now determine our player "mood" and set it as our mode for the rest of the calculations
-        self.mood = self._set_mood()
-        self.log += "Setted mood to be: {} \n".format(self.mood)
-        print(f"[ENGINE] Setted mood to be: {self.mood}")
-        self.analytics_updated = True
+        return state.calculate_analytics(self)
 
     def _compute_sharpness(self):
         """ Measures how "sharp" (critical) the current position is, using the
@@ -1397,41 +1291,7 @@ class Engine:
             / "critical" threshold) if the position can't be scanned, so a
             failed scan leaves the move-time pacing unchanged.
         """
-        # Logistic centipawn -> win-probability, matching the analyser.
-        def winning_chances(cp):
-            return 1.0 / (1.0 + np.exp(-0.00368208 * cp))
-
-        self.sharpness_scan = None
-        try:
-            no_lines = min(SHARPNESS_SCAN_MULTIPV, len(list(self.current_board.legal_moves)))
-            if no_lines == 0:
-                return 0.25
-            analysis = self.stockfish_engine.analyse(
-                self.current_board,
-                limit=chess.engine.Limit(depth=SHARPNESS_SCAN_DEPTH),
-                multipv=no_lines,
-            )
-            if isinstance(analysis, dict):
-                analysis = [analysis]
-            wcs = [
-                winning_chances(entry["score"].pov(self.current_board.turn).score(mate_score=10000))
-                for entry in analysis
-            ]
-            if not wcs:
-                return 0.25
-            # Keep the per-move win chances: this scan is the engine's only
-            # deep, narrow view of the position, and _chosen_move_wc_loss
-            # reads it (the full-width analysis is capped at 20ms, so its
-            # evals are too noisy to judge the chosen move's loss).
-            self.sharpness_scan = {
-                entry["pv"][0].uci(): wc
-                for entry, wc in zip(analysis, wcs) if entry.get("pv")
-            }
-            return max(wcs) - min(wcs)
-        except Exception as e:
-            self.log += "WARNING: sharpness scan failed ({}); defaulting to neutral. \n".format(e)
-            print(f"[ENGINE] WARNING: sharpness scan failed ({e}); defaulting to neutral 0.25.")
-            return 0.25
+        return state.compute_sharpness(self)
 
     def check_obvious_move(self):
         """ Given input information, check whether there is an obvious move in the
