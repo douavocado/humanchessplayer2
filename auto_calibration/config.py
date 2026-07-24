@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 from datetime import datetime
 
+# Site assumed for profiles that predate the "site" field in calibration_info.
+# Every existing profile was measured on Lichess, so this keeps them working
+# unchanged rather than forcing a re-calibration.
+DEFAULT_SITE = "lichess"
+
 
 class ChessConfig:
     """
@@ -256,7 +261,29 @@ class ChessConfig:
         if self.config and 'calibration_info' in self.config:
             return self.config['calibration_info']
         return None
-    
+
+    def get_site(self) -> str:
+        """
+        Which chess site this profile's coordinates were measured on.
+
+        A profile describes a *device* - screen geometry and the templates
+        that follow from it - while the site determines *behaviour*: how a
+        game start and end are recognised, whether clock position carries
+        state, how to resign. The two vary independently (same monitor, two
+        sites; same site, two monitors), so the profile only binds one to the
+        other rather than implying it.
+
+        Defaults to "lichess" when a profile does not say, so every profile
+        predating this field keeps its existing behaviour.
+        """
+        info = self.get_calibration_info()
+        if info:
+            site = info.get('site')
+            if site:
+                return str(site)
+        return DEFAULT_SITE
+
+
     def get_digit_positions(self) -> Optional[Dict]:
         """
         Get clock digit positions as fractions of clock width.

@@ -1,6 +1,10 @@
 # Site abstraction: separating "which site" from "which screen"
 
-Status: **design proposal, not implemented.** No code has been changed for this.
+Status: **Stages 0 and 1 implemented** (profile `site` field, tolerant result-template
+loading, the `sites/` package, and chess.com modal-based end detection).
+Stages 2 and 3 - interaction, and retiring the Lichess clock-state vocabulary -
+are still proposals. The verification results for the implemented stages are
+recorded under each stage below.
 
 ## The problem
 
@@ -301,17 +305,25 @@ Each stage is independently shippable and independently verifiable.
   site, treat missing entries as optional (matching
   `load_game_over_message_templates`), return what exists.
 - Rename the chess.com result templates to the site's declared filenames.
-- *Verification:* lichess readback and client tests byte-identical.
+- *Verification (done):* Lichess readback and client tests byte-identical.
 
 **Stage 1 — lifecycle detection behind `Site`** (the part that unblocks chess.com)
 - Create `sites/`; move `new_game_found`, `game_over_found`, `check_game_end`
   bodies into `LichessSite` unchanged; client calls `SITE.detect_*`.
 - Implement `ChessComSite` lifecycle + banner detection (modal-presence test
   for *whether*, template search within the modal for *which*).
-- *Verification:* lichess numbers unchanged; chess.com end detection asserted
-  against all 8 labelled end screenshots **and** against the 21 in-play frames
-  as negatives — the dark-fraction margin means this should be exact, not
-  approximate.
+- *Verification (done):*
+  - Lichess readback identical to the Stage 0 baseline; client tests 11/11.
+  - `LichessSite` proven equivalent to the pre-refactor client logic by
+    running both implementations side by side over every Lichess screenshot
+    across three FEN-history scenarios: **78 comparisons, 0 mismatches** for
+    game-end detection and **78 comparisons, 0 mismatches** for new-game
+    detection. (When building that harness, note that the extracted original
+    `check_game_end` silently returns False if `game_over_found` is missing -
+    its Method 3 sits under a bare `except` - which looks like a real
+    mismatch until the helper is supplied.)
+  - chess.com end detection: **29/29** — all 8 endings detected with the
+    correct result name, all 21 in-play frames negative.
 
 **Stage 2 — interaction behind `Site`**
 - `resign()`, `new_game()`, `back_to_lobby()`, `berserk()`, promotion.

@@ -32,8 +32,14 @@ from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
                                            capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
-                                           capture_result, compare_result_images, capture_rating,
-                                           capture_white_notation)
+                                           capture_rating)
+
+# Site behaviour (game lifecycle) is chosen by the active calibration
+# profile's "site" field, so which site we are playing on is separate from
+# which screen the coordinates were measured on. See docs/site-abstraction.md.
+from sites import get_site_for_config
+
+SITE = get_site_for_config()
 
 # Import dynamic button detection
 try:
@@ -386,26 +392,6 @@ def get_move_change(image, bottom='w'):
     else:
         return [detected[0]+detected[1], detected[1] + detected[0]]
 
-_START_LIKE_BOARD_FENS = None
-
-def _start_like_board_fens():
-    """
-    Board placements that can be on screen when a new game is found: the
-    starting position, or one white move into it - as black the opponent
-    often moves (or premoves) before our first scan.
-    """
-    global _START_LIKE_BOARD_FENS
-    if _START_LIKE_BOARD_FENS is None:
-        fens = {chess.STARTING_BOARD_FEN}
-        base = chess.Board()
-        for move in list(base.legal_moves):
-            base.push(move)
-            fens.add(base.board_fen())
-            base.pop()
-        _START_LIKE_BOARD_FENS = fens
-    return _START_LIKE_BOARD_FENS
-
-
 def new_game_found(expected_time=None):
     """ Uses screenshot to detect whether we have started new game.
 
@@ -414,66 +400,7 @@ def new_game_found(expected_time=None):
 
     Returns None if not, else returns our starting initial time in seconds.
     """
-    # try to read bot clock for start position. if none is found, then haven't started the game
-    for state in ["start1", "start2"]:
-        res, details = read_clock(capture_bottom_clock(state=state), return_details=True)
-        if res is not None:
-            # Fix 4: Vertical offset awareness
-            # In 'start' states, the digits should be roughly vertically centered in the crop.
-            # If they are significantly shifted, it might be the 'play' clock being seen.
-            v_center = details.get('v_center', 0)
-            orig_h = details.get('original_height', 66)
-            v_error = abs(v_center - orig_h / 2)
-            
-            if v_error > orig_h * 0.1: # Tightened to 10% off-center
-                continue
-                
-            # Fix 1: Validate against expected time
-            if expected_time is not None:
-                # Accept if within 10% of expected time, and NOT 0
-                if res == 0 or abs(res - expected_time) > max(10, expected_time * 0.1):
-                    continue
-            elif res == 0:
-                # Always ignore 0 as a starting time
-                continue
-            
-            # Fix 2: Starting Board Verification (The "Strict" Check)
-            # If we found a valid clock, verify the board is at (or one white
-            # move into) the starting position: as black the opponent may
-            # already have moved before we scan
-            board_img = capture_board()
-            # Side is not known yet; try 'w' first as it's most common
-            # (find_initial_side will be called properly in set_game)
-            try:
-                start_like = _start_like_board_fens()
-                test_fen = get_fen_from_image(board_img, bottom="w", fast_mode=True)
-                if chess.Board(test_fen).board_fen() not in start_like:
-                    # Could be we are playing as black, try other orientation
-                    test_fen_b = get_fen_from_image(board_img, bottom="b", fast_mode=True)
-                    if chess.Board(test_fen_b).board_fen() not in start_like:
-                        continue # Not a start-like board in either orientation
-            except:
-                continue
-                
-            return res
-            
-    return None # either returns None, no clock found
-
-def game_over_found():
-    """ Uses screenshot to detect whether game has finished.
-    
-        Returns True or False
-    """
-    res = read_clock(capture_bottom_clock(state="end1"))
-    if res is not None:
-        return True
-    res2 = read_clock(capture_bottom_clock(state="end2"))
-    if res2 is not None:
-        return True
-    res3 = read_clock(capture_bottom_clock(state="end3"))
-    if res3 is not None:
-        return True
-    return False
+    return SITE.detect_new_game(expected_time=expected_time)
 
 def await_new_game(timeout=60, expected_time=None):
     global LOG
@@ -1048,174 +975,48 @@ def check_our_turn():
     
     return board.turn == playing_side
 
-_RESULT_REFERENCES = None
-
-def _get_result_references():
-    """
-    Result reference images for game-end detection, as (image, threshold) pairs.
-
-    Prefers templates extracted for the active calibration profile, matched
-    strictly. Falls back to the legacy chessimage/ references at the historic
-    looser threshold - those may come from a different screen layout.
-    """
-    global _RESULT_REFERENCES
-    if _RESULT_REFERENCES is not None:
-        return _RESULT_REFERENCES
-    refs = []
-    try:
-        from auto_calibration.template_extractor import TemplateExtractor
-        template_dir = get_config().get_template_dir()
-        profile_templates = TemplateExtractor(template_dir=str(template_dir)).load_result_templates()
-        for ref in (profile_templates or {}).values():
-            if ref is not None:
-                refs.append((ref, 0.8))
-    except Exception:
-        pass
-    if not refs:
-        for name in ("blackwin_result", "whitewin_result", "draw_result"):
-            ref = cv2.imread(f"chessimage/{name}.png")
-            if ref is not None:
-                refs.append((ref, 0.70))
-    _RESULT_REFERENCES = refs
-    return refs
-
-
-_GAME_OVER_MESSAGE_REFERENCES = None
-GAME_OVER_MESSAGE_MATCH_THRESHOLD = 0.75
-
-def _get_game_over_message_references():
-    """
-    Templates of game-over messages that appear WITHOUT a result box, as a
-    list of (name, image) pairs: "... aborted the game", "... didn't move".
-    """
-    global _GAME_OVER_MESSAGE_REFERENCES
-    if _GAME_OVER_MESSAGE_REFERENCES is None:
-        try:
-            from auto_calibration.template_extractor import TemplateExtractor
-            template_dir = get_config().get_template_dir()
-            templates = TemplateExtractor(template_dir=str(template_dir)).load_game_over_message_templates()
-            _GAME_OVER_MESSAGE_REFERENCES = list(templates.items())
-        except Exception:
-            _GAME_OVER_MESSAGE_REFERENCES = []
-    return _GAME_OVER_MESSAGE_REFERENCES
-
-
-def game_over_message_found():
-    """
-    Detect a game that ended without a result box, via its notation-panel
-    message: "White/Black aborted the game" or "White/Black didn't move".
-
-    These endings leave none of the usual game-end signals: the board is
-    still start-like (so no board outcome, and the clock fallback is
-    guarded off) and there is no result box for the result templates to
-    match - only an italic message. The panel is more compact than after
-    a normal game (zero or one move in the list) and shifts with layout,
-    so the message is template-searched anywhere within the notation
-    region rather than compared at a fixed spot. Templates deliberately
-    exclude the leading colour word.
-
-    Returns the matched message name (truthy) or None.
-    """
-    refs = _get_game_over_message_references()
-    if not refs:
-        return None
-    try:
-        region = capture_white_notation()
-        if region is None or region.size == 0:
-            return None
-        region_gray = cv2.cvtColor(np.ascontiguousarray(region), cv2.COLOR_BGR2GRAY)
-        for name, ref in refs:
-            ref_gray = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY)
-            if (region_gray.shape[0] < ref_gray.shape[0]
-                    or region_gray.shape[1] < ref_gray.shape[1]):
-                continue
-            score = cv2.matchTemplate(region_gray, ref_gray, cv2.TM_CCOEFF_NORMED).max()
-            if score > GAME_OVER_MESSAGE_MATCH_THRESHOLD:
-                return name
-        return None
-    except Exception:
-        return None
-
-
 def check_game_end(arena=False):
     """
     Check whether the game has ended.
-    
-    Uses multiple signals for robustness:
-    1. Board outcome (checkmate, stalemate, etc.) - most reliable
-    2. Result image comparison - uses calibrated coordinates
-    3. Clock position check - fallback using end-state clock positions
-    4. Clock unreadable at play position - indicates UI state change
+
+    The signals themselves are site-specific and live in sites/ - Lichess
+    layers board outcome, result box, notation-panel message and a guarded
+    clock-position fallback, while chess.com keys off the result modal that
+    covers the board centre (its clock never moves, so clock position says
+    nothing about game state there). This function only turns whatever the
+    site found into the log line and debug screenshot the client has always
+    written.
     """
     global LOG
 
-    # Method 1: Check via board outcome (checkmate/stalemate)
-    if len(DYNAMIC_INFO["fens"]) > 0:
-        board = chess.Board(DYNAMIC_INFO["fens"][-1])
-        if board.outcome() is not None:
-            LOG += "Game end detected via board outcome {} on fen {}. \n".format(
-                board.outcome().termination, DYNAMIC_INFO["fens"][-1])
-            return True
+    signal = SITE.detect_game_end(fens=DYNAMIC_INFO["fens"], arena=arena)
+    if signal is None:
+        return False
 
-    # Method 2: Check via result image comparison
-    # Uses calibrated coordinates from auto-calibration config
-    try:
-        result_img = capture_result(arena=arena)
-        if result_img is not None and result_img.size > 0:
-            for ref, threshold in _get_result_references():
-                score = compare_result_images(result_img, ref)
-                if score > threshold:
-                    debug_files = save_debug_screenshot(
-                        "game_end_result_match",
-                        extra_info={'score': score, 'threshold': threshold,
-                                    'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
-                    LOG += "Game end detected via result image match (score {:.2f} > {}). Debug files: {}. \n".format(
-                        score, threshold, debug_files)
-                    return True
-    except Exception as e:
-        # Don't fail the game check if result image comparison fails
-        pass
+    last_fen = DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None
 
-    # Method 2b: Aborted / didn't-move endings show no result box at all -
-    # match their message in the notation panel instead
-    message = game_over_message_found()
-    if message:
-        debug_files = save_debug_screenshot(
-            "game_end_message_{}".format(message),
-            extra_info={'message': message,
-                        'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
-        LOG += "Game end detected via game-over message match ({}). Debug files: {}. \n".format(
-            message, debug_files)
+    if signal.method == "board_outcome":
+        # Board outcome is derived from state we already hold, so there is
+        # nothing on screen worth capturing for it.
+        LOG += "Game end detected via board outcome {} on fen {}. \n".format(
+            signal.detail.get('termination'), signal.detail.get('fen'))
         return True
 
-    # Method 3: Fallback - check if clock is readable at end positions but NOT at play position
-    # This catches cases where the UI has changed due to game ending
-    # Guard: at game start ("play the first move" state) the clock also sits
-    # away from the play position and can bleed into an end-state region, so
-    # a start-position board is never treated as a game end here.
-    try:
-        start_placement = chess.STARTING_FEN.split()[0]
-        board_start_like = (len(DYNAMIC_INFO["fens"]) > 0 and
-                            DYNAMIC_INFO["fens"][-1].split()[0] == start_placement)
-        if not board_start_like:
-            # First check if we can read the clock at play position
-            play_clock = read_clock(capture_bottom_clock(state="play"))
+    prefix = {
+        'result_template': "game_end_result_match",
+        'message': "game_end_message_{}".format(signal.detail.get('message')),
+        'clock_fallback': "game_end_clock_fallback",
+        'modal': "game_end_modal",
+    }.get(signal.method, "game_end_{}".format(signal.method))
 
-            # If we CAN'T read the clock at play position, the game might have ended
-            # (UI overlay blocking the clock area)
-            if play_clock is None:
-                # Try reading at end positions to confirm
-                if game_over_found():
-                    debug_files = save_debug_screenshot(
-                        "game_end_clock_fallback",
-                        extra_info={'last_fen': DYNAMIC_INFO["fens"][-1] if DYNAMIC_INFO["fens"] else None})
-                    LOG += "Game end detected via clock fallback: play clock unreadable, end-state clock readable. Debug files: {}. \n".format(
-                        debug_files)
-                    return True
-    except Exception as e:
-        pass
-
-    return False
+    extra = dict(signal.detail)
+    extra['last_fen'] = last_fen
+    if signal.result:
+        extra['result'] = signal.result
+    debug_files = save_debug_screenshot(prefix, extra_info=extra)
+    LOG += "Game end detected via {}. Debug files: {}. \n".format(
+        signal.describe(), debug_files)
+    return True
 
 def await_move(arena=False):
     ''' The main update step for the lichess client. We do not scrape any information
@@ -1673,21 +1474,12 @@ def new_game(time_control="1+0"):
     for state in ["play", "start1", "start2"]:
         if read_clock(capture_bottom_clock(state=state)) is not None:
             # A readable clock could also be a FINISHED game whose end-state
-            # clock bleeds into this region; a visible result box (or an
-            # aborted / didn't-move message, which has no result box) means
-            # the game is over and seeking is safe
-            game_over = game_over_message_found() is not None
-            try:
-                if not game_over:
-                    result_img = capture_result(arena=False)
-                    if result_img is not None and result_img.size > 0:
-                        for ref, threshold in _get_result_references():
-                            if compare_result_images(result_img, ref) > threshold:
-                                game_over = True
-                                break
-            except Exception:
-                pass
-            if game_over:
+            # clock bleeds into this region; a visible end-of-game screen
+            # means the game is over and seeking is safe. This deliberately
+            # asks the site for a clock-independent answer - a readable clock
+            # is what raised the question, so a clock-based end test here
+            # would be circular.
+            if SITE.game_over_screen_visible():
                 break
             debug_files = save_debug_screenshot(
                 "new_game_blocked_live_game", extra_info={'clock_state': state})

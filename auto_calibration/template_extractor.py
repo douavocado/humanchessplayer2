@@ -673,35 +673,54 @@ class TemplateExtractor:
         self._save_progress()
         return True
     
-    def load_result_templates(self) -> Optional[Dict[str, np.ndarray]]:
+    #: Result-template filenames for profiles that do not name their own.
+    #: This is the historic Lichess set, kept as the default so existing
+    #: profiles load exactly as before.
+    DEFAULT_RESULT_FILENAMES = {
+        'white_win': 'whitewin_result.png',
+        'black_win': 'blackwin_result.png',
+        'draw': 'draw_result.png',
+    }
+
+    def load_result_templates(
+        self,
+        filename_map: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, np.ndarray]]:
         """
-        Load all result templates.
-        
+        Load result templates, skipping any the profile does not have.
+
+        Each template is optional, matching load_game_over_message_templates
+        below. This used to be all-or-nothing - one missing file returned
+        None and disabled result detection entirely - which silently switched
+        off the whole game-end-by-banner path for any site that cannot supply
+        every ending. A site with two of three endings should detect those
+        two, not none of them.
+
+        Args:
+            filename_map: logical result name -> filename, supplied by the
+                site. Defaults to the Lichess set.
+
         Returns:
-            Dictionary with 'white_win', 'black_win', 'draw' templates,
-            or None if incomplete
+            Dictionary of the templates that exist, or None if none do (so
+            callers can still distinguish "no templates at all" and fall back).
         """
         result_dir = self.template_dir / "results"
+        if filename_map is None:
+            filename_map = self.DEFAULT_RESULT_FILENAMES
+
         templates = {}
-        
-        filename_map = {
-            'white_win': 'whitewin_result.png',
-            'black_win': 'blackwin_result.png',
-            'draw': 'draw_result.png'
-        }
-        
         for result_type, filename in filename_map.items():
             filepath = result_dir / filename
             if not filepath.exists():
-                return None
-            
+                continue
+
             template = cv2.imread(str(filepath))
             if template is None:
-                return None
-            
+                continue
+
             templates[result_type] = template
 
-        return templates
+        return templates or None
 
     def load_game_over_message_templates(self) -> Dict[str, np.ndarray]:
         """
