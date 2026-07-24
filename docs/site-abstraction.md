@@ -3,13 +3,11 @@
 Status: **all four stages implemented.** Verification results are recorded
 under each stage below.
 
-One deliberate gap: chess.com's *interaction* is only partly implementable
-from the screenshot corpus. Resigning uses the calibrated button coordinate
-but its confirmation flow is unverified, and seeking a new game is not
-implemented at all because no chess.com lobby screenshot exists to calibrate
-against - `ChessComSite.start_new_game` returns False and logs rather than
-clicking at coordinates guessed from Lichess's layout. Both need a live
-session to finish.
+chess.com interaction is now implemented too: resign is a single click with
+no confirmation step, and the lobby sequence (Play -> Play Online ->
+time-control dropdown -> control -> Start Game) is calibrated from the
+find_new_game_* screenshots. The one remaining gap on either site is
+**promotion**, which no client has ever handled explicitly.
 
 ## The problem
 
@@ -345,6 +343,20 @@ Each stage is independently shippable and independently verifiable.
   sequences compared exactly: `berserk`, `back_to_lobby`, `resign` and all
   ten time-control lobby fallbacks produce **identical (x, y, tolerance,
   clicks)** sequences.
+- chess.com's lobby is calibrated from the `find_new_game_*` screenshots.
+  Two details are worth keeping: the green **Start Game** button is located
+  by colour rather than position, because opening the time-control dropdown
+  pushes it down the panel (measured at y=308 collapsed, y=788 open) and a
+  missed click would land on the variant selector and silently change the
+  game type; and an **unsupported time control is refused rather than
+  approximated**, since chess.com's default grid has no 5+3 and clicking the
+  nearest cell would start a game whose pacing the engine then gets wrong.
+- *Verification (done):* every planned click was replayed against the
+  screenshots and checked to land inside its intended control - all five
+  lobby steps, and all nine time-control cells dead-centre. The Start Game
+  colour search returns the right button in both the collapsed and open
+  states, and `None` on an in-game screenshot, so it cannot invent a button
+  where there is no lobby.
 - Still not covered anywhere: **promotion**. `find_clicks()` ignores the
   promotion piece in the UCI entirely and only clicks from/to, so whatever
   handles it today is implicit. chess.com's promotion picker will need

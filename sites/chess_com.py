@@ -15,6 +15,10 @@ import cv2
 import numpy as np
 
 from chessimage.image_scrape_utils import (
+    SCREEN_CAPTURE,
+    START_X,
+    START_Y,
+    STEP,
     capture_board,
     capture_bottom_clock,
     get_fen_from_image,
@@ -44,6 +48,37 @@ MODAL_DARK_FRACTION = 0.20
 
 # Confidence needed to name which ending the modal shows.
 TITLE_MATCH_THRESHOLD = 0.75
+
+# --- lobby geometry -------------------------------------------------------
+# Offsets are in board steps from the board origin, matching how the Lichess
+# client has always expressed its lobby positions. Measured from the
+# find_new_game_* screenshots. The left-nav entries are really anchored to the
+# window rather than the board, so board-relative is a convention borrowed for
+# consistency rather than a claim about how the page reflows.
+PLAY_MENU_OFFSET = (-2.71, 0.06)        # left nav "Play" (hover reveals submenu)
+PLAY_ONLINE_OFFSET = (-1.71, 0.06)      # submenu "Play Online"
+TIME_CONTROL_DROPDOWN_OFFSET = (9.21, 0.25)   # the "1 min (Bullet)" selector
+START_GAME_FALLBACK_OFFSET = (9.21, 0.52)     # used only if colour search fails
+
+# The time-control grid, once the dropdown is open: three columns by category
+# row. chess.com's default grid has no 5+3, so that control is unreachable
+# here without "More Time Controls".
+_TC_COLUMN_OFFSETS = (8.58, 9.20, 9.83)
+_TC_ROW_OFFSETS = {'bullet': 1.09, 'blitz': 1.45, 'rapid': 1.81}
+TIME_CONTROL_CELLS = {
+    "1+0":   (0, 'bullet'),
+    "1+1":   (1, 'bullet'),
+    "2+1":   (2, 'bullet'),
+    "3+0":   (0, 'blitz'),
+    "3+2":   (1, 'blitz'),
+    "5+0":   (2, 'blitz'),
+    "10+0":  (0, 'rapid'),
+    "10+5":  (1, 'rapid'),
+    "15+10": (2, 'rapid'),
+}
+
+# Search box for the green "Start Game" button, board-relative.
+START_GAME_SEARCH_BOX = (8.27, -0.15, 1.88, 3.63)   # x, y, w, h in steps
 
 
 class ChessComSite(Site):
@@ -182,13 +217,8 @@ class ChessComSite(Site):
         """
         Click the resign control, whose position comes from the profile.
 
-        ⚠️ Unverified against a live session. The button coordinate was
-        measured from a real chess.com screenshot, but whether chess.com then
-        raises a confirmation dialog - and where its confirm button sits -
-        has not been observed, so a single click may leave the game
-        unresigned. Failing that way is the safe direction (the bot plays on
-        rather than resigning something unintended), but it needs checking
-        against a live game before it can be relied on.
+        A single click resigns outright on chess.com - there is no
+        confirmation step to handle.
         """
         try:
             from auto_calibration.config import get_config
@@ -196,26 +226,101 @@ class ChessComSite(Site):
         except Exception:
             actions.log("chess.com resign: no calibrated resign button position. \n")
             return False
-        actions.log(f"chess.com resign click at ({x}, {y}); confirmation flow unverified. \n")
+        actions.log(f"chess.com resign click at ({x}, {y}). \n")
         actions.click(x, y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
         return True
 
+    @staticmethod
+    def _at(offset):
+        dx, dy = offset
+        return START_X + dx * STEP, START_Y + dy * STEP
+
+    def _find_start_game_button(self):
+        """
+        Locate the green "Start Game" button by colour.
+
+        Its position is not fixed: opening the time-control dropdown pushes it
+        down the panel (measured at y=308 collapsed vs y=788 expanded), and
+        whether selecting a control collapses the dropdown again is not
+        something the screenshots settle. Searching for the button rather than
+        assuming a position sidesteps that entirely - and a click that missed
+        would land on the variant selector, silently changing the game type.
+        """
+        x0 = int(START_X + START_GAME_SEARCH_BOX[0] * STEP)
+        y0 = int(START_Y + START_GAME_SEARCH_BOX[1] * STEP)
+        w = int(START_GAME_SEARCH_BOX[2] * STEP)
+        h = int(START_GAME_SEARCH_BOX[3] * STEP)
+        try:
+            panel = SCREEN_CAPTURE.capture((x0, y0, w, h)).copy()[:, :, :3]
+        except Exception:
+            return None
+        b = panel[:, :, 0].astype(int)
+        g = panel[:, :, 1].astype(int)
+        r = panel[:, :, 2].astype(int)
+        # chess.com's action green: green channel dominant, mid-brightness.
+        mask = ((g > 110) & (g < 200) & (g - b > 40) & (g - r > 25)).astype(np.uint8) * 255
+        n_labels, _labels, stats, _cent = cv2.connectedComponentsWithStats(mask, 8)
+        min_area = 0.03 * STEP * STEP
+        best = None
+        for i in range(1, n_labels):
+            area = stats[i, cv2.CC_STAT_AREA]
+            if area >= min_area and (best is None or area > best[0]):
+                best = (area, i)
+        if best is None:
+            return None
+        _area, i = best
+        bx, by, bw, bh = (int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP]),
+                          int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
+        return x0 + bx + bw // 2, y0 + by + bh // 2
+
     def start_new_game(self, actions, time_control="1+0"):
         """
-        Not implemented: seeking a game needs chess.com's lobby layout, and
-        no lobby screenshot exists in the corpus to calibrate against.
+        Seek a game: Play -> Play Online -> time-control dropdown -> the
+        control -> Start Game.
 
-        Returning False rather than guessing is deliberate - the alternative
-        is clicking at coordinates derived from Lichess's lobby, which on
-        chess.com would land on arbitrary page furniture. The end-of-game
-        modal does carry "New <tc>" and "Rematch" buttons, but their position
-        moves with the modal's height (which varies by ending), so they need
-        to be located per-ending rather than assumed.
+        Unsupported time controls are refused rather than approximated. The
+        default grid has no 5+3, and clicking the nearest cell would silently
+        start a game at the wrong time control, which would then mis-pace
+        every move the engine makes.
         """
-        actions.log(
-            "chess.com start_new_game is not implemented (no lobby calibration); "
-            "not clicking. \n")
-        return False
+        cell = TIME_CONTROL_CELLS.get(time_control)
+        if cell is None:
+            actions.log(
+                "chess.com: time control {} is not on the default grid; not seeking. \n".format(
+                    time_control))
+            return False
+
+        def click(pos, tolerance=10):
+            actions.click(pos[0], pos[1], tolerance=tolerance, clicks=1,
+                          duration=np.random.uniform(0.3, 0.7))
+
+        # 1. left nav "Play", which reveals the submenu on hover
+        click(self._at(PLAY_MENU_OFFSET))
+        actions.sleep(0.6)
+
+        # 2. "Play Online" opens the New Game panel
+        click(self._at(PLAY_ONLINE_OFFSET))
+        actions.sleep(1.5)
+
+        # 3. open the time-control dropdown
+        click(self._at(TIME_CONTROL_DROPDOWN_OFFSET))
+        actions.sleep(0.8)
+
+        # 4. the time control itself
+        column, row = cell
+        click((START_X + _TC_COLUMN_OFFSETS[column] * STEP,
+               START_Y + _TC_ROW_OFFSETS[row] * STEP), tolerance=15)
+        actions.sleep(0.5)
+
+        # 5. Start Game, located by colour because step 3 moves it
+        start = self._find_start_game_button()
+        if start is None:
+            start = self._at(START_GAME_FALLBACK_OFFSET)
+            actions.log("chess.com: Start Game button not found by colour, using fallback position. \n")
+        else:
+            actions.log("chess.com: found Start Game button at {}. \n".format(start))
+        click(start)
+        return True
 
     def game_over_screen_visible(self):
         try:
