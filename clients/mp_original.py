@@ -29,7 +29,7 @@ from common.move_timing import (MOVE_DELAY, DRAG_MOVE_DELAY, CLICK_MOVE_DELAY,
 from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError, premove_render_placement
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
-from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
+from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock, premove_is_pending,
                                            capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
                                            capture_rating)
@@ -243,6 +243,11 @@ AWAITING_FRESH_SCAN = False
 # as any scan links, since by then the premove has either played or been
 # cancelled.
 PREMOVE_RENDER_PLACEMENT = None
+
+# Whether we have already noted the current premove-drawing episode, so the
+# log records it once rather than on every scan of a board that is not
+# changing.
+PREMOVE_FRAME_LOGGED = False
 
 # Below this much time on our own clock, skip the confirmation re-capture
 # for unlinkable scans and act on the first reading - a human under time
@@ -720,7 +725,7 @@ def _link_candidates_for_unreadable_turn(fen_before, scraped_fen):
 
 def update_dynamic_info_from_fullimage():
     """ Scrape image information from screenshot and update info dic. """
-    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING, AWAITING_FRESH_SCAN, PREMOVE_RENDER_PLACEMENT
+    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING, AWAITING_FRESH_SCAN, PREMOVE_RENDER_PLACEMENT, PREMOVE_FRAME_LOGGED
     
     scan_start = time.time()
     
@@ -755,6 +760,20 @@ def update_dynamic_info_from_fullimage():
         LOG += "ERROR: Scraped fen {} is structurally impossible ({}), discarding this scan. Debug files: {}. \n".format(
             fen, sanity_issues, debug_files)
         return
+
+    # A queued premove is drawn on the board - the piece already standing on
+    # its destination, marked in the site's premove colour - before the
+    # opponent has moved and before the server has accepted anything. The
+    # board on screen is therefore not the board in the game, and is often a
+    # position that could not legally exist at all. Detecting the marking is
+    # more dependable than predicting what will be drawn, because it holds
+    # however the premove came about and whatever state we think we are in.
+    if SITE.renders_premoves_on_board and premove_is_pending(board_img):
+        if not PREMOVE_FRAME_LOGGED:
+            LOG += "Board is drawing an unconfirmed premove ({}); ignoring scans until it resolves. \n".format(fen)
+            PREMOVE_FRAME_LOGGED = True
+        return
+    PREMOVE_FRAME_LOGGED = False
 
     # now check the turn
     check_turn_res = check_turn_from_last_moved(fen, board_img, bottom)

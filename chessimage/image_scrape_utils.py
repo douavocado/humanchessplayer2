@@ -889,8 +889,12 @@ _HIGHLIGHT_COLOURS = _build_highlight_colours()
 _HIGHLIGHT_TOLERANCE = 10
 
 
-def _detect_highlights_at_offset(board_img, offset):
+def _detect_highlights_at_offset(board_img, offset, colours=None):
     """Vectorized highlight detection at a specific pixel offset."""
+    if colours is None:
+        colours = _HIGHLIGHT_COLOURS
+    if len(colours) == 0:
+        return np.zeros(64, dtype=bool)
     h, w = board_img.shape[:2]
     
     # Compute sample coordinates for all 64 squares
@@ -922,7 +926,7 @@ def _detect_highlights_at_offset(board_img, offset):
         pixels = board_img[yy, xx].reshape(64, 3).astype(np.int16)
         
         # Vectorized comparison: (64, num_colours, 3)
-        diff = np.abs(pixels[:, np.newaxis, :] - _HIGHLIGHT_COLOURS[np.newaxis, :, :])
+        diff = np.abs(pixels[:, np.newaxis, :] - colours[np.newaxis, :, :])
         
         # Check tolerance and return boolean mask
         res = np.any(np.all(diff <= _HIGHLIGHT_TOLERANCE, axis=2), axis=1)
@@ -948,6 +952,58 @@ def detect_last_move_from_img(board_img):
     is_highlighted = _detect_highlights_at_offset(board_img, 10)
     
     return np.where(is_highlighted)[0].tolist()
+
+def _build_premove_colours() -> np.ndarray:
+    """
+    Colours a site uses to mark a *queued premove*, from the active profile.
+
+    Kept strictly separate from the last-move table, and with no cross-site
+    fallbacks: these colours mean the opposite thing. A last-move highlight
+    marks a position that has happened, while a premove highlight marks one
+    that has not - chess.com draws the premoved piece already standing on its
+    destination, in red, before the opponent has moved and before the server
+    has accepted anything. Mixing the two tables would make an unconfirmed
+    board read as a played move, which is precisely the failure this exists
+    to catch.
+
+    Returns an empty array when the profile does not describe them, so a
+    site or profile without premove colours simply detects nothing rather
+    than matching everything.
+    """
+    colours = []
+    if USE_CONFIG and chess_config is not None:
+        scheme = chess_config.get_colour_scheme()
+        for key in ['premove_light', 'premove_dark']:
+            if key in scheme:
+                base = scheme[key]
+                colours.append(base)
+                for shift in [-3, 3, -6, 6]:
+                    colours.append([max(0, min(255, c + shift)) for c in base])
+    if not colours:
+        return np.empty((0, 3), dtype=np.int16)
+    return np.array(colours, dtype=np.int16)
+
+
+_PREMOVE_COLOURS = _build_premove_colours()
+
+
+def detect_premove_squares(board_img):
+    """Square indices (0-63) currently marked as part of a queued premove."""
+    if len(_PREMOVE_COLOURS) == 0:
+        return []
+    marked = _detect_highlights_at_offset(board_img, 10, colours=_PREMOVE_COLOURS)
+    return np.where(marked)[0].tolist()
+
+
+def premove_is_pending(board_img) -> bool:
+    """
+    Whether the board is currently drawing an unconfirmed premove.
+
+    A premove takes two squares, so a single stray match is treated as noise
+    rather than a premove.
+    """
+    return len(detect_premove_squares(board_img)) >= 2
+
 
 def capture_result(arena=False):
     """

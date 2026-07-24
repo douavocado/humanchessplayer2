@@ -51,6 +51,8 @@ CC_LAST_MOVE_LIGHT = [154, 246, 244]   # yellow on the cream square
 CC_LAST_MOVE_DARK = [94, 202, 188]     # yellow on the green square
 CC_LIGHT_SQUARE = [211, 236, 235]
 CC_DARK_SQUARE = [90, 148, 123]
+CC_PREMOVE_LIGHT = [134, 155, 226]     # red marking on the cream square
+CC_PREMOVE_DARK = [74, 111, 170]       # red marking on the green square
 
 
 class TestChessComHighlightSeparation(unittest.TestCase):
@@ -91,6 +93,30 @@ class TestChessComHighlightSeparation(unittest.TestCase):
     def test_the_two_chess_com_highlights_are_distinguishable(self):
         self.assertGreater(
             self._sep(CC_LAST_MOVE_LIGHT, CC_LAST_MOVE_DARK), _HIGHLIGHT_TOLERANCE)
+
+    def test_premove_marking_is_separable_from_a_played_move(self):
+        """
+        The two mean opposite things. chess.com marks a queued premove in red
+        and draws the piece already on its destination, before the opponent
+        has moved; a last-move highlight marks a move that actually happened.
+        Confusing them makes an unconfirmed board read as a played position,
+        which is how a live game came to try an illegal move.
+        """
+        for pm_name, pm in (("light", CC_PREMOVE_LIGHT), ("dark", CC_PREMOVE_DARK)):
+            for other_name, other in (("last-move light", CC_LAST_MOVE_LIGHT),
+                                      ("last-move dark", CC_LAST_MOVE_DARK),
+                                      ("light square", CC_LIGHT_SQUARE),
+                                      ("dark square", CC_DARK_SQUARE)):
+                with self.subTest(premove=pm_name, other=other_name):
+                    self.assertGreater(
+                        self._sep(pm, other), _HIGHLIGHT_TOLERANCE,
+                        f"chess.com premove {pm_name} is within tolerance of {other_name}")
+
+    def test_premove_colours_are_not_in_the_last_move_table(self):
+        """A premove marking must never register as a last move."""
+        table = _build_highlight_colours()
+        self.assertFalse(_matches(CC_PREMOVE_LIGHT, table))
+        self.assertFalse(_matches(CC_PREMOVE_DARK, table))
 
 
 if __name__ == "__main__":
