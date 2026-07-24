@@ -45,7 +45,17 @@ def remove_background_colours(img: np.ndarray, thresh: float = 1.04) -> np.ndarr
         (np.abs(b / (r + eps) - 1.0) < t) &
         (np.abs(g / (r + eps) - 1.0) < t)
     )
-    
+
+    # Ratio checks are unstable near zero: a near-black pixel like
+    # (31,33,34) has only a 3-unit spread but fails the ~4% ratio
+    # tolerance, so true-black chess pieces (e.g. chess.com's, darker than
+    # Lichess's charcoal) get zeroed out as if they were background. An
+    # absolute-spread fallback catches these without affecting the ratio
+    # test's behaviour on board squares (light ~24-unit spread, dark
+    # ~64-unit - both well above this threshold).
+    abs_spread = np.max(img_f, axis=-1) - np.min(img_f, axis=-1)
+    mask = mask | (abs_spread < 12)
+
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return (gray * mask).astype(np.uint8)
 

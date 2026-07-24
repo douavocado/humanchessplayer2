@@ -239,20 +239,21 @@ class ClockDetector:
         board_y = self.board['y']
         board_size = self.board['size']
         
-        # Calculate scaled gap values
-        gap_min = int(board_size * self.CLOCK_GAP_RATIO_MIN)
+        # Calculate scaled gap value
         gap_max = int(board_size * self.CLOCK_GAP_RATIO_MAX)
         
         print(f"Clock detection: board={board_size}px, scale={self.scale:.2f}, "
               f"clock_size={self.clock_width}x{self.clock_height}")
         
-        # Calculate search region
-        # Clock X is to the right of board
-        clock_x_start = board_x + board_size + gap_min
+        # Calculate search region. Clock X is either just past the board's
+        # right edge (Lichess side panel) or inside the board's own right
+        # edge (chess.com header/footer bar) - see panel_detector.py for the
+        # same widening rationale.
+        clock_x_start = board_x + int(board_size * 0.75)
         clock_x_end = min(board_x + board_size + gap_max, img_w - self.clock_width)
-        
+
         if clock_x_start >= img_w - self.clock_width:
-            print("Error: No space for clock to right of board")
+            print("Error: No space for clock near board")
             return None
         
         # Find the correct X position

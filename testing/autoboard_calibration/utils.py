@@ -15,11 +15,21 @@ sys.path.append(str(parent_dir))
 
 def remove_background_colours(img, thresh=1.04):
     """Remove background colours from image (copied from image_scrape_utils)."""
-    res = img * np.expand_dims((np.abs(img[:,:,0]/(img[:,:,1]+10**(-10))-1) < thresh-1), -1)
-    res = res * np.expand_dims((np.abs(img[:,:,0]/(img[:,:,2]+10**(-10))-1) < thresh-1), -1)
-    res = res * np.expand_dims((np.abs(img[:,:,1]/(img[:,:,2]+10**(-10))-1) < thresh-1), -1)
-    res = res.astype(np.uint8)
-    
+    ratio_mask = (
+        (np.abs(img[:,:,0]/(img[:,:,1]+10**(-10))-1) < thresh-1) &
+        (np.abs(img[:,:,0]/(img[:,:,2]+10**(-10))-1) < thresh-1) &
+        (np.abs(img[:,:,1]/(img[:,:,2]+10**(-10))-1) < thresh-1)
+    )
+    # Ratio checks are unstable near zero: a near-black pixel like
+    # (31,33,34) has only a 3-unit spread but fails the ~4% ratio
+    # tolerance, so true-black chess pieces get zeroed out as if they were
+    # coloured background. An absolute-spread fallback catches these
+    # without affecting the ratio test's behaviour on board squares (light
+    # ~24-unit spread, dark ~64-unit - both well above this threshold).
+    abs_spread = img[:,:,:3].max(axis=-1).astype(np.float32) - img[:,:,:3].min(axis=-1).astype(np.float32)
+    mask = ratio_mask | (abs_spread < 12)
+    res = (img * np.expand_dims(mask, -1)).astype(np.uint8)
+
     # Turn image grey scale
     res = cv2.cvtColor(res, cv2.COLOR_BGR2GRAY)
     return res

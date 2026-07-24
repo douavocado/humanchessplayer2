@@ -43,23 +43,34 @@ def remove_background_colours(img, thresh=1.04):
     """
     # Use float32 for ~2x speedup over float64
     img_f = img.astype(np.float32)
-    
+
     # Extract channels once
     b, g, r = img_f[:,:,0], img_f[:,:,1], img_f[:,:,2]
-    
+
     # Small epsilon to avoid division by zero
     eps = 1e-10
-    
+
     # Calculate threshold once
     t = thresh - 1
-    
+
     # Compute combined mask in one go (grayscale pixels have R≈G≈B)
     mask = (
         (np.abs(b / (g + eps) - 1.0) < t) &
         (np.abs(b / (r + eps) - 1.0) < t) &
         (np.abs(g / (r + eps) - 1.0) < t)
     )
-    
+
+    # Ratio checks blow up near zero: a near-black pixel like (31,33,34) has
+    # only a 3-unit spread but a 6% channel ratio, which fails the default
+    # 4% tolerance - so dark chess pieces (chess.com's black pieces render
+    # close to true black, unlike Lichess's lighter charcoal) get zeroed out
+    # as if they were coloured background. An absolute-spread fallback
+    # catches these low-brightness pixels without touching the ratio test's
+    # behaviour elsewhere: board squares (light ~24-unit spread, dark
+    # ~64-unit) stay well above this threshold and are unaffected.
+    abs_spread = np.max(img_f, axis=-1) - np.min(img_f, axis=-1)
+    mask = mask | (abs_spread < 12)
+
     # Convert to grayscale and apply mask in one step
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return (gray * mask).astype(np.uint8)
@@ -242,9 +253,24 @@ def _load_piece_template(piece_name: str, target_size: int) -> np.ndarray:
 def _load_digit_template(digit: int) -> np.ndarray:
     """
     Load a digit template and ensure it's white on black binary.
-    
-    Profile templates are already processed (grayscale, white on black),
-    so we load them directly. Fallback templates need Otsu processing.
+
+    Profile templates are stored white-on-black by the extractor and are
+    taken as-is. They are deliberately NOT re-checked here: they are cropped
+    tightly to the glyph, so polarity is not recoverable from the pixels. A
+    bold digit ('0', '2', '8' in chess.com's clock font) covers more than
+    half its own tile and so reads as "mostly bright" while already being
+    correct, and a tight crop puts the glyph on its own corners too, so
+    neither a mean-brightness nor a corner-background test can tell a
+    correct bold template from an inverted one. Guessing here is actively
+    harmful rather than a harmless safety net: inverting a correct template
+    hands the matcher an exact photographic negative, which scores about
+    -0.9 against the very digit it represents, making the right answer the
+    worst-scoring candidate instead of the best. Polarity is therefore a
+    contract of template extraction, enforced where the templates are
+    written (auto_calibration/template_extractor.py), not re-derived here.
+
+    The legacy chessimage/ fallback below still thresholds and orients its
+    own images, which is safe because those are not tightly cropped.
     """
     # Try profile-specific template first
     if USE_CONFIG and chess_config is not None:
@@ -254,10 +280,6 @@ def _load_digit_template(digit: int) -> np.ndarray:
             # Profile templates are already processed - load as grayscale directly
             img = cv2.imread(str(profile_path), cv2.IMREAD_GRAYSCALE)
             if img is not None:
-                # Ensure white on black (profile templates should already be correct,
-                # but check just in case)
-                if np.mean(img) > 127:
-                    img = 255 - img
                 return img
     
     # Fall back to chessimage/ templates (these need processing)
@@ -551,38 +573,22 @@ def compare_result_images(img1, img2, max_shift=3, threshold=0.95):
     
     return best_score
 
-def read_clock(clock_image, return_details=False):
+def _digits_from_binary(binary):
     """
-    Read time from a clock image using fast horizontal projection + template matching.
-    
-    If return_details is True, returns (time_in_seconds, details_dict)
-    """
-    if clock_image is None or clock_image.size == 0:
-        return (None, {}) if return_details else None
-    
-    # Convert to grayscale
-    if clock_image.ndim == 3:
-        gray = cv2.cvtColor(clock_image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = clock_image.copy()
-    
-    # Use Otsu's thresholding to get a clean binary image
-    blur = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    
-    # Ensure white digits on black background
-    if np.mean(binary) > 127:
-        binary = 255 - binary
-    
-    original_height = binary.shape[0]
-    v_center = original_height / 2
-    detected_v_center = v_center
+    Given a white-digits-on-black binary image, find character regions via
+    horizontal projection and template-match each one.
 
-    # Use horizontal projection to find digit regions
-    # This is much more robust than fixed coordinates
+    Returns (digits, separators):
+      digits: list of (digit, x_center) tuples, sorted by x position.
+      separators: x_centers of regions wide enough to survive the initial
+        noise filter but too short vertically to be a digit (colon and
+        decimal-point candidates), sorted by x position. Their *positions*
+        matter, not just their count: the colon is what tells minutes from
+        seconds, and a trailing decimal point is what distinguishes
+        chess.com's sub-20s "0:SS.T" format from a plain MM:SS reading.
+    """
     projection = np.max(binary, axis=0) > 0
-    
-    # Find continuous blocks of "on" pixels
+
     regions = []
     start = None
     for i, val in enumerate(projection):
@@ -594,56 +600,232 @@ def read_clock(clock_image, return_details=False):
             start = None
     if start is not None:
         regions.append((start, len(projection)))
-        
+
     if not regions:
-        return (None, {}) if return_details else None
-        
-    # Get templates dimensions
+        return [], []
+
     template_h, template_w = TEMPLATES.shape[1:3]
-    
+
     digits = []
+    separators = []
     for r_start, r_end in regions:
         region_img = binary[:, r_start:r_end]
-        
+
         # Check if this region matches a digit
         # Ignore colon/dots which are very narrow or very short
         h_proj = np.max(region_img, axis=1) > 0
         h_sum = np.sum(h_proj)
         if h_sum < binary.shape[0] * 0.3 or (r_end - r_start) < 2:
+            separators.append((r_start + r_end) / 2)
             continue
-            
+
+        # Trim to the digit's own vertical content bounds before resizing.
+        # Templates are stored tightly cropped to their digit, so matching
+        # against a region that still carries the clock box's full (mostly
+        # blank) height under- or over-scales the digit relative to the
+        # template and tanks correlation - most visibly when the calibrated
+        # clock box is noticeably taller than the digit glyphs themselves.
+        row_has_content = np.where(h_proj)[0]
+        y0, y1 = row_has_content.min(), row_has_content.max()
+        region_img = region_img[y0:y1 + 1, :]
+
         # Match against templates
         region_resized = cv2.resize(region_img, (template_w, template_h), interpolation=cv2.INTER_AREA)
         digit = multitemplate_match_f(region_resized, TEMPLATES)
         if digit is not None:
-            # Store digit and its center position
             digits.append((digit, (r_start + r_end) / 2))
-            
-    if not digits:
-        return (None, {}) if return_details else None
-        
-    # Sort digits by X position
+
     digits.sort(key=lambda x: x[1])
-    
-    # Parse digits based on count and relative positions
-    vals = [d[0] for d in digits]
-    centers = [d[1] for d in digits]
-    
-    # Find gaps to identify where the colon is
-    res = None
-    if len(vals) >= 4:
-        # Most common case: MM:SS or MM:SS.m
-        # We take the first 4 digits
-        res = vals[0] * 600 + vals[1] * 60 + vals[2] * 10 + vals[3]
-    elif len(vals) == 3:
-        # Case: M:SS
-        res = vals[0] * 60 + vals[1] * 10 + vals[2]
-    elif len(vals) == 2:
-        # Case: SS
-        res = vals[0] * 10 + vals[1]
-    elif len(vals) == 1:
-        res = vals[0]
-        
+    separators.sort()
+    return digits, separators
+
+
+def _background_relative_binary(gray, margin=2):
+    """
+    Binarize a clock crop by flagging pixels that differ from the modal
+    (background) grey value, rather than assuming a clean two-tone image.
+
+    A three-tone crop (e.g. chess.com's mid-grey "active clock" chip behind
+    dark digit strokes, itself sitting on a near-black page) confuses a
+    plain global threshold: the rounded chip edges and any thin margin
+    outside the chip both get flagged as "content" in every row, merging
+    what should be separate per-character regions into one solid blob. Two
+    restrictions fix that: exclude a small margin from the very edges
+    (where a crop can catch a sliver of whatever sits just outside the
+    clock chip), and restrict row selection to rows that are safely inside
+    the chip/background band (found via a majority-near-background test),
+    so the corner-transition rows at the very top/bottom don't leak content
+    into every column.
+    """
+    h, w = gray.shape
+    if w <= margin * 2 or h < 4:
+        return np.zeros_like(gray, dtype=np.uint8)
+    inner = gray[:, margin:w - margin]
+
+    vals, counts = np.unique(inner, return_counts=True)
+    bg = int(vals[np.argmax(counts)])
+    row_near_bg = (np.abs(inner.astype(int) - bg) < 30).sum(axis=1) > (inner.shape[1] * 0.5)
+    row_idx = np.where(row_near_bg)[0]
+
+    if len(row_idx) >= 4:
+        y0, y1 = row_idx.min(), row_idx.max()
+        pad = max(1, (y1 - y0) // 6)
+        y0, y1 = y0 + pad, max(y0 + pad + 1, y1 - pad)
+    else:
+        y0, y1 = 0, h
+
+    result = np.zeros((h, w), dtype=np.uint8)
+    content = np.abs(inner[y0:y1].astype(int) - bg) > 40
+    result[y0:y1, margin:w - margin] = content.astype(np.uint8) * 255
+    return result
+
+
+# How a clock reading was arrived at, best first. read_clock() prefers a
+# colon-anchored reading over a bare digit run when both binarizations
+# produce something, so a correctly-structured read always wins over a
+# salvaged one rather than depending on which threshold happened to run first.
+CLOCK_READ_INVALID = 0
+CLOCK_READ_DIGIT_RUN = 1
+CLOCK_READ_COLON = 2
+
+
+def _parse_clock_layout(digits, separators):
+    """
+    Read a clock by its layout around the colon rather than by digit count.
+
+    A clock is always "<minutes>:<two second digits>", optionally followed by
+    a decimal point and a tenths digit on chess.com below ~20s. Anchoring on
+    the colon makes the parse robust in a way counting digits is not: it
+    tells minutes from seconds directly, so MM:SS, M:SS and 0:SS.T stop being
+    ambiguous, and any leading junk (chess.com prefixes the clock with a
+    small status-icon glyph that can score just high enough to survive as a
+    spurious digit) is excluded by position instead of by a brittle
+    threshold. It also gives a validity test - a real clock must have at
+    least one digit before the colon and two after - which lets the caller
+    reject a mis-binarized reading instead of silently returning it.
+
+    Returns (seconds, confidence), confidence being one of the CLOCK_READ_*
+    tiers above.
+    """
+    if not digits:
+        return None, CLOCK_READ_INVALID
+
+    # The colon is the first separator with a minutes digit before it and a
+    # full seconds pair after it; a trailing decimal point fails that test
+    # and so cannot be mistaken for the colon.
+    colon = None
+    for sep in separators:
+        if sum(1 for _, x in digits if x < sep) >= 1 and sum(1 for _, x in digits if x > sep) >= 2:
+            colon = sep
+            break
+
+    if colon is None:
+        # The colon is small and is sometimes missed entirely by the region
+        # finder, so a genuine clock can arrive here with no anchor at all -
+        # Lichess renders a full "00:57.1" and we may only recover the five
+        # digits. Fall back to reading the leading four as MMSS, but require
+        # four: a full clock always yields at least that many, while a
+        # non-clock crop at the game-over coordinates yields at most two
+        # (measured across every play screenshot in both corpora). That gap
+        # is what makes the fallback safe, and it is why the threshold is
+        # not lower - accepting two-digit readings here turns ordinary board
+        # pixels into "a clock is present", which the clients read as the
+        # game having ended.
+        if len(digits) >= 4:
+            vals = [d[0] for d in digits[:4]]
+            return vals[0] * 600 + vals[1] * 60 + vals[2] * 10 + vals[3], CLOCK_READ_DIGIT_RUN
+        return None, CLOCK_READ_INVALID
+
+    before = [d for d in digits if d[1] < colon]
+    after = [d for d in digits if d[1] > colon]
+    seconds_digits = after[:2]
+
+    # Minutes: at most two digits, and only ones that actually sit next to
+    # the colon. A status icon lands much further left than any inter-digit
+    # gap, so measure the gap against the seconds pair's own spacing.
+    ref_gap = (seconds_digits[1][1] - seconds_digits[0][1]) if len(seconds_digits) == 2 else None
+    minutes_digits = []
+    prev_x = colon
+    for val, x in reversed(before):
+        if ref_gap is not None and (prev_x - x) > 2.5 * ref_gap:
+            break
+        minutes_digits.insert(0, (val, x))
+        prev_x = x
+        if len(minutes_digits) == 2:
+            break
+
+    if not minutes_digits or len(seconds_digits) < 2:
+        return None, CLOCK_READ_INVALID
+
+    minutes = 0
+    for val, _ in minutes_digits:
+        minutes = minutes * 10 + val
+    seconds = seconds_digits[0][0] * 10 + seconds_digits[1][0]
+
+    # Anything after the seconds pair is the tenths digit behind a decimal
+    # point; it is dropped rather than rounded, matching how a clock showing
+    # "0:11" already means eleven-point-something seconds remain.
+    return minutes * 60 + seconds, CLOCK_READ_COLON
+
+
+def read_clock(clock_image, return_details=False):
+    """
+    Read time from a clock image using fast horizontal projection + template matching.
+
+    If return_details is True, returns (time_in_seconds, details_dict)
+    """
+    if clock_image is None or clock_image.size == 0:
+        return (None, {}) if return_details else None
+
+    # Convert to grayscale
+    if clock_image.ndim == 3:
+        gray = cv2.cvtColor(clock_image, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = clock_image.copy()
+
+    # Use Otsu's thresholding to get a clean binary image
+    blur = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, binary = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Ensure white digits on black background
+    if np.mean(binary) > 127:
+        binary = 255 - binary
+
+    original_height = binary.shape[0]
+    v_center = original_height / 2
+
+    # Otsu assumes a clean two-tone image (true for Lichess's plain
+    # dark-text-on-cream / white-text-on-dark clocks). chess.com's "active"
+    # clock adds a third tone - a mid-grey chip behind the digits - which
+    # Otsu handles badly in two different ways: it either lumps the chip in
+    # as one giant foreground blob so no individual digits survive, or it
+    # thins the strokes enough that a real digit falls under the "tall
+    # enough to be a digit" test and gets misfiled as a colon. The second
+    # failure is the dangerous one, because it still yields digits and so
+    # looks successful while silently dropping a digit ("2:51" read as
+    # "25"). Neither binarization is reliably better, so run both and let
+    # the layout check decide: a reading whose digits sit correctly around a
+    # colon is trusted over one that does not, regardless of which threshold
+    # produced it.
+    candidates = []
+    for b in (binary, _background_relative_binary(gray)):
+        digits, separators = _digits_from_binary(b)
+        seconds, confidence = _parse_clock_layout(digits, separators)
+        candidates.append((confidence, seconds))
+
+    # Require a valid layout rather than salvaging a number from whatever
+    # digits happened to match. "Unreadable" is a meaningful answer here, not
+    # a failure to work around: game_over_found() in the clients decides a
+    # game has ended by checking whether *any* clock reads at the end-state
+    # coordinates, so a read_clock that manufactures a plausible time out of
+    # a non-clock crop makes the bot walk away from a game still in progress.
+    # Refusing anything that is not laid out like a clock is what keeps that
+    # signal meaningful, and it also stops a garbled reading from feeding a
+    # bogus time into move-time pacing.
+    best_confidence, res = max(candidates, key=lambda c: c[0])
+    if best_confidence == CLOCK_READ_INVALID:
+        return (None, {}) if return_details else None
+
     if return_details:
         return res, {'v_center': v_center, 'original_height': original_height}
     return res

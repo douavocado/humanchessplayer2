@@ -35,6 +35,12 @@ class ClockTextDetector:
     # Minimum clock dimensions (relative to board size)
     MIN_CLOCK_WIDTH_RATIO = 0.10  # At least 10% of board size
     MIN_CLOCK_HEIGHT_RATIO = 0.015  # At least 1.5% of board size
+
+    # Maximum clock width (relative to board size). A real clock chip is a
+    # compact element; a block this wide is almost always several merged UI
+    # elements (nav bar, ad text) that happen to land in the clock aspect
+    # range, not an actual clock.
+    MAX_CLOCK_WIDTH_RATIO = 0.25
     
     def __init__(self, board_detection: Optional[Dict] = None):
         """
@@ -91,9 +97,13 @@ class ClockTextDetector:
         board_y = self.board['y']
         board_size = self.board['size']
         
-        # Define search region (to the right of board)
-        search_x_start = board_x + board_size
-        search_x_end = min(img_w, search_x_start + int(board_size * 0.4))
+        # Define search region. Lichess puts the clock in a side panel to the
+        # right of the board; chess.com puts it inside the board's own right
+        # edge, in the header/footer bar above/below the board (~75-100% of
+        # board width from board_x). Start the search early enough to cover
+        # both without shrinking the original rightward (Lichess) reach.
+        search_x_start = board_x + int(board_size * 0.75)
+        search_x_end = min(img_w, board_x + board_size + int(board_size * 0.4))
         search_y_start = max(0, board_y - int(board_size * 0.1))
         search_y_end = min(img_h, board_y + board_size + int(board_size * 0.1))
         
@@ -107,24 +117,51 @@ class ClockTextDetector:
         print(f"Clock search region: ({search_x_start}, {search_y_start}) to "
               f"({search_x_end}, {search_y_end})")
         
-        # Find text blocks
-        text_blocks = self._find_text_blocks(search_region, board_size)
-        
+        # Find text blocks. Lichess renders the clock as dark digits on a
+        # light panel, so a dark-pixel mask isolates the digit strokes.
+        # chess.com's dark theme's "active" clock is a mid-grey chip (~150
+        # gray) that stands out against the near-black page (~40-46 gray);
+        # a narrow mid-grey band mask isolates that whole chip as one blob
+        # (the embedded digit strokes just become holes in it, which
+        # findContours' outer-boundary mode ignores) without also picking up
+        # pure-white nav/ad text elsewhere in the region, since that text
+        # renders much brighter (~210+) than the chip. Run both passes
+        # unconditionally and combine candidates.
+        text_blocks = self._find_text_blocks(search_region, board_size, mode='dark')
+        text_blocks += self._find_text_blocks(search_region, board_size, mode='chip')
+
         print(f"Found {len(text_blocks)} text blocks")
-        
+
         if not text_blocks:
             return None
-        
+
         # Adjust coordinates to full image space
         for block in text_blocks:
             block['x'] += search_x_start
             block['y'] += search_y_start
-        
+
         # Identify top and bottom clocks
         top_clock, bottom_clock = self._identify_clocks(
             text_blocks, board_y, board_size
         )
-        
+
+        # A whole-region 'light' pass (for the "inactive" white-on-dark
+        # clock) is unsafe here: chess.com's header/footer bars are packed
+        # with other white UI text (nav tabs, ads) only ~30px from the
+        # clock, well within the dilation kernel's reach, so it merges into
+        # one wide non-clock-shaped blob and the real digits get lost in it.
+        # Once one clock is found by the 'dark' pass, though, we know
+        # clock_x precisely - re-run 'light' mode restricted to a narrow
+        # column around that x, which excludes the unrelated UI text.
+        if top_clock and not bottom_clock:
+            bottom_clock = self._find_missing_clock_light(
+                image, top_clock, board_y, board_size, half='bottom'
+            )
+        elif bottom_clock and not top_clock:
+            top_clock = self._find_missing_clock_light(
+                image, bottom_clock, board_y, board_size, half='top'
+            )
+
         if top_clock:
             print(f"Top clock: ({top_clock['x']}, {top_clock['y']}) "
                   f"{top_clock['width']}x{top_clock['height']}")
@@ -150,28 +187,105 @@ class ClockTextDetector:
             'bottom_clock': bottom_clock,
             'all_text_blocks': text_blocks
         }
-    
-    def _find_text_blocks(self, region: np.ndarray, 
-                          board_size: int) -> List[Dict]:
+
+    def _find_missing_clock_light(self, image: np.ndarray, found_clock: Dict,
+                                  board_y: int, board_size: int, half: str) -> Optional[Dict]:
         """
-        Find text blocks by detecting dark pixels on light background.
-        
+        Look for the other clock using a 'light' (white-on-dark) pass,
+        restricted to a narrow column around an already-found clock's x
+        position and a thin band hugging the board's top/bottom edge.
+
+        Args:
+            image: Full BGR image.
+            found_clock: The already-identified clock (gives us clock_x).
+            board_y: Board Y position.
+            board_size: Board size.
+            half: 'top' or 'bottom' - which edge band to search.
+
+        Returns:
+            Clock block dict (full-image coordinates) or None.
+        """
+        img_h, img_w = image.shape[:2]
+
+        margin = int(found_clock['width'] * 0.5)
+        x_start = max(0, found_clock['x'] - margin)
+        x_end = min(img_w, found_clock['x'] + found_clock['width'] + margin)
+
+        edge_band = int(board_size * 0.15)
+        if half == 'top':
+            y_start = max(0, board_y - edge_band)
+            y_end = board_y
+        else:
+            y_start = board_y + board_size
+            y_end = min(img_h, board_y + board_size + edge_band)
+
+        if x_end <= x_start or y_end <= y_start:
+            return None
+
+        region = image[y_start:y_end, x_start:x_end]
+        if region.size == 0:
+            return None
+
+        blocks = self._find_text_blocks(region, board_size, mode='light')
+        clock_like = [b for b in blocks if b['is_clock_like']]
+        if not clock_like:
+            return None
+
+        best = max(clock_like, key=lambda b: b['area'])
+        best['x'] += x_start
+        best['y'] += y_start
+        return best
+
+    # Mid-grey band for the chess.com-style "active" clock chip: bright
+    # enough to stand out from the near-black page (~40-46), but capped
+    # below pure-white nav/ad text (~210+) so a full-region scan doesn't
+    # merge the chip with unrelated bright UI text.
+    CHIP_LOWER = 90
+    CHIP_UPPER = 210
+
+    # Brightness floor for plain white-on-dark clock digits (chess.com's
+    # "inactive" clock, which has no chip - the digits themselves are the
+    # light thing here). Only safe to scan for over a narrow column already
+    # anchored to a known clock_x (see _find_missing_clock_light) - over a
+    # full region this also matches every other white UI label.
+    LIGHT_TEXT_THRESHOLD = 180
+
+    def _find_text_blocks(self, region: np.ndarray,
+                          board_size: int, mode: str = 'dark') -> List[Dict]:
+        """
+        Find text blocks / clock chips in a region.
+
+        mode='dark': detect dark pixels on light background (Lichess: dark
+        digit strokes are themselves the distinguishing feature).
+        mode='chip': detect a mid-grey blob (chess.com's "active" clock: a
+        light-grey chip that stands out against a near-black surround,
+        without also catching pure-white text elsewhere in the region).
+        mode='light': detect bright (near-white) pixels (chess.com's
+        "inactive" clock: plain white digits directly on the dark page).
+
         Args:
             region: BGR image region to search.
             board_size: Board size for scaling thresholds.
-        
+            mode: 'dark', 'chip', or 'light'.
+
         Returns:
             List of text block dictionaries.
         """
         h, w = region.shape[:2]
-        
+
         # Convert to grayscale
         gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-        
-        # Threshold to find dark text
-        _, dark_mask = cv2.threshold(gray, self.TEXT_THRESHOLD, 255, 
-                                      cv2.THRESH_BINARY_INV)
-        
+
+        if mode == 'chip':
+            dark_mask = cv2.inRange(gray, self.CHIP_LOWER, self.CHIP_UPPER)
+        elif mode == 'light':
+            _, dark_mask = cv2.threshold(gray, self.LIGHT_TEXT_THRESHOLD, 255,
+                                          cv2.THRESH_BINARY)
+        else:
+            # Threshold to find dark text
+            _, dark_mask = cv2.threshold(gray, self.TEXT_THRESHOLD, 255,
+                                          cv2.THRESH_BINARY_INV)
+
         # Dilate horizontally to connect characters in same text block
         kernel_h = np.ones((1, 20), np.uint8)
         dilated = cv2.dilate(dark_mask, kernel_h, iterations=2)
@@ -187,14 +301,15 @@ class ClockTextDetector:
         # Filter and collect text blocks
         min_width = int(board_size * self.MIN_CLOCK_WIDTH_RATIO)
         min_height = int(board_size * self.MIN_CLOCK_HEIGHT_RATIO)
-        
+        max_width = int(board_size * self.MAX_CLOCK_WIDTH_RATIO)
+
         text_blocks = []
-        
+
         for contour in contours:
             x, y, bw, bh = cv2.boundingRect(contour)
-            
-            # Skip tiny blocks
-            if bw < min_width or bh < min_height:
+
+            # Skip tiny or implausibly wide (merged-UI) blocks
+            if bw < min_width or bh < min_height or bw > max_width:
                 continue
             
             # Add vertical padding to text blocks to ensure full digit coverage.
