@@ -198,10 +198,11 @@ class ChessComSite(Site):
             return None
 
         try:
+            start_like = self.start_like_board_fens()
             board_img = capture_board()
             for bottom in ("w", "b"):
                 fen = get_fen_from_image(board_img, bottom=bottom, fast_mode=True)
-                if chess.Board(fen).board_fen() == chess.STARTING_BOARD_FEN:
+                if chess.Board(fen).board_fen() in start_like:
                     return res
         except Exception:
             return None

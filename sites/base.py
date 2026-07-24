@@ -104,6 +104,33 @@ class Site(ABC):
     supports_berserk: bool = False
     supports_back_to_lobby: bool = False
 
+    _start_like_fens = None
+
+    def start_like_board_fens(self):
+        """
+        Board placements that can legitimately be on screen when a new game
+        is found: the starting position, or one white move into it.
+
+        The second case is not an edge case - playing black, the opponent has
+        usually moved (or premoved) before our first scan, so demanding the
+        exact starting position means never detecting those games at all.
+        Shared here rather than per-site because it is a fact about chess and
+        scan timing, not about any one site's UI, and because keeping two
+        copies is how the two implementations drift apart.
+        """
+        if self._start_like_fens is None:
+            import chess
+            fens = {chess.STARTING_BOARD_FEN}
+            base = chess.Board()
+            for move in list(base.legal_moves):
+                base.push(move)
+                fens.add(base.board_fen())
+                base.pop()
+            # set on the instance, not the class, so subclasses cannot share
+            # a half-built cache
+            self._start_like_fens = fens
+        return self._start_like_fens
+
     @abstractmethod
     def detect_new_game(self, expected_time: Optional[float] = None) -> Optional[int]:
         """Return our starting time in seconds if a new game is on screen."""

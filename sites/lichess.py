@@ -71,7 +71,6 @@ class LichessSite(Site):
     def __init__(self):
         self._result_refs = None
         self._message_refs = None
-        self._start_like_fens = None
 
     # ------------------------------------------------------------------
     # templates
@@ -116,22 +115,6 @@ class LichessSite(Site):
     # ------------------------------------------------------------------
     # new game
     # ------------------------------------------------------------------
-    def _start_like_board_fens(self):
-        """
-        Board placements that can be on screen when a new game is found: the
-        starting position, or one white move into it - as black the opponent
-        often moves (or premoves) before our first scan.
-        """
-        if self._start_like_fens is None:
-            fens = {chess.STARTING_BOARD_FEN}
-            base = chess.Board()
-            for move in list(base.legal_moves):
-                base.push(move)
-                fens.add(base.board_fen())
-                base.pop()
-            self._start_like_fens = fens
-        return self._start_like_fens
-
     def detect_new_game(self, expected_time=None):
         # try to read bot clock for start position. if none is found, then
         # haven't started the game
@@ -164,7 +147,7 @@ class LichessSite(Site):
                 board_img = capture_board()
                 # Side is not known yet; try 'w' first as it's most common
                 try:
-                    start_like = self._start_like_board_fens()
+                    start_like = self.start_like_board_fens()
                     test_fen = get_fen_from_image(board_img, bottom="w", fast_mode=True)
                     if chess.Board(test_fen).board_fen() not in start_like:
                         # Could be we are playing as black, try other orientation
