@@ -50,8 +50,16 @@ class ChessComSite(Site):
     name = "chess_com"
 
     # The clock never moves between game states, so clock position cannot be
-    # used to infer that a game has started or ended.
+    # used to infer that a game has started or ended. There is exactly one
+    # clock box to calibrate and no end-state box at all, which is why
+    # end_clock_states is empty rather than a repeat of the play coordinates.
     clock_position_varies_by_state = False
+    live_clock_states = ("play",)
+    end_clock_states = ()
+
+    # No arena format, so neither control exists.
+    supports_berserk = False
+    supports_back_to_lobby = False
 
     # A queued premove is drawn at its destination square before the server
     # confirms it, so the scraped position can legitimately run ahead of the
@@ -167,6 +175,48 @@ class ChessComSite(Site):
     # ------------------------------------------------------------------
     # game end
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # interaction
+    # ------------------------------------------------------------------
+    def resign(self, actions):
+        """
+        Click the resign control, whose position comes from the profile.
+
+        ⚠️ Unverified against a live session. The button coordinate was
+        measured from a real chess.com screenshot, but whether chess.com then
+        raises a confirmation dialog - and where its confirm button sits -
+        has not been observed, so a single click may leave the game
+        unresigned. Failing that way is the safe direction (the bot plays on
+        rather than resigning something unintended), but it needs checking
+        against a live game before it can be relied on.
+        """
+        try:
+            from auto_calibration.config import get_config
+            x, y = get_config().get_resign_button_position()
+        except Exception:
+            actions.log("chess.com resign: no calibrated resign button position. \n")
+            return False
+        actions.log(f"chess.com resign click at ({x}, {y}); confirmation flow unverified. \n")
+        actions.click(x, y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
+        return True
+
+    def start_new_game(self, actions, time_control="1+0"):
+        """
+        Not implemented: seeking a game needs chess.com's lobby layout, and
+        no lobby screenshot exists in the corpus to calibrate against.
+
+        Returning False rather than guessing is deliberate - the alternative
+        is clicking at coordinates derived from Lichess's lobby, which on
+        chess.com would land on arbitrary page furniture. The end-of-game
+        modal does carry "New <tc>" and "Rematch" buttons, but their position
+        moves with the modal's height (which varies by ending), so they need
+        to be located per-ending rather than assumed.
+        """
+        actions.log(
+            "chess.com start_new_game is not implemented (no lobby calibration); "
+            "not clicking. \n")
+        return False
+
     def game_over_screen_visible(self):
         try:
             band = self._centre_band()

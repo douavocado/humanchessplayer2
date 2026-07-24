@@ -21,7 +21,24 @@ state mutation.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, Optional
+from typing import Callable, Dict, FrozenSet, Optional, Tuple
+
+
+@dataclass
+class SiteActions:
+    """
+    The client capabilities a site needs in order to drive the UI.
+
+    Interaction is split so that the *policy* the client owns stays in the
+    client - the caps-lock human-interference guard, the log buffer, the
+    humanised mouse movement - while only *where to click, and in what
+    sequence* lives in the site. Passing these in rather than importing them
+    keeps sites free of any client import.
+    """
+
+    click: Callable[..., None]
+    sleep: Callable[[float], None]
+    log: Callable[[str], None]
 
 
 @dataclass
@@ -70,6 +87,23 @@ class Site(ABC):
     #: Result names that may be absent without that being a calibration fault.
     optional_result_templates: FrozenSet[str] = frozenset()
 
+    #: Clock states worth probing to answer "is a game live on screen?".
+    #: Lichess needs several because it moves the clock between the
+    #: "waiting for first move" and "playing" layouts; a site whose clock
+    #: never moves declares only ("play",) and a profile for it need only
+    #: calibrate that one box.
+    live_clock_states: Tuple[str, ...] = ("play", "start1", "start2")
+
+    #: Clock states that only exist once a game has ended. Empty for a site
+    #: where clock position carries no state, which is the same statement as
+    #: clock_position_varies_by_state = False and is what makes the
+    #: end-coordinate clock probe inapplicable there.
+    end_clock_states: Tuple[str, ...] = ("end1", "end2", "end3")
+
+    #: Whether the site has an arena berserk button / a back-to-lobby button.
+    supports_berserk: bool = False
+    supports_back_to_lobby: bool = False
+
     @abstractmethod
     def detect_new_game(self, expected_time: Optional[float] = None) -> Optional[int]:
         """Return our starting time in seconds if a new game is on screen."""
@@ -96,3 +130,26 @@ class Site(ABC):
             arena: whether this is an arena game, which can move the result
                 region.
         """
+
+    # ------------------------------------------------------------------
+    # interaction
+    #
+    # Each returns True if it acted. Returning False means "this site cannot
+    # do that" and is a normal answer, not an error: a site with no arena has
+    # no berserk button, and the caller should carry on rather than retry.
+    # ------------------------------------------------------------------
+    @abstractmethod
+    def resign(self, actions: SiteActions) -> bool:
+        """Click through this site's resign control."""
+
+    @abstractmethod
+    def start_new_game(self, actions: SiteActions, time_control: str) -> bool:
+        """Click through this site's lobby to seek a game at `time_control`."""
+
+    def berserk(self, actions: SiteActions) -> bool:
+        """Click the arena berserk button. Sites without arenas need not."""
+        return False
+
+    def back_to_lobby(self, actions: SiteActions) -> bool:
+        """Return to the arena lobby after a tournament game."""
+        return False

@@ -1,10 +1,15 @@
 # Site abstraction: separating "which site" from "which screen"
 
-Status: **Stages 0 and 1 implemented** (profile `site` field, tolerant result-template
-loading, the `sites/` package, and chess.com modal-based end detection).
-Stages 2 and 3 - interaction, and retiring the Lichess clock-state vocabulary -
-are still proposals. The verification results for the implemented stages are
-recorded under each stage below.
+Status: **all four stages implemented.** Verification results are recorded
+under each stage below.
+
+One deliberate gap: chess.com's *interaction* is only partly implementable
+from the screenshot corpus. Resigning uses the calibrated button coordinate
+but its confirmation flow is unverified, and seeking a new game is not
+implemented at all because no chess.com lobby screenshot exists to calibrate
+against - `ChessComSite.start_new_game` returns False and logs rather than
+clicking at coordinates guessed from Lichess's layout. Both need a live
+session to finish.
 
 ## The problem
 
@@ -325,11 +330,25 @@ Each stage is independently shippable and independently verifiable.
   - chess.com end detection: **29/29** — all 8 endings detected with the
     correct result name, all 21 in-play frames negative.
 
-**Stage 2 — interaction behind `Site`**
-- `resign()`, `new_game()`, `back_to_lobby()`, `berserk()`, promotion.
-- Highest risk: these paths have **no offline test coverage** and cannot be
-  exercised without a live display. Worth doing only with the user driving a
-  live session.
+**Stage 2 — interaction behind `Site`** *(implemented)*
+- `resign()`, `start_new_game()`, `back_to_lobby()`, `berserk()` moved behind
+  the interface, with a `SiteActions` record carrying the client capabilities
+  a site needs (click, sleep, log). The split keeps *policy* in the client -
+  the caps-lock human-interference guard, the log buffer, the humanised
+  mouse - and moves only *where to click, in what order* into the site, so
+  sites still never import a client.
+- `supports_berserk` / `supports_back_to_lobby` let the client skip controls a
+  site does not have, instead of clicking where Lichess happens to put them.
+- *Verification (done):* these paths have no offline coverage, so they were
+  checked by equivalence rather than behaviour - the original functions and
+  the new site were each driven with a recording click stub and their click
+  sequences compared exactly: `berserk`, `back_to_lobby`, `resign` and all
+  ten time-control lobby fallbacks produce **identical (x, y, tolerance,
+  clicks)** sequences.
+- Still not covered anywhere: **promotion**. `find_clicks()` ignores the
+  promotion piece in the UCI entirely and only clicks from/to, so whatever
+  handles it today is implicit. chess.com's promotion picker will need
+  explicit handling.
 
 **Stage 3 — retire the lichess clock-state vocabulary**
 - Replace `state="start1"|...` with site-declared states; chess.com's profile

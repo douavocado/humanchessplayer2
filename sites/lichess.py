@@ -12,6 +12,9 @@ import chess
 import cv2
 
 from chessimage.image_scrape_utils import (
+    START_X,
+    START_Y,
+    STEP,
     capture_board,
     capture_bottom_clock,
     capture_result,
@@ -47,6 +50,11 @@ class LichessSite(Site):
     # Lichess repositions the clock between start, play and end states, which
     # is what makes the end-coordinate clock probe a usable end-of-game signal.
     clock_position_varies_by_state = True
+    live_clock_states = ("play", "start1", "start2")
+    end_clock_states = ("end1", "end2", "end3")
+
+    supports_berserk = True
+    supports_back_to_lobby = True
 
     result_template_files = {
         'white_win': 'whitewin_result.png',
@@ -173,6 +181,95 @@ class LichessSite(Site):
     # ------------------------------------------------------------------
     # game end
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # interaction
+    # ------------------------------------------------------------------
+    def resign(self, actions):
+        try:
+            from auto_calibration.config import get_config
+            x, y = get_config().get_resign_button_position()
+            actions.log(f"Using calibrated resign button position: ({x}, {y})\n")
+        except Exception:
+            x, y = START_X + 10.5 * STEP, START_Y + 4.8 * STEP
+            actions.log(f"Using hardcoded resign button position: ({x}, {y})\n")
+        actions.click(x, y, tolerance=10, clicks=2, duration=np.random.uniform(0.3, 0.7))
+        return True
+
+    def berserk(self, actions):
+        x, y = START_X + 10.5 * STEP, START_Y + 5.7 * STEP
+        actions.click(x, y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
+        return True
+
+    def back_to_lobby(self, actions):
+        x, y = START_X + 10.5 * STEP, START_Y + 4.1 * STEP
+        actions.click(x, y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
+        return True
+
+    #: Lobby grid offsets, in board steps from the board origin, used when the
+    #: time-control button cannot be found by template detection.
+    _TIME_CONTROL_OFFSETS = {
+        "1+0":   (1.7, 0.7),
+        "2+1":   (3.7, 0.7),
+        "3+0":   (5.7, 0.7),
+        "3+2":   (1.7, 1.7),
+        "5+0":   (3.7, 1.7),
+        "5+3":   (5.7, 1.7),
+        "10+0":  (1.7, 2.7),
+        "10+5":  (3.7, 2.7),
+        "15+10": (5.7, 2.7),
+    }
+
+    def _click_time_control_fallback(self, actions, time_control):
+        """Hardcoded lobby positions when dynamic detection fails."""
+        dx, dy = self._TIME_CONTROL_OFFSETS.get(time_control,
+                                                self._TIME_CONTROL_OFFSETS["1+0"])
+        actions.click(START_X + dx * STEP, START_Y + dy * STEP,
+                      tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+
+    def start_new_game(self, actions, time_control="1+0"):
+        try:
+            from auto_calibration.button_detector import (
+                find_play_button, find_time_control_button)
+            dynamic = True
+        except ImportError:
+            dynamic = False
+
+        if dynamic:
+            actions.log("Using dynamic button detection for new game with time control {}. \n".format(time_control))
+
+            # Step 1: Click the PLAY button
+            play_pos = find_play_button()
+            if play_pos is not None:
+                play_button_x, play_button_y = play_pos
+                actions.log("Found PLAY button at ({}, {}). \n".format(play_button_x, play_button_y))
+            else:
+                actions.log("PLAY button not found dynamically, using fallback position. \n")
+                play_button_x, play_button_y = START_X - 1.9 * STEP, START_Y - 0.4 * STEP
+
+            actions.click(play_button_x, play_button_y, tolerance=10, clicks=1,
+                          duration=np.random.uniform(0.3, 0.7))
+            actions.sleep(1.5)  # Wait for menu to appear
+
+            # Step 2: Click the time control button
+            tc_pos = find_time_control_button(time_control)
+            if tc_pos is not None:
+                to_x, to_y = tc_pos
+                actions.log("Found time control {} button at ({}, {}). \n".format(time_control, to_x, to_y))
+                actions.click(to_x, to_y, tolerance=20, clicks=1,
+                              duration=np.random.uniform(0.3, 0.7))
+            else:
+                actions.log("Time control {} button not found dynamically, trying fallback. \n".format(time_control))
+                self._click_time_control_fallback(actions, time_control)
+        else:
+            actions.log("Using hardcoded positions for new game with time control {}. \n".format(time_control))
+            play_button_x, play_button_y = START_X - 1.9 * STEP, START_Y - 0.4 * STEP
+            actions.click(play_button_x, play_button_y, tolerance=10, clicks=1,
+                          duration=np.random.uniform(0.3, 0.7))
+            actions.sleep(1.5)
+            self._click_time_control_fallback(actions, time_control)
+
+        return True
+
     def clock_readable_at_end_positions(self):
         """
         Whether any end-state clock coordinate yields a reading.
@@ -180,7 +277,7 @@ class LichessSite(Site):
         Only meaningful because Lichess moves its clock when the game ends.
         Kept public because the client uses it as a guarded fallback.
         """
-        for state in ("end1", "end2", "end3"):
+        for state in self.end_clock_states:
             if read_clock(capture_bottom_clock(state=state)) is not None:
                 return True
         return False

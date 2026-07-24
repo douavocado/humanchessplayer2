@@ -37,28 +37,45 @@ from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STE
 # Site behaviour (game lifecycle) is chosen by the active calibration
 # profile's "site" field, so which site we are playing on is separate from
 # which screen the coordinates were measured on. See docs/site-abstraction.md.
-from sites import get_site_for_config
+from sites import SiteActions, get_site_for_config
 
 SITE = get_site_for_config()
 
-# Import dynamic button detection
-try:
-    from auto_calibration.button_detector import (
-        find_play_button, find_time_control_button, find_new_opponent_button,
-        ButtonDetector, QuickPairingDetector
-    )
-    DYNAMIC_BUTTON_DETECTION = True
-except ImportError:
-    DYNAMIC_BUTTON_DETECTION = False
-    print("⚠️  Dynamic button detection not available, using hardcoded positions")
 
-# Import calibration config for resign button position
-try:
-    from auto_calibration.config import get_config
-    CALIBRATION_CONFIG_AVAILABLE = True
-except ImportError:
-    CALIBRATION_CONFIG_AVAILABLE = False
-    print("⚠️  Calibration config not available, using hardcoded resign button position")
+def _reread_clock_alternate_states(capture_fn):
+    """
+    Retry a clock at the site's non-primary clock positions.
+
+    Lichess parks the clock in a different place before the first move, so a
+    clock that is unreadable at the play position may still be readable
+    there. A site whose clock never moves declares only one state, and this
+    becomes a no-op rather than two wasted screen captures of the same box.
+    """
+    for state in SITE.live_clock_states[1:]:
+        res = read_clock(capture_fn(state=state))
+        if res is not None:
+            return res
+    return None
+
+
+def _site_actions():
+    """
+    Hand the site the client capabilities it needs to drive the UI.
+
+    The caps-lock guard and the decision to act at all stay with the caller;
+    this only carries humanised clicking, waiting and log appending across to
+    whichever site is active.
+    """
+    def _log(message):
+        global LOG
+        LOG += message
+
+    return SiteActions(click=click_mouse, sleep=time.sleep, log=_log)
+
+# Button detection and the calibrated resign position are now consulted by
+# the active site (sites/), which also owns the fallbacks for when either is
+# unavailable - so the client no longer imports them just to hold an
+# availability flag.
 
 # import threading
 # from multiprocessing import Process, Manager
@@ -602,9 +619,7 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
         opp_clock_time = read_clock(top_clock_img)
         if opp_clock_time is None:
             # try the starting position
-            opp_clock_time = read_clock(capture_top_clock(state="start1"))
-            if opp_clock_time is None:
-                opp_clock_time = read_clock(capture_top_clock(state="start2"))
+            opp_clock_time = _reread_clock_alternate_states(capture_top_clock)
             if opp_clock_time is None:
                 debug_files = save_debug_screenshot(
                     "opp_clock_move_change_error", clock_imgs={'top': top_clock_img})
@@ -621,9 +636,7 @@ def update_dynamic_info_from_screenshot(move_obj: chess.Move):
         self_clock_time = read_clock(bot_clock_img)
         if self_clock_time is None:
             # try the starting position
-            self_clock_time = read_clock(capture_bottom_clock(state="start1"))
-            if self_clock_time is None:
-                self_clock_time = read_clock(capture_bottom_clock(state="start2"))
+            self_clock_time = _reread_clock_alternate_states(capture_bottom_clock)
             if self_clock_time is None:
                 debug_files = save_debug_screenshot(
                     "own_clock_move_change_error", clock_imgs={'bottom': bot_clock_img})
@@ -880,9 +893,7 @@ def update_dynamic_info_from_fullimage():
         # then opponent just moved
         if opp_time is None:
             # try capture at start position
-            opp_time = read_clock(capture_top_clock(state="start1"))
-            if opp_time is None:
-                opp_time = read_clock(capture_top_clock(state="start2"))
+            opp_time = _reread_clock_alternate_states(capture_top_clock)
             if opp_time is None:
                 # Save comprehensive debug files for clock reading error
                 debug_files = save_debug_screenshot(
@@ -912,9 +923,7 @@ def update_dynamic_info_from_fullimage():
         # then we have just moved
         if our_time is None:
             # try capture at start position
-            our_time = read_clock(capture_bottom_clock(state="start1"))
-            if our_time is None:
-                our_time = read_clock(capture_bottom_clock(state="start2"))
+            our_time = _reread_clock_alternate_states(capture_bottom_clock)
             if our_time is None:
                 # Save comprehensive debug files for clock reading error
                 debug_files = save_debug_screenshot(
@@ -1410,11 +1419,10 @@ def berserk():
     if is_capslock_on():
         LOG += "Tried to berserk but failed as caps lock is on. \n "
         return False
-    button_x, button_y =  START_X + 10.5*STEP, START_Y + 5.7*STEP
-    
-    click_mouse(button_x, button_y, tolerance = 10, clicks=1, duration=np.random.uniform(0.3,0.7))
-    
-    return True
+    if not SITE.supports_berserk:
+        LOG += "Tried to berserk but {} has no berserk button. \n".format(SITE.name)
+        return False
+    return SITE.berserk(_site_actions())
 
 def back_to_lobby():
     """ Click button to go back to lobby after tournament game has finished. """
@@ -1423,11 +1431,10 @@ def back_to_lobby():
     if is_capslock_on():
         LOG += "Tried to go back to lobby but failed as caps lock is on. \n "
         return False
-    button_x, button_y =  START_X + 10.5*STEP, START_Y + 4.1*STEP
-    
-    click_mouse(button_x, button_y, tolerance = 10, clicks=1, duration=np.random.uniform(0.3,0.7))
-    
-    return True
+    if not SITE.supports_back_to_lobby:
+        LOG += "Tried to go back to lobby but {} has no lobby button. \n".format(SITE.name)
+        return False
+    return SITE.back_to_lobby(_site_actions())
 
 def resign():
     global LOG
@@ -1435,32 +1442,21 @@ def resign():
     if is_capslock_on():
         LOG += "Tried resign the game but failed as caps lock is on. \n "
         return False
-    
-    # Use calibrated resign button position if available
-    if CALIBRATION_CONFIG_AVAILABLE:
-        config = get_config()
-        resign_button_x, resign_button_y = config.get_resign_button_position()
-        LOG += f"Using calibrated resign button position: ({resign_button_x}, {resign_button_y})\n"
-    else:
-        # Fallback to hardcoded position
-        resign_button_x, resign_button_y = START_X + 10.5*STEP, START_Y + 4.8*STEP
-        LOG += f"Using hardcoded resign button position: ({resign_button_x}, {resign_button_y})\n"
-    
-    click_mouse(resign_button_x, resign_button_y, tolerance = 10, clicks=2, duration=np.random.uniform(0.3,0.7))
-    
-    return True
+
+    return SITE.resign(_site_actions())
 
 def new_game(time_control="1+0"):
     """
     Click through the UI to start a new game with the specified time control.
-    
-    Uses dynamic button detection when available, with fallback to hardcoded positions.
-    
+
+    The guards here are client policy and apply on every site; the lobby
+    click sequence itself is site-specific and lives in sites/.
+
     Args:
         time_control: Time control string like "1+0", "3+0", etc.
-    
+
     Returns:
-        True if successful, False if caps lock prevents action.
+        True if successful, False if it was not safe (or not possible) to act.
     """
     global LOG
     # can only execute if no human interference.
@@ -1471,7 +1467,7 @@ def new_game(time_control="1+0"):
     # Never seek while a game is visibly live: the play-button clicks would
     # land on the running game (this happens when game setup fails during
     # the lobby-to-game page transition)
-    for state in ["play", "start1", "start2"]:
+    for state in SITE.live_clock_states:
         if read_clock(capture_bottom_clock(state=state)) is not None:
             # A readable clock could also be a FINISHED game whose end-state
             # clock bleeds into this region; a visible end-of-game screen
@@ -1488,81 +1484,7 @@ def new_game(time_control="1+0"):
             write_log()
             return False
 
-    # Try dynamic button detection first
-    if DYNAMIC_BUTTON_DETECTION:
-        LOG += "Using dynamic button detection for new game with time control {}. \n".format(time_control)
-        
-        # Step 1: Click the PLAY button
-        play_pos = find_play_button()
-        if play_pos is not None:
-            play_button_x, play_button_y = play_pos
-            LOG += "Found PLAY button at ({}, {}). \n".format(play_button_x, play_button_y)
-        else:
-            # Fallback to hardcoded position
-            LOG += "PLAY button not found dynamically, using fallback position. \n"
-            play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
-        
-        click_mouse(play_button_x, play_button_y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
-        time.sleep(1.5)  # Wait for menu to appear
-        
-        # Step 2: Click the time control button
-        tc_pos = find_time_control_button(time_control)
-        if tc_pos is not None:
-            to_x, to_y = tc_pos
-            LOG += "Found time control {} button at ({}, {}). \n".format(time_control, to_x, to_y)
-            click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-        else:
-            # Fallback to hardcoded position for known time controls
-            LOG += "Time control {} button not found dynamically, trying fallback. \n".format(time_control)
-            _new_game_fallback_click(time_control)
-    else:
-        # Use hardcoded positions (original behaviour)
-        LOG += "Using hardcoded positions for new game with time control {}. \n".format(time_control)
-        play_button_x, play_button_y = START_X - 1.9*STEP, START_Y - 0.4*STEP
-        click_mouse(play_button_x, play_button_y, tolerance=10, clicks=1, duration=np.random.uniform(0.3, 0.7))
-        time.sleep(1.5)
-        _new_game_fallback_click(time_control)
-    
-    return True
-
-
-def _new_game_fallback_click(time_control):
-    """
-    Fallback click positions for time controls when dynamic detection fails.
-    
-    Uses hardcoded positions relative to board coordinates.
-    """
-    if time_control == "1+0":
-        to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "2+1":
-        to_x, to_y = START_X + 3.7*STEP, START_Y + 0.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "3+0":
-        to_x, to_y = START_X + 5.7*STEP, START_Y + 0.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "3+2":
-        to_x, to_y = START_X + 1.7*STEP, START_Y + 1.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "5+0":
-        to_x, to_y = START_X + 3.7*STEP, START_Y + 1.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "5+3":
-        to_x, to_y = START_X + 5.7*STEP, START_Y + 1.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "10+0":
-        to_x, to_y = START_X + 1.7*STEP, START_Y + 2.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "10+5":
-        to_x, to_y = START_X + 3.7*STEP, START_Y + 2.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    elif time_control == "15+10":
-        to_x, to_y = START_X + 5.7*STEP, START_Y + 2.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
-    else:
-        # Default to 1+0 position
-        to_x, to_y = START_X + 1.7*STEP, START_Y + 0.7*STEP
-        click_mouse(to_x, to_y, tolerance=20, clicks=1, duration=np.random.uniform(0.3, 0.7))
+    return SITE.start_new_game(_site_actions(), time_control)
 
 def find_clicks(move_uci):
     ''' Given a move in uci form, find the click from and click to positions. '''

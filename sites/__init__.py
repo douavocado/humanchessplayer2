@@ -7,11 +7,11 @@ warning rather than raising, so a typo in a profile degrades to the historic
 behaviour instead of preventing the bot from starting.
 """
 
-from .base import GameEndSignal, Site
+from .base import GameEndSignal, Site, SiteActions
 from .chess_com import ChessComSite
 from .lichess import LichessSite
 
-__all__ = ["GameEndSignal", "Site", "LichessSite", "ChessComSite",
+__all__ = ["GameEndSignal", "Site", "SiteActions", "LichessSite", "ChessComSite",
            "get_site", "get_site_for_config"]
 
 _SITE_CLASSES = {
