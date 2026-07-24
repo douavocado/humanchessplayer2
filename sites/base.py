@@ -104,6 +104,32 @@ class Site(ABC):
     supports_berserk: bool = False
     supports_back_to_lobby: bool = False
 
+    #: How far above the nominal start time a clock may read and still be a
+    #: new game. A clock only ever counts *down*, so anything meaningfully
+    #: above the start time is a different, longer time control - this only
+    #: absorbs OCR and rounding slack.
+    NEW_GAME_CLOCK_OVERSHOOT = 5
+
+    #: How far the clock may already have run down. Detection is not
+    #: instantaneous, and playing black our clock starts the moment the
+    #: opponent moves, so by the first successful scan several seconds are
+    #: routinely gone. The old symmetric +/- max(10, 10%) window treated
+    #: "already ticked down" the same as "wrong time control" and threw away
+    #: real games: a 1+0 game found nine seconds in sat right on the edge.
+    #: The ratio still separates the time controls that matter - expecting
+    #: 3+0 and finding a 1+0 board is rejected, and vice versa.
+    NEW_GAME_CLOCK_MIN_RATIO = 0.4
+
+    def clock_matches_new_game(self, seconds, expected_time):
+        """Whether a clock reading is consistent with a game that just began."""
+        if not seconds:                      # 0 is never a starting time
+            return False
+        if expected_time is None:
+            return True
+        if seconds > expected_time + self.NEW_GAME_CLOCK_OVERSHOOT:
+            return False
+        return seconds >= expected_time * self.NEW_GAME_CLOCK_MIN_RATIO
+
     _start_like_fens = None
 
     def start_like_board_fens(self):

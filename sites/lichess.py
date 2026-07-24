@@ -131,13 +131,11 @@ class LichessSite(Site):
                 if v_error > orig_h * 0.1:  # Tightened to 10% off-center
                     continue
 
-                # Validate against expected time
-                if expected_time is not None:
-                    # Accept if within 10% of expected time, and NOT 0
-                    if res == 0 or abs(res - expected_time) > max(10, expected_time * 0.1):
-                        continue
-                elif res == 0:
-                    # Always ignore 0 as a starting time
+                # Validate against expected time. The window is asymmetric
+                # (see Site.clock_matches_new_game): a clock only counts down,
+                # so being below the start time just means we were late to
+                # notice, while being above it means a different time control.
+                if not self.clock_matches_new_game(res, expected_time):
                     continue
 
                 # Starting Board Verification (the "strict" check). If we

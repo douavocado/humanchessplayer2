@@ -67,5 +67,57 @@ class StartLikeBoardFensTest(unittest.TestCase):
         self.assertEqual(first, chess_com.start_like_board_fens())
 
 
+class NewGameClockWindowTest(unittest.TestCase):
+    """
+    The clock window is asymmetric on purpose.
+
+    A chess clock only counts down, so a reading *below* the nominal start
+    time only means we were late to notice, while a reading *above* it means
+    a different, longer time control. The original symmetric
+    +/- max(10, 10%) window treated those the same and threw away real games:
+    a 1+0 game spotted nine seconds in sat right on the boundary.
+    """
+
+    def setUp(self):
+        self.sites = [LichessSite(), ChessComSite()]
+
+    def _accepts(self, seconds, expected):
+        return [s.clock_matches_new_game(seconds, expected) for s in self.sites]
+
+    def test_accepts_clock_at_full_time(self):
+        self.assertTrue(all(self._accepts(60, 60)))
+
+    def test_accepts_a_clock_that_has_run_down(self):
+        # 51s is the live case that was missed; 40 and 30 would have been
+        # rejected outright by the old +/-10s window.
+        for seconds in (51, 45, 40, 30, 25):
+            with self.subTest(seconds=seconds):
+                self.assertTrue(all(self._accepts(seconds, 60)))
+
+    def test_rejects_a_clock_that_has_run_down_too_far(self):
+        self.assertFalse(any(self._accepts(20, 60)))
+
+    def test_rejects_a_clock_above_the_start_time(self):
+        """A clock cannot gain time, so this is a different time control."""
+        self.assertFalse(any(self._accepts(90, 60)))
+
+    def test_tolerates_small_overshoot(self):
+        """Rounding and OCR slack, not a different time control."""
+        self.assertTrue(all(self._accepts(62, 60)))
+
+    def test_distinguishes_the_time_controls_that_matter(self):
+        # expecting bullet, finding a 3+0 board
+        self.assertFalse(any(self._accepts(180, 60)))
+        # expecting 3+0, finding a bullet board
+        self.assertFalse(any(self._accepts(60, 180)))
+
+    def test_zero_is_never_a_starting_time(self):
+        self.assertFalse(any(self._accepts(0, 60)))
+        self.assertFalse(any(self._accepts(0, None)))
+
+    def test_unknown_expected_time_accepts_any_running_clock(self):
+        self.assertTrue(all(self._accepts(37, None)))
+
+
 if __name__ == "__main__":
     unittest.main()

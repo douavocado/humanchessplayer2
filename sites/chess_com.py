@@ -190,11 +190,21 @@ class ChessComSite(Site):
         res = read_clock(capture_bottom_clock(state="play"))
         if res is None:
             return None
+        if not self.clock_matches_new_game(res, expected_time):
+            return None
 
-        if expected_time is not None:
-            if res == 0 or abs(res - expected_time) > max(10, expected_time * 0.1):
-                return None
-        elif res == 0:
+        # A start-like board plus a running clock is not enough on its own
+        # here, because two screens that are not a live game look exactly like
+        # one. An *aborted* game leaves the starting position on the board
+        # with the clock still at full time, and the lobby renders a preview
+        # board at the starting position beside a clock showing the selected
+        # time control. Lichess separates these with its start-state clock
+        # coordinates; chess.com's clock never moves, so the discriminators
+        # have to come from the rest of the screen.
+        if self.game_over_screen_visible():
+            return None
+        if self._find_start_game_button() is not None:
+            # The Start Game button only exists in the lobby.
             return None
 
         try:
