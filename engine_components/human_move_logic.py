@@ -98,7 +98,7 @@ def get_human_probabilities(engine, board, game_phase, log=True):
     # we flip the board if it is black's turn
     if board.turn == chess.WHITE:
         dummy_board = board.copy()
-    if board.turn == chess.BLACK:
+    else:
         dummy_board = board.mirror()
     _, nn_top_move_dic = scorer.get_move_dic(dummy_board, san=False, top=100)
 
@@ -379,11 +379,12 @@ def alter_move_probabilties(engine, move_dic, board, prev_board=None, prev_prev_
     if prev_board is not None:
         takeback_moves = []
         res = patch_fens(prev_board.fen(), board.fen(), depth_lim=1)
-        last_move_uci = res[0][0]
-        for move_uci in move_dic.keys():
-            if is_takeback(prev_board, last_move_uci, move_uci):
-                move_dic[move_uci] *= takeback_sf
-                takeback_moves.append(board.san(chess.Move.from_uci(move_uci)))
+        if res is not None:
+            last_move_uci = res[0][0]
+            for move_uci in move_dic.keys():
+                if is_takeback(prev_board, last_move_uci, move_uci):
+                    move_dic[move_uci] *= takeback_sf
+                    takeback_moves.append(board.san(chess.Move.from_uci(move_uci)))
         if log:
             engine.log += "Found takeback moves: {} \n".format(takeback_moves)
 
@@ -503,16 +504,17 @@ def alter_move_probabilties(engine, move_dic, board, prev_board=None, prev_prev_
     if prev_board is not None and prev_prev_board is not None:
         repeat_moves = []
         res = patch_fens(prev_prev_board.fen(), prev_board.fen(), depth_lim=1)
-        last_own_move_uci = res[0][0]
-        last_own_move_obj = chess.Move.from_uci(last_own_move_uci)
-        previous_reach = set([move.to_square for move in prev_prev_board.legal_moves if move.from_square == last_own_move_obj.from_square] + [last_own_move_obj.from_square])
-        for move_uci in move_dic.keys():
-            move_obj = chess.Move.from_uci(move_uci)
-            if move_obj.from_square == last_own_move_obj.to_square: # if we are moving the same piece as before
-                to_square = move_obj.to_square
-                if to_square in previous_reach: # then we have found repeating move
-                    move_dic[move_uci] *= repeat_sf_dic[engine.mood]
-                    repeat_moves.append(board.san(move_obj))
+        if res is not None:
+            last_own_move_uci = res[0][0]
+            last_own_move_obj = chess.Move.from_uci(last_own_move_uci)
+            previous_reach = set([move.to_square for move in prev_prev_board.legal_moves if move.from_square == last_own_move_obj.from_square] + [last_own_move_obj.from_square])
+            for move_uci in move_dic.keys():
+                move_obj = chess.Move.from_uci(move_uci)
+                if move_obj.from_square == last_own_move_obj.to_square: # if we are moving the same piece as before
+                    to_square = move_obj.to_square
+                    if to_square in previous_reach: # then we have found repeating move
+                        move_dic[move_uci] *= repeat_sf_dic[engine.mood]
+                        repeat_moves.append(board.san(move_obj))
 
         if log:
             engine.log += "Found moves that are repetitive, and waste time: {} \n".format(repeat_moves)

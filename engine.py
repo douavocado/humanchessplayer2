@@ -7,6 +7,7 @@ Created on Tue Sep 10 11:29:08 2024
 import datetime
 import os
 import time
+from typing import Any, Optional
 import numpy as np
 import random
 import torch
@@ -50,12 +51,15 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: str = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", quickness: float = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", quickness: Optional[float] = None):
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
         self.quickness = QUICKNESS if quickness is None else quickness
-        self.input_info = {
+        # Values are populated by update_info; typed loosely (Any) since
+        # they're heterogeneous (bool, list, int, float) and set as a batch
+        # via dict.update() rather than individual attribute assignment.
+        self.input_info: dict[str, Any] = {
             "side": None,
             "fens": None,
             "self_clock_times" : None,
@@ -82,7 +86,7 @@ class Engine:
         self.stockfish_scorer = StockFishSelector(PATH_TO_STOCKFISH)
         self.stockfish_engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
         self.ponder_stockfish_engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_PONDER_STOCKFISH)
-        self.stockfish_analysis = None
+        self.stockfish_analysis: Optional[list] = None
         self._stockfish_path = PATH_TO_STOCKFISH  # Store for potential engine restart
 
         # initialise move prob altering model
@@ -96,7 +100,7 @@ class Engine:
         self.opening_book = chess.polyglot.open_reader(opening_book_path)
         
         # lucas statistics for the current position
-        self.lucas_analytics = {
+        self.lucas_analytics: dict[str, Any] = {
             "complexity": None,
             "win_prob": None,
             "eff_mob": None,
@@ -106,29 +110,29 @@ class Engine:
         # Position "sharpness": win-probability spread across the top candidate
         # moves (see _compute_sharpness). Drives the "complicated position"
         # time-scaling in _get_time_taken. 0.25 is the neutral / critical point.
-        self.sharpness = None
+        self.sharpness: Optional[float] = None
         # The sharpness scan itself ({move_uci: win_chance} from the deep
         # narrow scan), kept for _chosen_move_wc_loss. None if the scan failed.
-        self.sharpness_scan = None
+        self.sharpness_scan: Optional[dict] = None
         # Per-game character (see _sample_game_character): one draw per game
         # each, resampled at every game boundary, None until the first
         # update_info. game_pace_sf scales every base think time in
         # _get_time_taken; game_premove_sf scales every premove-search
         # probability in make_move.
-        self.game_pace_sf = None
-        self.game_premove_sf = None
-        self.game_snap_gate = None
-        self.game_ponder_snap_sf = None
-        self.game_scramble_skill = None
-        self.game_scramble_fire_sf = None
-        self.game_ponder_width = None
-        self._last_seen_ply = None
+        self.game_pace_sf: Optional[float] = None
+        self.game_premove_sf: Optional[float] = None
+        self.game_snap_gate: Optional[float] = None
+        self.game_ponder_snap_sf: Optional[float] = None
+        self.game_scramble_skill: Optional[float] = None
+        self.game_scramble_fire_sf: Optional[float] = None
+        self.game_ponder_width: Optional[int] = None
+        self._last_seen_ply: Optional[int] = None
         # A bool to track whether we have updated analytics following updating info
         self.analytics_updated = False
-        
+
         self.playing_level = playing_level
         self.mood = "confident"
-        self.just_blundered = None
+        self.just_blundered: Optional[bool] = None
         
     def _write_log(self):
         """ Writes buffered log messages to the log file. """
@@ -151,7 +155,7 @@ class Engine:
         """
         return simple_decisions.decide_human_filters(self)
     
-    def get_stockfish_move(self, board:chess.Board = None, analysis=None, last_move_uci:str = None, log:bool = True, ):
+    def get_stockfish_move(self, board:Optional[chess.Board] = None, analysis=None, last_move_uci:Optional[str] = None, log:bool = True, ):
         """ Uses board information to get a move strictly from stockfish with no human
             filters. Very fast, and only called for in necessary situations (when in
             super low time)
@@ -160,7 +164,7 @@ class Engine:
         """
         return stockfish_move_logic.get_stockfish_move(self, board=board, analysis=analysis, last_move_uci=last_move_uci, log=log)
 
-    def adjust_human_prob(self, move_dic, board : chess.Board = None):
+    def adjust_human_prob(self, move_dic, board : Optional[chess.Board] = None):
         """ Given move_dic from human probabilities, we normalise the probabilities
             i.e. make them less extreme depending on how low on time we are as well
             as how far in the game we are (remaining pieces) as well as how far we
@@ -177,7 +181,7 @@ class Engine:
         """
         return human_move_logic.get_human_probabilities(self, board, game_phase, log=log)
 
-    def _alter_move_prob_nn(self, move_dic : dict, board:chess.Board, prev_board:chess.Board = None, prev_prev_board:chess.Board = None, log:bool = True):
+    def _alter_move_prob_nn(self, move_dic : dict, board:chess.Board, prev_board:Optional[chess.Board] = None, prev_prev_board:Optional[chess.Board] = None, log:bool = True):
         """ Given a move dictionary with move uci as key and value as their unaltered
             probabilities, we alter the probabilties to make moves stick out more
             (for example hanging pieces more likely to be moved etc).
@@ -186,7 +190,7 @@ class Engine:
         """
         return human_move_logic.alter_move_prob_nn(self, move_dic, board, prev_board=prev_board, prev_prev_board=prev_prev_board, log=log)
 
-    def _alter_move_probabilties(self, move_dic : dict, board:chess.Board, prev_board:chess.Board = None, prev_prev_board:chess.Board = None, log:bool = True):
+    def _alter_move_probabilties(self, move_dic : dict, board:chess.Board, prev_board:Optional[chess.Board] = None, prev_prev_board:Optional[chess.Board] = None, log:bool = True):
         """ Given a move dictionary with move uci as key and value as their unaltered
             probabilities, we alter the probabilties to make moves stick out more
             (for example hanging pieces more likely to be moved etc).
@@ -266,6 +270,7 @@ class Engine:
         # Now cross reference with already computed analysis object to find evaluations
         # Eval scores are from the perspective of the board turn, so from ourselves
         human_move_evals = {}
+        assert self.stockfish_analysis is not None  # populated by calculate_analytics, called before get_human_move
         for analysis_object in self.stockfish_analysis:
             move_uci = analysis_object['pv'][0].uci()
             if move_uci in root_moves:
@@ -364,7 +369,7 @@ class Engine:
         self.log += "Decided output move from human move function: {} \n".format(self.current_board.san(chess.Move.from_uci(top_move)))
         return top_move
     
-    def _ponder_moves(self, board:chess.Board, move_ucis: list, search_width:int, prev_board: chess.Board = None, log:bool = True, use_ponder:bool=False):
+    def _ponder_moves(self, board:chess.Board, move_ucis: list, search_width:int, prev_board: Optional[chess.Board] = None, log:bool = True, use_ponder:bool=False):
         """ We ponder on the given board position, and consider the moves given by the list
             of move_ucis. We again use human probabilities to narrow our search width.
 
@@ -375,7 +380,7 @@ class Engine:
         """
         return ponderer.ponder_moves(self, board, move_ucis, search_width, prev_board=prev_board, log=log, use_ponder=use_ponder)
 
-    def _recursive_ponder(self, board: chess.Board, move_uci : str, no_root_moves, depth: int, prev_board: chess.Board = None, limit = None, use_ponder:bool= False):
+    def _recursive_ponder(self, board: chess.Board, move_uci : str, no_root_moves, depth: int, prev_board: Optional[chess.Board] = None, limit = None, use_ponder:bool= False):
         """ Recursive function for getting evaluations during pondering.
 
             Returns [move_uci eval, depth_considered]
@@ -384,7 +389,7 @@ class Engine:
         """
         return ponderer.recursive_ponder(self, board, move_uci, no_root_moves, depth, prev_board=prev_board, limit=limit, use_ponder=use_ponder)
 
-    def _re_evaluate(self, board:chess.Board, re_evaluate_moves: list, no_root_moves: int, depth:int = 0, prev_board:chess.Board = None, limit=None, use_ponder:bool=False):
+    def _re_evaluate(self, board:chess.Board, re_evaluate_moves: list, no_root_moves: int, depth:int = 0, prev_board:Optional[chess.Board] = None, limit=None, use_ponder:bool=False):
         """ Given a list of move_ucis, apply them to the current board and re_evaluate
             them using top human_moves only. This gives a non_accurate evaluation
             and simulates human foresight not being exhaustive.
@@ -580,7 +585,7 @@ class Engine:
         """ Our latest clock reading, or None before the first update. """
         return ponderer.own_time_or_none(self)
 
-    def stockfish_ponder(self, board:chess.Board, time_allowed : float, ponder_width:int, use_ponder:bool = False, root_moves:list= None):
+    def stockfish_ponder(self, board:chess.Board, time_allowed : float, ponder_width:int, use_ponder:bool = False, root_moves:Optional[list]= None):
         """ Given a board position that is not our side turn, we ponder moves using
             stockfish and return a dictionary with has key board_fen and value uci.
             This method is much faster than self.ponder()
@@ -588,7 +593,7 @@ class Engine:
         """
         return ponderer.stockfish_ponder(self, board, time_allowed, ponder_width, use_ponder=use_ponder, root_moves=root_moves)
 
-    def ponder(self, board: chess.Board, time_allowed : float, search_width : int, time_per_position : float = 0.1, prev_board:chess.Board = None, ponder_width: int = None, use_ponder:bool=False):
+    def ponder(self, board: chess.Board, time_allowed : float, search_width : int, time_per_position : float = 0.1, prev_board:Optional[chess.Board] = None, ponder_width: Optional[int] = None, use_ponder:bool=False):
         """ Given a board position that is not our (side) turn, we ponder possible moves
             and return a dictionary which has key board_fen (so position only), and value uci in response.
             Time allowed represents how much we may ponder. Time per position is roughly
@@ -606,7 +611,7 @@ class Engine:
         """
         return mood_manager.check_opp_blunder(self)
     
-    def make_move(self, log:bool=True, seed:int=None):
+    def make_move(self, log:bool=True, seed:Optional[int]=None):
         """ This is the main function for prompting a move output from the engine. 
 
             Returns a dictionary with the following outputs:
@@ -631,7 +636,7 @@ class Engine:
             self._write_log()
         
         move_start = time.time()
-        return_dic = {}
+        return_dic: dict[str, Any] = {}
         self.log += "Make move function called. \n"
         
         # If analytics for the position hasn't been called, issue warning.
@@ -646,6 +651,7 @@ class Engine:
         if log == True:
             self._write_log()
         if obvious_move_found == True:
+            assert obvious_move is not None  # obvious_move_found guarantees a real move uci
             return_dic["move_made"] = obvious_move
             use_human_filters = False
             # Decide how much time we are going to spend (including thinking time)

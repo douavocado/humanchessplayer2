@@ -104,7 +104,13 @@ def check_obvious_move(engine):
             engine.log += "Detected top move {} is a takeback. \n".format(best_move_uci)
             # check if the takeback is a blunder, if it is then capturing it is not an obvious moved
             last_move_obj = chess.Move.from_uci(last_move_uci)
-            if calculate_threatened_levels(last_move_obj.to_square, prev_board)  <= 0 and PIECE_VALS[engine.current_board.piece_type_at(last_move_obj.to_square)] - PIECE_VALS[prev_board.piece_type_at(last_move_obj.to_square)] > 0.6:
+            # to_square is the takeback's capture target, so both boards have
+            # a real piece there (the invariant piece_type_at's Optional
+            # return can't express).
+            current_piece_type = engine.current_board.piece_type_at(last_move_obj.to_square)
+            prev_piece_type = prev_board.piece_type_at(last_move_obj.to_square)
+            assert current_piece_type is not None and prev_piece_type is not None
+            if calculate_threatened_levels(last_move_obj.to_square, prev_board)  <= 0 and PIECE_VALS[current_piece_type] - PIECE_VALS[prev_piece_type] > 0.6:
                 # then it is blunder
                 engine.log += "Opponent has captured a piece that was not enpris: {}, not considering it as takeback. \n".format(prev_board.san(last_move_obj))
                 engine.opponent_just_blundered = True

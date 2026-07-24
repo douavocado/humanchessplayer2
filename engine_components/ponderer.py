@@ -289,6 +289,7 @@ def ponder(engine, board, time_allowed, search_width, time_per_position=0.1, pre
 
         # decide ponder depth and width
         ponder_width = 1 # min ponder width
+        ponder_depth = 1  # always overwritten below (max_ponder_no >= 1 here); default keeps the static type checker happy
         for i in range(max_ponder_no):
             ponder_depth = round(variations_allowed / ((max_ponder_no-i) * search_width))
             if ponder_depth >= 2:
