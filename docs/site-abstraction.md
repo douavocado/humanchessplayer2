@@ -6,8 +6,7 @@ under each stage below.
 chess.com interaction is now implemented too: resign is a single click with
 no confirmation step, and the lobby sequence (Play -> Play Online ->
 time-control dropdown -> control -> Start Game) is calibrated from the
-find_new_game_* screenshots. The one remaining gap on either site is
-**promotion**, which no client has ever handled explicitly.
+find_new_game_* screenshots.
 
 ## The problem
 
@@ -357,10 +356,11 @@ Each stage is independently shippable and independently verifiable.
   colour search returns the right button in both the collapsed and open
   states, and `None` on an in-game screenshot, so it cannot invent a button
   where there is no lobby.
-- Still not covered anywhere: **promotion**. `find_clicks()` ignores the
-  promotion piece in the UCI entirely and only clicks from/to, so whatever
-  handles it today is implicit. chess.com's promotion picker will need
-  explicit handling.
+- **Promotion needs no handling.** `find_clicks()` ignores the promotion
+  piece in the UCI and only clicks from/to, which is correct: both sites are
+  configured to auto-queen, so the from/to click completes the move. The
+  consequence is that underpromotion cannot be played - an accepted
+  limitation of the mouse interface, not an outstanding bug.
 
 **Stage 3 — retire the lichess clock-state vocabulary**
 - Replace `state="start1"|...` with site-declared states; chess.com's profile
@@ -432,9 +432,8 @@ piece templates would have survived.
 3. **Premove semantics** — does the client's move-linking need to know that
    chess.com draws unconfirmed premoves? Likely yes; needs its own
    investigation against `update_dynamic_info_from_fullimage`.
-4. **Promotion** — `find_clicks()` (`clients/mp_original.py:1775`) ignores the
-   promotion piece in the UCI entirely and only clicks from/to. Whatever
-   handles promotion today is implicit; chess.com's picker likely needs
-   explicit handling.
+4. **Promotion** — resolved: both sites auto-queen, so clicking from/to
+   completes the move. Underpromotion is unreachable through the mouse
+   interface and is accepted as such.
 5. **Older clients** — `mp_client.py` and `multiprocessing_client_one_game.py`
    call `game_over_found()` unguarded. Migrate them, or formally retire them?
