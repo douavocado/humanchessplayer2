@@ -43,7 +43,8 @@ GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "golden")
 # eval-derived floats get a tolerance well clear of that observed ceiling.
 # Discrete outputs (move chosen, mood, every decide_*/check_obvious_move
 # result) were rock-stable across dozens of repeated runs and are compared
-# exactly below.
+# exactly below, except get_stockfish_move's own output -- see
+# INFORMATIONAL_FIELDS below.
 FLOAT_REL_TOL = 0.05
 FLOAT_ABS_TOL = 0.15
 # lucas_win_prob is read directly off that same 20ms-capped scan (not just
@@ -61,7 +62,12 @@ FIELD_ABS_TOL = {"lucas_win_prob": 25.0}
 # predates this slice -- just didn't surface in the smaller sample checked
 # when premover.py was extracted). A discrete field can't take a numeric
 # tolerance, so it's recorded for visibility but not required to match.
-INFORMATIONAL_FIELDS = {"premove"}
+# get_stockfish_move ranks candidates off that same 20ms-capped
+# stockfish_analysis scan, so it inherits the same jitter: on
+# flag_race_scramble/seed=12345 it was observed to flip between "d7d6" and
+# "c5b6" across otherwise-identical repeated runs (reproduced twice in 9
+# back-to-back runs with zero code changes). Same treatment as premove.
+INFORMATIONAL_FIELDS = {"premove", "stockfish_move"}
 
 
 def _seed_all(seed):
