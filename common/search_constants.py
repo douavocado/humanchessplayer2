@@ -140,3 +140,14 @@ MAX_CALC_DEPTH_COEFF = 2.5
 # sub-10s moves instantly off preparation. Cost: shallower per-position
 # evals for the pondered replies.
 PONDER_TIME_PER_POSITION = 0.05
+
+# ---------------------------------------------------------------------------
+# 7. Opening book candidate width (engine_components/opening_book.py)
+# ---------------------------------------------------------------------------
+# How many polyglot entries at a matched position are eligible for
+# weighted_choice; entries beyond this are excluded outright (not just
+# down-weighted). The repertoire book is small and deliberately narrow by
+# construction (rarely more than 2-3 real branches at any position), so its
+# cap is tighter than the broad fallback book's.
+OPENING_REPERTOIRE_TOP_N = 3
+OPENING_BOOK_TOP_N = 5

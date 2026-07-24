@@ -22,6 +22,7 @@ from common.board_information import (
 from common.utils import check_safe_premove
 from common.constants import FLAG_RACE_TIME
 from common.search_constants import PREMOVE_SCAN_MULTIPV
+from engine_components import opening_book
 
 
 def get_premove(engine, board, side, takeback_only=False):
@@ -68,12 +69,8 @@ def get_premove(engine, board, side, takeback_only=False):
     # if we are in the opening, then check whether we could respond with opening database move
     game_phase = phase_of_game(dummy_board)
     if game_phase == "opening":
-        result = list(engine.opening_book.find_all(dummy_board))
-        if len(result) != 0:
-            engine.log += "Found matching position in opening database during premove search. Using it to find premove in opening.\n"
-            excluded_moves = [res.move for res in result[5:]]
-            # Now get weighted choice of move to play
-            played_move_obj = engine.opening_book.weighted_choice(dummy_board, exclude_moves=excluded_moves).move
+        played_move_obj = opening_book.consult_book(engine, dummy_board)
+        if played_move_obj is not None:
             engine.log += "Chosen premove from opening book: {} \n".format(dummy_board.san(played_move_obj))
             # we need to check whether this is a safe premove or not
             if check_safe_premove(board, played_move_obj.uci()) == True:

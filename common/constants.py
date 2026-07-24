@@ -9,6 +9,11 @@ import math
 PATH_TO_STOCKFISH = "Engines/stockfish17-ubuntu"
 PATH_TO_PONDER_STOCKFISH = "Engines/stockfish16-ubuntu"
 
+# Small, hand-curated polyglot book of one account's real recurring opening
+# habits (see assets/data/Opening_books/build_repertoire.py), consulted
+# before the broad OPENING_BOOK_PATH -- see engine_components/opening_book.py.
+OPENING_REPERTOIRE_PATH = "assets/data/Opening_books/repertoire.bin"
+
 MOVE_FROM_WEIGHTS_OP_PTH = 'models/model_weights/piece_selector_opening_weights.pth'
 MOVE_FROM_WEIGHTS_MID_PTH = 'models/model_weights/piece_selector_midgame_weights.pth'
 MOVE_FROM_WEIGHTS_END_PTH = 'models/model_weights/piece_selector_endgame_weights.pth'

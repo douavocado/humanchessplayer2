@@ -26,7 +26,8 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               HUMAN_EVAL_NOISE_SCALE,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH,
-                              DEPTH_PENALTY, ZERO_DEPTH_PENALTY, CAPTURE_BONUS
+                              DEPTH_PENALTY, ZERO_DEPTH_PENALTY, CAPTURE_BONUS,
+                              OPENING_REPERTOIRE_PATH,
                               )
 
 from common.board_information import (
@@ -37,7 +38,7 @@ from common.search_constants import (
 )
 from common.utils import (extend_mate_score)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
-from engine_components import simple_decisions, state, mood_manager, stockfish_move_logic, human_move_logic, decision_logic, game_character, premover, ponderer
+from engine_components import simple_decisions, state, mood_manager, stockfish_move_logic, human_move_logic, decision_logic, game_character, premover, ponderer, opening_book
 
 # TODO: Intelligent premoves
 # TODO: 3-fold repetition logic
@@ -51,7 +52,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", quickness: Optional[float] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None):
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
@@ -96,8 +97,11 @@ class Engine:
         self.move_prob_altering_model.eval()
         self.move_prob_altering_model.load_params_dict()
         
-        # Getting opening books
+        # Getting opening books: repertoire_book (small, hand-curated,
+        # consulted first) and opening_book (broad fallback) -- see
+        # engine_components/opening_book.py.
         self.opening_book = chess.polyglot.open_reader(opening_book_path)
+        self.repertoire_book = chess.polyglot.open_reader(repertoire_book_path)
         
         # lucas statistics for the current position
         self.lucas_analytics: dict[str, Any] = {
@@ -222,16 +226,9 @@ class Engine:
         # If the game phase is in the opening, we check to see if we can use our opening
         # book to return a move
         if game_phase == "opening":
-            self.log += "Detected game phase is opening, consulting opening book for matching positions. \n"
-            result = list(self.opening_book.find_all(self.current_board))
-            if len(result) != 0:
-                self.log += "Found matching position in opening database. Outputting top results: \n"
-                top_results = result[:5]
-                for res in top_results:
-                    self.log += "{} : {} \n".format(self.current_board.san(res.move), res.weight)
-                excluded_moves = [res.move for res in result[5:]]
-                # Now get weighted choice of move to play
-                played_move_obj = self.opening_book.weighted_choice(self.current_board, exclude_moves=excluded_moves).move
+            self.log += "Detected game phase is opening, consulting opening books for matching positions. \n"
+            played_move_obj = opening_book.consult_book(self, self.current_board)
+            if played_move_obj is not None:
                 self.log += "Chosen move from opening book: {} \n".format(self.current_board.san(played_move_obj))
                 return played_move_obj.uci()
             else:
