@@ -100,6 +100,53 @@ def scramble_fire_veto(board_now: chess.Board, move_uci: str) -> bool:
     dummy_board.push(move_obj)
     return calculate_threatened_levels(move_obj.to_square, dummy_board) - gain > 0.6
 
+def premove_render_placement(fen: str, move_uci: str, premove_uci: str):
+    """
+    The board placement a site *draws* while an unconfirmed premove sits on it.
+
+    chess.com (and Lichess) show a queued premove immediately, with the piece
+    already on its destination square, before the opponent has moved and
+    before the server has accepted anything. The result is frequently a
+    position that never existed and could never exist: queue Bg7xe5 expecting
+    a recapture, and if the opponent plays something else the board is drawn
+    with our bishop standing on our own knight's square.
+
+    Scraping that and treating it as reality is how a phantom position enters
+    the game state - it links to nothing, so the history gets wiped and the
+    engine is asked to move from a board that is not on the server. Computing
+    the expected drawing here lets a scan recognise its own premove and
+    discard the frame instead.
+
+    The premove is applied *as a rendering*, not as a chess move: the piece is
+    relocated whatever occupies the destination, because that is what the site
+    draws. Our own move is the opposite - it must be genuinely legal, or we
+    are not describing a board the site ever drew, and a wrong prediction here
+    is worse than none: it could match a real scan and discard it. Returns the
+    board placement (no side/castling fields), or None if the inputs do not
+    describe a premove that could be drawn.
+    """
+    if not premove_uci:
+        return None
+    try:
+        board = chess.Board(fen)
+        if move_uci:
+            move = chess.Move.from_uci(move_uci)
+            if move not in board.legal_moves:
+                return None
+            board.push(move)
+        premove = chess.Move.from_uci(premove_uci)
+        piece = board.piece_at(premove.from_square)
+        if piece is None:
+            return None
+        board.remove_piece_at(premove.from_square)
+        if premove.promotion:
+            piece = chess.Piece(premove.promotion, piece.color)
+        board.set_piece_at(premove.to_square, piece)
+        return board.board_fen()
+    except (ValueError, AssertionError):
+        return None
+
+
 def check_safe_premove(board:chess.Board, premove_uci: str):
     """ Given a position and a generated premove_uci, decide whether the move is deemed
         'safe'. That is opponent cannot/unlikely to play a move which leads to a significant

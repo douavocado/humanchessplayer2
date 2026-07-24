@@ -26,7 +26,7 @@ from common.move_timing import (MOVE_DELAY, DRAG_MOVE_DELAY, CLICK_MOVE_DELAY,
                                 click_settle_sleep, drag_probability,
                                 ponder_response_wait, scramble_response_wait,
                                 resign_pause)
-from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError
+from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError, premove_render_placement
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock,
@@ -230,6 +230,19 @@ MOVE_TIMING = {
 # move/premove observed in the wild came from acting on a fen frozen by
 # discarded mid-animation scans.
 AWAITING_FRESH_SCAN = False
+
+# Board placement the site is expected to be *drawing* while our queued
+# premove sits unconfirmed on it, or None. Sites show a premove immediately,
+# with the piece already on its destination, before the opponent has moved -
+# so the drawn board is frequently one that never existed and could not
+# exist (premove Bxe5 expecting a recapture, opponent plays elsewhere, and
+# our bishop is drawn standing on our own knight). Such a frame links to
+# nothing, and adopting it wipes the fen history and hands the engine a
+# position that is not on the server, which is how a live game came to try
+# an illegal move. Recorded when the premove is clicked and cleared as soon
+# as any scan links, since by then the premove has either played or been
+# cancelled.
+PREMOVE_RENDER_PLACEMENT = None
 
 # Below this much time on our own clock, skip the confirmation re-capture
 # for unlinkable scans and act on the first reading - a human under time
@@ -441,11 +454,12 @@ def await_new_game(timeout=60, expected_time=None):
 
 def set_game(starting_time):
     ''' Once client has found game, sets up game parameters. '''
-    global HOVER_SQUARE, GAME_INFO, LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO, PONDER_DIC, AWAITING_FRESH_SCAN
+    global HOVER_SQUARE, GAME_INFO, LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO, PONDER_DIC, AWAITING_FRESH_SCAN, PREMOVE_RENDER_PLACEMENT
 
     # resetting hover square
     HOVER_SQUARE = None
     AWAITING_FRESH_SCAN = False
+    PREMOVE_RENDER_PLACEMENT = None
     # getting game information, including the side the player is playing and the initial time
     board_img = capture_board()
 
@@ -706,7 +720,7 @@ def _link_candidates_for_unreadable_turn(fen_before, scraped_fen):
 
 def update_dynamic_info_from_fullimage():
     """ Scrape image information from screenshot and update info dic. """
-    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING, AWAITING_FRESH_SCAN
+    global LOG, DYNAMIC_INFO, GAME_INFO, MOVE_TIMING, AWAITING_FRESH_SCAN, PREMOVE_RENDER_PLACEMENT
     
     scan_start = time.time()
     
@@ -847,6 +861,8 @@ def update_dynamic_info_from_fullimage():
         res = patch_fens(prev_fen, now_fen)
         if res is not None:
             LOG += "Able to find linking move(s) between {} and {}: {} \n".format(prev_fen, now_fen, res)
+            # The premove has resolved one way or the other by now.
+            PREMOVE_RENDER_PLACEMENT = None
             last_moves, changed_fens = res
             del DYNAMIC_INFO["fens"][-2:]
             DYNAMIC_INFO["fens"].extend(changed_fens)
@@ -859,6 +875,18 @@ def update_dynamic_info_from_fullimage():
             # the fen state (and downstream, the engine input). Adopt the
             # resync only if the board reproduces on a second capture -
             # except under time pressure, where we act on first readings.
+            # Our own queued premove, drawn but not played. The
+            # confirmation re-capture below cannot catch this: the drawing is
+            # stable for as long as the premove sits there, so it reproduces
+            # perfectly and looks like a settled position rather than a
+            # transient misread.
+            if (PREMOVE_RENDER_PLACEMENT is not None
+                    and chess.Board(now_fen).board_fen() == PREMOVE_RENDER_PLACEMENT):
+                del DYNAMIC_INFO["fens"][-1]
+                LOG += "Scan shows our own unconfirmed premove drawn on the board ({}), not a real position. Discarding this frame. \n".format(
+                    PREMOVE_RENDER_PLACEMENT)
+                return
+
             if not _under_time_pressure() and not _confirm_board_stable(chess.Board(now_fen).board_fen(), bottom):
                 del DYNAMIC_INFO["fens"][-1]
                 LOG += "ERROR: Couldn't find linking move between fens {} and {}, and the new board did not survive a confirmation re-capture. Discarding this scan as a transient frame. \n".format(prev_fen, now_fen)
@@ -1305,7 +1333,7 @@ def make_move(move_uci:str, premove:str=None):
 
         Returns True if clicks were made successfully, else returns False
     """
-    global LOG, HOVER_SQUARE, MOVE_TIMING, AWAITING_FRESH_SCAN
+    global LOG, HOVER_SQUARE, MOVE_TIMING, AWAITING_FRESH_SCAN, PREMOVE_RENDER_PLACEMENT
 
     move_start_time = time.time()
     
@@ -1383,6 +1411,11 @@ def make_move(move_uci:str, premove:str=None):
         premove_time = (time.time() - premove_start) * 1000
         if successful:
             LOG += "Made clicks for the premove {} \n".format(premove)
+            # Remember what the site will now be drawing, so a scan can tell
+            # our own unconfirmed premove apart from a real position.
+            if SITE.renders_premoves_on_board and DYNAMIC_INFO["fens"]:
+                PREMOVE_RENDER_PLACEMENT = premove_render_placement(
+                    DYNAMIC_INFO["fens"][-1], move_uci, premove)
         else:
             LOG += "Tried to make clicks for premove {}, but made mouse slip. \n".format(premove)
     
