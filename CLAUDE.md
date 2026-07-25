@@ -30,7 +30,7 @@ The bot cannot be run end-to-end here — it needs an X11 display and a live Lic
 ## Runtime prerequisites (not in git)
 
 - Stockfish binaries in `Engines/` — paths configured in `common/constants.py` (`PATH_TO_STOCKFISH`, `PATH_TO_PONDER_STOCKFISH`).
-- Model weights (`*.pth`) in `models/model_weights/`.
+- Model weights: all 8 `*.pth` in `models/model_weights/` (`piece_selector_` and `piece_to_` × opening/midgame/endgame/defensive_tactics). Three of these were tracked by accident until 2026-07-25 despite this section and `.gitignore` both saying otherwise; they are now consistently untracked (recover from git history if a machine loses them).
 - Opening books at `assets/data/Opening_books/bullet.bin` (broad fallback) and `repertoire.bin` (small, hand-curated — see Opening repertoire below; regenerate via `scripts/utilities/build_repertoire.py`).
 - Calibration profile: env vars `HCP_CALIBRATION_FILE` (explicit JSON path) or `HCP_CALIBRATION_PROFILE` (resolves to `auto_calibration/calibrations/<profile>.json`); falls back to hardcoded 1920x1080 coordinates if unset.
 

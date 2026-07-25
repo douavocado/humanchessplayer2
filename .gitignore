@@ -10,6 +10,7 @@ logs/latest
 
 # Debug output
 debug_detection_output/**/*
+scripts/debug_output/
 
 # Offline screenshots
 **/offline_screenshots/**/*
