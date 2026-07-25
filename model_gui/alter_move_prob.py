@@ -1,3 +1,15 @@
+"""Standalone fork of the hand-crafted move-probability heuristic, kept here
+because model_gui is its only consumer.
+
+The engine's own copy is engine_components/human_move_logic.py:
+alter_move_probabilties, which is itself dormant -- its call sites in
+engine.py and ponderer.py are commented out in favour of the NN path
+(alter_move_prob_nn). That copy takes an Engine as its first argument and
+reads engine.mood / engine.log; this one takes `mood` directly and returns
+its log, so the GUI can call it without constructing an Engine (which would
+spawn two Stockfish subprocesses and load four MoveScorers just to render a
+position). Keep the two in sync by hand if the heuristic is ever revived.
+"""
 import chess
 import numpy as np
 

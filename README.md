@@ -1,101 +1,114 @@
 # HumanChessPlayer
 
-A sophisticated chess bot that emulates human-like play on online chess platforms.
+A chess bot that plays on Lichess and chess.com by looking at the screen and
+moving the mouse, with human-like move choice and timing.
 
 ## Overview
 
-HumanChessPlayer is an AI system designed to play chess online while simulating human-like behaviour. It combines neural network models trained on human gameplay data with chess engine analysis to produce moves that appear natural and human-like rather than purely engine-driven.
+The bot reads the board from screen captures (OpenCV template matching), picks
+moves by blending neural networks trained on human games with Stockfish
+analysis, and plays them by moving the physical cursor. There is no site API
+and no browser automation — from the site's perspective it is a person at a
+computer.
 
-The system controls the mouse cursor to interact with web-based chess interfaces (primarily Lichess), making moves with realistic timing, occasional mouse slips, and varying "moods" that affect play style.
+"Human-like" is the whole point, and it is treated as a measurable property
+rather than a vibe: the `cheat_detection/` package scores the bot against a
+baseline of real 2300+ bullet games and flags any feature where it looks
+un-human — including being *too consistent*, which is its own tell.
 
-## Features
+## Layout
 
-- **Human-like Move Selection**: Uses neural networks trained on human gameplay data to select moves that mimic human play patterns
-- **Realistic Mouse Movement**: Simulates natural mouse movements with appropriate timing and occasional inaccuracies
-- **Variable Playing Strength**: Configurable difficulty level to match desired ELO rating
-- **Adaptive Time Management**: Adjusts thinking time based on game situation and remaining clock time
-- **Multiple Game Support**: Can play multiple games and participate in arena tournaments
-- **Configurable "Moods"**: Changes playing style based on game situation (confident, cocky, cautious, tilted, etc.)
-- **Position Analysis**: Uses Stockfish for position evaluation while applying human-like filters to the engine output
+| Directory | What lives there |
+|---|---|
+| `engine.py`, `engine_components/` | Move selection. `engine.py` is the composition root; the logic sits in `engine_components/` as plain functions taking the `Engine` as their first argument. |
+| `clients/mp_original.py` | The client: game loop, mouse automation, scan-reliability guards. |
+| `sites/` | *How a site behaves* — how a new game, a game end, and a result are recognised; resign and lobby flows. Lichess and chess.com. |
+| `auto_calibration/` | *Where things are on this screen* — fits board and UI coordinates from screenshots into a reusable profile. |
+| `chessimage/` | Screen capture, FEN extraction, clock OCR, rating OCR. |
+| `models/` | The neural networks and their weights. |
+| `common/` | Shared constants, board analysis, timing formulas, utilities. |
+| `simulation/` | Offline bot-vs-bot self-play with simulated clocks — no display or mouse needed. |
+| `cheat_detection/` | Human-likeness analysis (CLI + Tkinter GUI) against a real-game baseline. |
+| `testing/` | Client regression tests and the engine parity harness. |
+
+`sites/` versus `auto_calibration/` is the axis that matters: behaviour over
+time versus pixel geometry. A calibration profile binds the two by recording
+which site it was fitted against. See `docs/site-abstraction.md`.
 
 ## Requirements
 
-- Python 3.x
-- PyTorch
-- python-chess
-- PyAutoGUI
-- OpenCV
-- Stockfish chess engine
-
-A complete list of dependencies is available in the `requirements.txt` file.
+- Python 3.12 (the repo expects a virtualenv at `venv/`)
+- Stockfish, plus the Python dependencies in `requirements.txt`
+- Tesseract (`sudo apt install tesseract-ocr`) for clock and rating OCR
+- An X11 display — the bot drives a real cursor
 
 ## Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/humanchessplayer.git
-   cd humanchessplayer
-   ```
+```bash
+python3.12 -m venv venv
+venv/bin/pip install -r requirements.txt
+```
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+Then supply the pieces that are deliberately not in git:
 
-3. Download and install Stockfish:
-   - Download the latest version from [Stockfish website](https://stockfishchess.org/download/)
-   - Extract to the Engines directory
-   - Make sure the path in `common/constants.py` points to your Stockfish executable
+- **Stockfish binaries** in `Engines/` — paths set in `common/constants.py`
+  (`PATH_TO_STOCKFISH`, `PATH_TO_PONDER_STOCKFISH`)
+- **Model weights** (9 `.pth` files) in `models/model_weights/`
+- **Opening books** at `assets/data/Opening_books/bullet.bin` and
+  `repertoire.bin` (build the latter with
+  `scripts/utilities/build_repertoire.py`)
+- **A calibration profile** — fit one for your screen:
+
+  ```bash
+  venv/bin/python -m auto_calibration.offline_fitter \
+      --dir <screenshots/> --profile desktop --site lichess --extract-all --visualise
+  ```
+
+  Select it at runtime with `--calibration-profile desktop`, or the
+  `HCP_CALIBRATION_PROFILE` environment variable. Without one the bot falls
+  back to hardcoded 1920x1080 coordinates.
 
 ## Usage
 
-### Basic Usage
-
 ```bash
-python main.py
+venv/bin/python main.py                      # 5 bullet games at 60+0
+venv/bin/python main.py -t 180 -i 2 -g 10    # ten 3+2 games
+venv/bin/python main.py -a -b                # arena, always berserk
+venv/bin/python main.py -d 5 -q 2.5 -m 2     # override strength and pacing
 ```
 
-### Command Line Arguments
+Run `venv/bin/python main.py --help` for the full flag list. The ones worth
+knowing beyond the basics:
 
-- `-t, --time`: Time control in seconds (default: 60)
-- `-i, --increment`: Time control increment in seconds (default: 0)
-- `-g, --games`: Number of games to play (default: 5, only used when not in tournament mode)
-- `-a, --arena`: Tournament arena mode
-- `-b, --berserk`: Always berserk in tournament arena mode
-- `-d, --difficulty`: Engine difficulty level (overrides default from constants)
-- `-q, --quickness`: Engine quickness (overrides default from constants)
-- `-m, --mouse-quickness`: Mouse quickness (overrides default from constants)
+| Flag | Effect |
+|---|---|
+| `--calibration-profile NAME` / `--calibration-file PATH` | Which screen profile to use |
+| `--debug` | Dry run: only test new-game detection, with visualisations |
+| `--offline` | Replay saved screenshots instead of capturing live |
+| `--log-level` | Defaults to `PERF`, so live games record timing data the simulator calibrates against |
 
-Example for playing in an arena tournament with berserk mode:
+## Development
+
+The bot cannot be exercised end-to-end without a display and a live game, so
+most verification is offline:
+
 ```bash
-python main.py -a -b
+venv/bin/python -m unittest discover -s testing/client         # must stay green
+venv/bin/python -m unittest discover -s testing/engine_parity  # real-Stockfish golden master
+venv/bin/python -m auto_calibration.calibration_readback_test \
+    --screenshots auto_calibration/offline_screenshots/desktop --profile desktop
 ```
 
-Example for setting specific difficulty and quickness:
-```bash
-python main.py -d 5 -q 2.5 -m 2
-```
+Every client test is a regression from a real logged game; each file's
+docstring names the incident it came from. For behavioural work, `simulation/`
+plays the bot against itself with simulated clocks and writes PGNs that feed
+straight into `cheat_detection/`.
 
-## Components
-
-- **Engine**: Core logic for move selection and evaluation
-- **Clients**: Interface with chess websites (primarily Lichess)
-- **Models**: Neural network models for human-like move selection
-- **Common**: Shared utilities and constants
-- **Chessimage**: Screen capture and image processing for board state recognition
-
-## Customisation
-
-The system's behaviour can be customised by modifying values in the `common/constants.py` file:
-
-- `DIFFICULTY`: Overall playing strength (higher values = stronger play)
-- `QUICKNESS`: Speed of move calculation (higher values = slower moves)
-- `MOUSE_QUICKNESS`: Speed of mouse movement (higher values = slower mouse)
+Tuning knobs (`DIFFICULTY`, `QUICKNESS`, `MOUSE_QUICKNESS`, `RESOLUTION_SCALE`)
+live in `common/constants.py`. `CLAUDE.md` documents the reasoning behind the
+timing and human-likeness parameters in far more depth than this file.
 
 ## Disclaimer
 
-This project is for educational and research purposes only. Please use responsibly and in accordance with the terms of service of any chess platforms.
-
-## License
-
-[Your license information here] 
+For educational and research purposes. Using it on a live site will breach
+that site's terms of service.

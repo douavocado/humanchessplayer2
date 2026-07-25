@@ -89,13 +89,13 @@ def render_board_with_moves(board, move_probs, size=400, max_arrows=5):
     return svg
 
 if __name__ == "__main__":
-    # Example usage
+    # Example usage. Run from the repo root: python -m model_gui.visualizer
+    from models.models import MoveScorer
+    from common.constants import MOVE_FROM_WEIGHTS_MID_PTH, MOVE_TO_WEIGHTS_MID_PTH
+
     board = chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
-    move_scorer = MoveScorer(
-        move_from_weights_path="../models/model_weights/piece_selector_midgame_weights.pth",
-        move_to_weights_path="../models/model_weights/piece_to_weights_midgame.pth"
-    )
-    
+    move_scorer = MoveScorer(MOVE_FROM_WEIGHTS_MID_PTH, MOVE_TO_WEIGHTS_MID_PTH)
+
     _, move_probs = move_scorer.get_move_dic(board, san=True, top=10)
     svg = render_board_with_moves(board, move_probs)
     

@@ -17,8 +17,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import the MoveScorer from models
 from models.models import MoveScorer
 from visualizer import get_move_arrows
-from scripts.utilities.alter_move_prob import alter_move_probabilties
-from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from model_gui.alter_move_prob import alter_move_probabilties
+from models.alter_move_prob_nn import AlterMoveProbNN
 from common.board_information import (
     phase_of_game, king_danger, get_lucas_analytics, is_under_mate_threat
 )

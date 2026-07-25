@@ -4,12 +4,15 @@ This directory contains tools for analyzing the performance of different MoveSco
 
 ## Overview
 
-The analysis framework evaluates five types of MoveScorers:
+The analysis framework evaluates four types of MoveScorers, matching what
+`engine.py` loads at startup:
 1. **Opening** - Specializes in opening positions
 2. **Midgame** - Specializes in midgame positions
 3. **Endgame** - Specializes in endgame positions
-4. **Tactics** - Specializes in tactical positions
-5. **Defensive_tactics** - Specializes in defensive tactical positions
+4. **Defensive_tactics** - Specializes in defensive tactical positions
+
+A fifth, plain **Tactics** scorer was described here historically but has no
+weights in `models/model_weights/` and is not loaded by the engine.
 
 Each model is evaluated based on the rank at which it predicts the actual move played in real games, with ranks capped at 10. The goal is to determine in which chess situations (characterized by Lucas analytics) each model performs best.
 
