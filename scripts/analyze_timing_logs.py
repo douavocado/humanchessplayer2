@@ -50,12 +50,17 @@ def main():
     import sys
     from pathlib import Path
     
-    # Default to the attached log file
-    log_path = Path(__file__).parent.parent / "Client_logs" / "2025-12-1523_35_28.960581.txt"
-    
     if len(sys.argv) > 1:
         log_path = Path(sys.argv[1])
-    
+    else:
+        # Default to the newest session's client log. The old default pointed
+        # at a single file in the retired Client_logs/ directory.
+        sessions = sorted((Path(__file__).parent.parent / "logs" / "sessions").glob("*/client.log"))
+        if not sessions:
+            print("No session logs found under logs/sessions/. Pass a log path explicitly.")
+            return
+        log_path = sessions[-1]
+
     print(f"Analyzing: {log_path}\n")
     parse_client_log(log_path)
     

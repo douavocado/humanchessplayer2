@@ -1,7 +1,6 @@
-# Ignore contents but keep folder structure
-# Legacy log directories (deprecated - use logs/ instead)
-Engine_logs/**/*
-Client_logs/**/*
+# Legacy error dir. Client_logs/ and Engine_logs/ were deleted on 2026-07-25
+# (nothing had written to them since 2025-12-17). Error_files/ is still a
+# live fallback target in clients/mp_original.py:142.
 Error_files/**
 
 # New unified logs directory
