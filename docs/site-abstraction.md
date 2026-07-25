@@ -124,6 +124,9 @@ not assumed.
 | Board theme affects piece templates | — | no (dark square is zeroed; cream light square is shared) |
 | Board theme affects highlight colours | yes | yes — `colour_scheme` must be re-fitted per theme |
 | Premoves drawn on the board | (unverified) | **Yes** — piece shown on its destination |
+| Player info position | beside the clock, right panel | **above and below the board** |
+| Player rows swap with our colour | yes | **no** — we are always the bottom player |
+| Rating presentation | its own element, a bare number | inline after the username: `squishypup (1453)` |
 
 The premove row matters beyond cosmetics: chess.com's board genuinely shows a
 position that is *not* the server position while a premove is queued. Any
@@ -385,6 +388,42 @@ a second of our own clock at the start of every game.
 *Verification:* all 56 historically-blocked screens now permit the seek; a
 live game whose clock is moving still blocks it. Pinned by
 `testing/client/test_seek_guard.py`, both sites.
+
+### 7. Not every site difference belongs in `sites/`
+
+The player/rating rows are the counter-example, and worth recording because
+the instinct to reach for `sites/` was wrong.
+
+Every one of the 19 games on 2026-07-25 logged `Detected ratings: Opponent:
+None, Self: None`. Two causes, and they sit in different layers:
+
+- **Where the rating is.** Lichess keeps player info beside the clock in the
+  right panel; chess.com puts it above and below the *board* and never swaps
+  the two rows by colour. `CoordinateCalculator` only knew the Lichess shape,
+  so fitting chess.com placed the 70px crop 100px right of the number — it
+  was reading `53)`.
+- **What the rating looks like.** chess.com writes it inline after a
+  username of unpredictable length, so even a well-placed crop is a line of
+  text, not a number. `capture_rating` did `int()` on the whole string.
+
+Neither belongs in `sites/`. The first is a *where*, which is
+`auto_calibration/`'s job — so `CoordinateCalculator` gained a `site` and a
+chess.com branch deriving the rows from the board in step units, and
+`offline_fitter --site` records the choice in `calibration_info` (the same
+field `Site` binding already reads). The second is not site-specific at all
+once stated properly: `rating_from_words()` prefers a bracketed 3-4 digit
+word and otherwise accepts a bare number only as the line's sole word, which
+is precisely the Lichess crop. One reader, both sites.
+
+The rule this suggests: `sites/` is for *behaviour over time* — what a game
+start looks like, when a game has ended, what a click flow does.
+Presentation and position, even when they differ per site, stay in the
+vision layer with the site as a parameter.
+
+*Verification:* 14/14 readings on the chess.com game-start screens (0
+before), every value on the mid-game production frames inside a plausible
+band, and all 26 Lichess screenshots returning exactly their previous
+values. Pinned by `testing/client/test_rating_ocr.py`.
 
 ## Migration stages
 
