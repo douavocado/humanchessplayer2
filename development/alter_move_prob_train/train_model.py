@@ -24,7 +24,8 @@ from sklearn.model_selection import train_test_split
 # Add the main directory to the path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from models.alter_move_prob_nn import AlterMoveProbNN
+from common.constants import ALTER_MOVE_PROB_WEIGHTS_PTH
 
 
 class AlterMoveProbDataset(Dataset):
@@ -119,7 +120,7 @@ class AlterMoveProbDataset(Dataset):
 
 
 def train_model(data_file='development/alter_move_prob_train/data/training_data.csv', batch_size=32, epochs=50, learning_rate=0.001, 
-                save_path='development/alter_move_prob_train/data/alter_move_prob_nn.pth', rank_cutoff=3):
+                save_path='models/model_weights/alter_move_prob_nn.pth', rank_cutoff=3):
     """
     Train the AlterMoveProbNN model.
     
@@ -134,8 +135,10 @@ def train_model(data_file='development/alter_move_prob_train/data/training_data.
     # Create the model
     model = AlterMoveProbNN()
 
-    # Load pretrained weights if they exist
-    best_model_path = 'development/alter_move_prob_train/data/alter_move_prob_nn_best.pth'
+    # Load pretrained weights if they exist. This is the same file engine.py
+    # loads at startup, so training resumes from -- and overwrites -- the
+    # weights actually in production.
+    best_model_path = ALTER_MOVE_PROB_WEIGHTS_PTH
     if os.path.exists(best_model_path):
         try:
             model.load_state_dict(torch.load(best_model_path, weights_only=True))

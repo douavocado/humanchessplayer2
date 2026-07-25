@@ -11,7 +11,7 @@ import pandas as pd
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from models.alter_move_prob_nn import AlterMoveProbNN
 from common.board_information import phase_of_game
 
 # Initialise the AlterMoveProbNN model

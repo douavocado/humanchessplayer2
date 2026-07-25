@@ -22,6 +22,7 @@ MOVE_TO_WEIGHTS_MID_PTH = 'models/model_weights/piece_to_midgame_weights.pth'
 MOVE_TO_WEIGHTS_END_PTH = 'models/model_weights/piece_to_endgame_weights.pth'
 MOVE_TO_WEIGHTS_OP_PTH = 'models/model_weights/piece_to_opening_weights.pth'
 MOVE_TO_WEIGHTS_TACTICS_PTH = 'models/model_weights/piece_to_defensive_tactics_weights.pth'
+ALTER_MOVE_PROB_WEIGHTS_PTH = 'models/model_weights/alter_move_prob_nn_best.pth'
 
 # Alter move probability model constants
 WEIRD_MOVE_SD_DIC = {"opening" : 0.01,

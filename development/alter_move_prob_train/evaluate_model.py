@@ -22,7 +22,7 @@ from datetime import datetime
 # Add the main directory to the path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from models.alter_move_prob_nn import AlterMoveProbNN
 from common.board_information import phase_of_game
 
 
@@ -225,7 +225,7 @@ def main():
     print(f"Test set size: {len(test_data)} samples")
     
     # Find model files to evaluate
-    model_files = glob.glob('development/alter_move_prob_train/data/alter_move_prob_nn*.pth')
+    model_files = glob.glob('models/model_weights/alter_move_prob_nn*.pth')
     if not model_files:
         print("No model file found. Please run train_model.py first.")
         return

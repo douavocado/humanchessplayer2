@@ -17,11 +17,12 @@ import chess.engine
 import chess.polyglot
 
 from models.models import MoveScorer, StockFishSelector
-from development.alter_move_prob_train.alter_move_prob_nn import AlterMoveProbNN
+from models.alter_move_prob_nn import AlterMoveProbNN
 
 from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_FROM_WEIGHTS_MID_PTH,
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH,
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
+                              ALTER_MOVE_PROB_WEIGHTS_PTH,
                               QUICKNESS,
                               HUMAN_EVAL_NOISE_SCALE,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
@@ -91,9 +92,8 @@ class Engine:
         self._stockfish_path = PATH_TO_STOCKFISH  # Store for potential engine restart
 
         # initialise move prob altering model
-        model_weights_path = "development/alter_move_prob_train/data/alter_move_prob_nn_best.pth"
         self.move_prob_altering_model = AlterMoveProbNN()
-        self.move_prob_altering_model.load_state_dict(torch.load(model_weights_path, weights_only=True))
+        self.move_prob_altering_model.load_state_dict(torch.load(ALTER_MOVE_PROB_WEIGHTS_PTH, weights_only=True))
         self.move_prob_altering_model.eval()
         self.move_prob_altering_model.load_params_dict()
         
