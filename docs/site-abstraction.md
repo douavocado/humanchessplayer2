@@ -297,6 +297,56 @@ and abandonment endings. Note `aborted` is a genuinely distinct case — the
 board is still the starting position, so board-outcome detection cannot fire
 and the modal is the *only* signal.
 
+### 5. chess.com new-game detection
+
+The mirror problem of section 4, and harder: nothing on chess.com marks a game
+as having *begun*. Lichess moves its clock into a start-state position, which
+is a positive signal; chess.com's clock never moves, and the lobby renders a
+preview board **at the starting position** beside a clock showing the
+**selected time control**. So "full clock over a start-like board, no result
+modal" — every signal the site otherwise has — is equally true of
+`/play/online` and of a game two seconds old.
+
+Two live false positives on 2026-07-25 came from exactly that: the bot
+announced a new game on opening the Play Online page, and again while sitting
+in the seek queue, then played into a board nobody was moving. The green
+**Start Game** button was the only lobby discriminator and it is not one — it
+is *absent* while a seek is running, replaced by "Searching..".
+
+The fix is positive evidence of a **game page**: the move-navigation bar
+(`|< < > > >|`) under the moves list, which exists on every game page and on
+no lobby screen. It is read relatively — the fraction of the band brighter
+than that band's own median — so a theme change moves content and background
+together. Measured across the whole chess.com corpus:
+
+| Group | bright fraction of the band |
+|---|---|
+| every game page (playing, ended, aborted) | **0.063 – 0.135** |
+| every lobby screen (home, /play, New Game panel, searching) | **0.000** |
+
+The lobby panel is *perfectly* flat there, so the 0.03 threshold guards
+against stray antialiasing rather than splitting a distribution.
+
+Two deliberate calls:
+
+- A capture failure returns `None`, not `False`. A window narrower than the
+  calibration puts the panel outside the captured area, and failing closed
+  there would mean the bot never finds a game again; unknown degrades to the
+  previous behaviour instead.
+- **No "is the clock ticking?" confirmation.** Re-reading both clocks ~1.3s
+  apart is the strongest possible liveness proof and would also cover an
+  aborted game whose modal had been dismissed, but it costs 1.3s off our own
+  clock at the start of every game — material in bullet — and the
+  modal-presence test already covers ended and aborted games with a 6×
+  margin.
+
+*Verification:* against the 34 full-resolution chess.com screenshots, the
+three genuine game starts are still detected (including the one white move in
+case), all four lobby screens and every mid-game and ended-game frame are
+refused — 0 mismatches. Pinned by
+`testing/client/test_chess_com_new_game_page.py`, which synthesises the bands
+from measured greys because the screenshots are gitignored.
+
 ## Migration stages
 
 Each stage is independently shippable and independently verifiable.

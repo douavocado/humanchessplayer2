@@ -89,6 +89,25 @@ TIME_CONTROL_CELLS = {
 # Search box for the green "Start Game" button, board-relative.
 START_GAME_SEARCH_BOX = (8.27, -0.15, 1.88, 3.63)   # x, y, w, h in steps
 
+# --- "are we on a game page at all?" --------------------------------------
+# The move-navigation bar (|< < > > >|) under the moves list. It exists on
+# every game page and on no lobby screen, which is the one thing the clock and
+# the board cannot tell us apart: the lobby renders a full-time clock over a
+# starting-position preview board, and so does a game that has just begun.
+#
+# Board-relative like the other panel geometry here, and measured across the
+# corpus at 3840x2160 (x 2700-3180, y 2040-2102 in absolute pixels).
+GAME_CONTROLS_BOX = (8.18, 7.93, 2.05, 0.27)   # x, y, w, h in steps
+
+# The bar is read as "content brighter than the panel it sits on" rather than
+# as an absolute colour, so a theme change moves both together. Measured
+# separation over the corpus: 0.063-0.135 of the band on every game page
+# (playing, ended, aborted), and 0.000 on every lobby screen - the lobby panel
+# is *perfectly* flat there, so the threshold is only guarding against stray
+# antialiasing, not splitting a distribution.
+GAME_CONTROLS_CONTRAST = 12
+GAME_CONTROLS_MIN_FRACTION = 0.03
+
 
 class ChessComSite(Site):
     name = "chess_com"
@@ -190,11 +209,12 @@ class ChessComSite(Site):
     def detect_new_game(self, expected_time=None):
         """
         A new game is a readable clock at the (only) clock position, showing
-        the expected starting time, over a starting-position board.
+        the expected starting time, over a starting-position board, on a page
+        that is actually a game.
 
         Unlike Lichess there is no start-state clock position to look for and
         so no vertical-offset check to distinguish it from the play clock -
-        the board is doing that work here instead.
+        the board and the game-page test are doing that work here instead.
         """
         res = read_clock(capture_bottom_clock(state="play"))
         if res is None:
@@ -202,15 +222,25 @@ class ChessComSite(Site):
         if not self.clock_matches_new_game(res, expected_time):
             return None
 
-        # A start-like board plus a running clock is not enough on its own
-        # here, because two screens that are not a live game look exactly like
-        # one. An *aborted* game leaves the starting position on the board
-        # with the clock still at full time, and the lobby renders a preview
-        # board at the starting position beside a clock showing the selected
-        # time control. Lichess separates these with its start-state clock
+        # A start-like board plus a full clock is not enough on its own here,
+        # because two screens that are not a live game look exactly like one.
+        # An *aborted* game leaves the starting position on the board with the
+        # clock still at full time, and the lobby renders a preview board at
+        # the starting position beside a clock showing the selected time
+        # control. Lichess separates these with its start-state clock
         # coordinates; chess.com's clock never moves, so the discriminators
         # have to come from the rest of the screen.
         if self.game_over_screen_visible():
+            return None
+
+        # Positive evidence that this is a game page, not a lobby one. The
+        # Start Game button alone is not that evidence: it is absent on the
+        # /play panel once a seek is running ("Searching.." replaces it) and
+        # on any other lobby state that does not happen to show it, and the
+        # board and clock look identical throughout. Both were live false
+        # positives - the bot "found" a game on the Play Online page and again
+        # while queueing, then played into a board nobody was moving.
+        if self._game_controls_visible() is False:
             return None
         if self._find_start_game_button() is not None:
             # The Start Game button only exists in the lobby.
@@ -292,6 +322,35 @@ class ChessComSite(Site):
         bx, by, bw, bh = (int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP]),
                           int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
         return x0 + bx + bw // 2, y0 + by + bh // 2
+
+    def _game_controls_visible(self):
+        """
+        Whether the move-navigation bar is on screen, i.e. whether this is a
+        game page at all.
+
+        Returns None - not False - when the band could not be captured, so
+        that a window narrower than the calibration (where the panel is off
+        the captured area entirely) degrades to the old behaviour rather than
+        wedging the bot into never finding a game.
+        """
+        x0 = int(START_X + GAME_CONTROLS_BOX[0] * STEP)
+        y0 = int(START_Y + GAME_CONTROLS_BOX[1] * STEP)
+        w = int(GAME_CONTROLS_BOX[2] * STEP)
+        h = int(GAME_CONTROLS_BOX[3] * STEP)
+        try:
+            band = SCREEN_CAPTURE.capture((x0, y0, w, h))
+        except Exception:
+            return None
+        if band is None or band.size == 0:
+            return None
+        band = band.copy()[:, :, :3]
+        # A clipped capture is not the region we measured the thresholds on.
+        if band.shape[0] < 0.8 * h or band.shape[1] < 0.8 * w:
+            return None
+        gray = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY).astype(np.int16)
+        background = np.median(gray)
+        fraction = float((gray >= background + GAME_CONTROLS_CONTRAST).mean())
+        return fraction >= GAME_CONTROLS_MIN_FRACTION
 
     def _wait_for_new_game_panel(self, actions, timeout=NEW_GAME_PANEL_TIMEOUT):
         """
