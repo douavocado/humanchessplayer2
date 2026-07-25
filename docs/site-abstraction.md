@@ -91,9 +91,9 @@ it when the play-position clock is *unreadable* first
 (`clients/mp_original.py:1206`). Since chess.com's play clock is always
 readable, that path effectively cannot fire there. The readback test's
 "False Ends" metric calls `game_over_found()` in isolation and therefore
-overstates production risk for `mp_original.py`. The older
-`clients/mp_client.py:604` and
-`clients/multiprocessing_client_one_game.py:591` *do* call it unguarded.
+overstates production risk for `mp_original.py`. The older clients did call
+it unguarded, which is where the original severity reading came from; they
+have since been deleted (2026-07-25), so the gated path is now the only one.
 
 ## The split
 
@@ -563,5 +563,10 @@ piece templates would have survived.
 4. **Promotion** — resolved: both sites auto-queen, so clicking from/to
    completes the move. Underpromotion is unreachable through the mouse
    interface and is accepted as such.
-5. **Older clients** — `mp_client.py` and `multiprocessing_client_one_game.py`
-   call `game_over_found()` unguarded. Migrate them, or formally retire them?
+5. **Older clients** — resolved: retired. `mp_client.py`,
+   `multiprocessing_client_one_game.py`, `no_scrape_lichess_client.py`,
+   `lichess_client.py` and `test_pyautogui_mp.py` were deleted on 2026-07-25
+   rather than migrated — none had been touched since their initial commit,
+   nothing imported them, and `lichess_client.py` no longer even parsed
+   clean (an undefined `new_game_found()`). `mp_original.py` is the only
+   client. Recover from git history if a behaviour comparison is ever needed.
