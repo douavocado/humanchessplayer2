@@ -880,6 +880,18 @@ def _crash_handler(exc_type, exc_value, exc_tb):
 
 sys.excepthook = _crash_handler
 
+# How long to wait for a game to appear after seeking. This is matchmaking
+# time, not page-load time: at a narrow rating range a pairing routinely takes
+# tens of seconds. The old 5s meant a successful seek still reported "skipped"
+# and got re-clicked while it was still queueing.
+NEW_GAME_WAIT = 60
+
+# Consecutive fruitless waits before giving up on the session, so a lobby that
+# never pairs (or a seek that never lands) ends the run instead of clicking at
+# it forever.
+MAX_CONSECUTIVE_MISSES = 3
+
+
 def setup_game_with_retries(starting_time, attempts=3):
     """
     Run set_game with retries. Right after a game is found the page can
@@ -952,31 +964,47 @@ else:
     session_logger.client_info(f"Starting casual mode: {args.games} games at {tc_str}")
     
     games = args.games
-    for i in range(games):
+    games_played = 0
+    consecutive_misses = 0
+    while games_played < games:
         time.sleep(0.5)
-        res = await_new_game(timeout=5, expected_time=args.time)
-        if res is not None:
-            session_logger.start_game({
-                "Mode": "Casual",
-                "Game": f"{i+1}/{games}",
-                "Time Control": tc_str,
-                "Initial Time": f"{res}s"
-            })
-            if setup_game_with_retries(res):
-                run_game(arena=False)
-                session_logger.end_game()
-                print("Finished game {}".format(i+1))
-                if i < games-1:
-                    new_game(tc_str)
-            else:
-                session_logger.client_error("Game setup failed, skipping game")
-                print("Game setup failed, skipping.")
-                session_logger.end_game()
-                if i < games-1:
-                    new_game(tc_str)
-        elif i < games-1:
-            session_logger.client_warn(f"Game {i+1} skipped, seeking again")
-            print("Skipped game, trying to seek again.")
+        res = await_new_game(timeout=NEW_GAME_WAIT, expected_time=args.time)
+        if res is None:
+            # A wait that times out is not a game. Counting it as one used to
+            # burn the whole --games budget in under a minute of an unlucky
+            # queue, while the seek that would have filled it never got the
+            # time to pair.
+            consecutive_misses += 1
+            if consecutive_misses >= MAX_CONSECUTIVE_MISSES:
+                session_logger.client_error(
+                    f"No game appeared in {MAX_CONSECUTIVE_MISSES} attempts of "
+                    f"{NEW_GAME_WAIT}s, giving up")
+                print("No game appeared after several attempts, stopping.")
+                break
+            session_logger.client_warn(
+                f"No game within {NEW_GAME_WAIT}s (attempt {consecutive_misses}"
+                f"/{MAX_CONSECUTIVE_MISSES}), seeking again")
+            print("No game appeared, trying to seek again.")
+            new_game(tc_str)
+            continue
+
+        consecutive_misses = 0
+        session_logger.start_game({
+            "Mode": "Casual",
+            "Game": f"{games_played+1}/{games}",
+            "Time Control": tc_str,
+            "Initial Time": f"{res}s"
+        })
+        if setup_game_with_retries(res):
+            run_game(arena=False)
+            session_logger.end_game()
+            games_played += 1
+            print("Finished game {}".format(games_played))
+        else:
+            session_logger.client_error("Game setup failed, skipping game")
+            print("Game setup failed, skipping.")
+            session_logger.end_game()
+        if games_played < games:
             new_game(tc_str)
 
 # Final cleanup

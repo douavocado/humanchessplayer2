@@ -23,6 +23,7 @@ from chessimage.image_scrape_utils import (
     STEP,
     capture_board,
     capture_bottom_clock,
+    capture_top_clock,
     get_fen_from_image,
     read_clock,
 )
@@ -107,6 +108,22 @@ GAME_CONTROLS_BOX = (8.18, 7.93, 2.05, 0.27)   # x, y, w, h in steps
 # antialiasing, not splitting a distribution.
 GAME_CONTROLS_CONTRAST = 12
 GAME_CONTROLS_MIN_FRACTION = 0.03
+
+# --- "is a game still being played?" ---------------------------------------
+# Asked before seeking, where the answer has to be liveness, not "a clock is
+# readable" - chess.com's clock keeps showing the final time on a finished
+# board, so the readable test is true forever after a game ends. A ticking
+# clock is the one unambiguous statement that a game is in progress: at least
+# one side's clock always runs during play (white's from the moment the game
+# starts), and both freeze the instant it ends.
+#
+# The wait is affordable *here* - it happens between games - which is why the
+# same test is deliberately not used in detect_new_game, where it would cost
+# a second of our own clock at the start of every game.
+CLOCK_TICK_WAIT = 1.2
+# A tick over that wait is a second or two. Anything larger is not a tick but
+# a different clock (a new game, a misread), and must not read as liveness.
+CLOCK_TICK_MAX_DROP = 6
 
 
 class ChessComSite(Site):
@@ -258,8 +275,53 @@ class ChessComSite(Site):
         return None
 
     # ------------------------------------------------------------------
-    # game end
+    # is a game still being played?
     # ------------------------------------------------------------------
+    def _read_clocks(self):
+        readings = []
+        for capture in (capture_bottom_clock, capture_top_clock):
+            try:
+                readings.append(read_clock(capture(state="play")))
+            except Exception:
+                readings.append(None)
+        return readings
+
+    def _clock_is_ticking(self, wait=CLOCK_TICK_WAIT):
+        """Whether either clock counts down over `wait` seconds."""
+        before = self._read_clocks()
+        if all(reading is None for reading in before):
+            return False
+        time.sleep(wait)
+        after = self._read_clocks()
+        for was, now in zip(before, after):
+            if was is None or now is None:
+                continue
+            if 0 < was - now <= CLOCK_TICK_MAX_DROP:
+                return True
+        return False
+
+    def live_game_on_screen(self):
+        """
+        Whether a game is still being played, for the pre-seek guard.
+
+        The inherited "a clock is readable at a live clock position" test
+        cannot answer this here: chess.com has one clock position, it never
+        moves, and a finished game goes on showing the time it ended with. So
+        the test was true on every dead board, and the only thing standing
+        between it and a refused seek was the result modal - which chess.com
+        replaces with its analysis panel a few seconds after the game ends.
+        The bot therefore refused to seek after most of its games, and only
+        got away with it on the *retry* after the new-game wait timed out.
+
+        Ticking is asked instead, which is what the guard actually means.
+        """
+        # Conclusive and free, and it skips the wait below.
+        if self.game_over_screen_visible():
+            return None
+        if not self._clock_is_ticking():
+            return None
+        return "a clock is ticking at the play position"
+
     # ------------------------------------------------------------------
     # interaction
     # ------------------------------------------------------------------

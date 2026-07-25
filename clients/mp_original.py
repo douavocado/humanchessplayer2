@@ -452,6 +452,7 @@ def await_new_game(timeout=60, expected_time=None):
         extra_info={'timeout': timeout, 'expected_time': expected_time})
     LOG += "ERROR: No new game found within {}s (expected_time={}). Debug files: {}. \n".format(
         timeout, expected_time, debug_files)
+    write_log()
 
     sound_file = "assets/audio/alert.mp3"
     os.system("mpg123 -q " + sound_file)
@@ -581,36 +582,19 @@ def write_log():
     LOG.write()
 
 def update_castling_rights(new_moves: list):
-    """ Given moves or new moves found, update castling rights based on these moves. """
+    """ Given moves or new moves found, update global castling rights. """
     global LOG, CASTLING_RIGHTS_FEN, DYNAMIC_INFO
-    LOG += "Updating castling rights from new move ucis {} with current castling rights {}. \n".format(new_moves, CASTLING_RIGHTS_FEN)
-    for letters in [CASTLING_RIGHTS_FEN[i:i+2] for i in range(0, len(CASTLING_RIGHTS_FEN), 2)]:
-        # make sure we have enough positions to evaluate whether the new_moves involved king moves or not
-        if len(DYNAMIC_INFO["fens"]) < len(new_moves):
-            LOG += "ERROR: Not enough fens (length {}) to update castling rights. Ignoring. \n".format(len(DYNAMIC_INFO["fens"]))
-            break
-        else:
-            from_i = None
-            move_objs = [chess.Move.from_uci(x) for x in new_moves]
-            for i, move_obj in enumerate(move_objs): # earliest first
-                if chess.Board(DYNAMIC_INFO["fens"][(i-len(new_moves)-1)]).piece_type_at(move_obj.from_square) == chess.KING:
-                    colour = chess.Board(DYNAMIC_INFO["fens"][(i-len(new_moves)-1)]).color_at(move_obj.from_square)
-                    if colour == chess.WHITE and letters == "KQ":
-                        # white king moved and had castling rights
-                        CASTLING_RIGHTS_FEN = CASTLING_RIGHTS_FEN.replace("KQ", "")
-                        LOG += "Removed white castling rights based on move {} \n".format(move_obj.uci())
-                    elif colour == chess.BLACK and letters == "kq":
-                        CASTLING_RIGHTS_FEN = CASTLING_RIGHTS_FEN.replace("kq", "")
-                        LOG += "Removed black castling rights based on move {} \n".format(move_obj.uci())
-                    from_i = i
-                    break
-            if from_i is not None:
-                # correct fens
-                for i in range(from_i - len(new_moves), 0):
-                    dummy_board = chess.Board(DYNAMIC_INFO["fens"][i])
-                    dummy_board.set_castling_fen(CASTLING_RIGHTS_FEN)
-                    DYNAMIC_INFO["fens"][i] = dummy_board.fen()
-                LOG += "Corrected castling rights of last {} fens: {} \n".format(len(new_moves)-from_i, DYNAMIC_INFO["fens"][from_i - len(new_moves):])
+    if not DYNAMIC_INFO.get("fens"):
+        return
+        
+    latest_board = chess.Board(DYNAMIC_INFO["fens"][-1])
+    new_rights = latest_board.castling_xfen()
+    if not new_rights:
+        new_rights = "-"
+        
+    if new_rights != CASTLING_RIGHTS_FEN:
+        LOG += "Updating castling rights from {} to {}. \n".format(CASTLING_RIGHTS_FEN, new_rights)
+        CASTLING_RIGHTS_FEN = new_rights
                     
 
 def update_dynamic_info_from_screenshot(move_obj: chess.Move):
@@ -1482,20 +1466,27 @@ def back_to_lobby():
     # can only execute if no human interference.
     if is_capslock_on():
         LOG += "Tried to go back to lobby but failed as caps lock is on. \n "
+        write_log()
         return False
     if not SITE.supports_back_to_lobby:
         LOG += "Tried to go back to lobby but {} has no lobby button. \n".format(SITE.name)
+        write_log()
         return False
-    return SITE.back_to_lobby(_site_actions())
+    result = SITE.back_to_lobby(_site_actions())
+    write_log()
+    return result
 
 def resign():
     global LOG
     # can only execute if no human interference.
     if is_capslock_on():
         LOG += "Tried resign the game but failed as caps lock is on. \n "
+        write_log()
         return False
 
-    return SITE.resign(_site_actions())
+    result = SITE.resign(_site_actions())
+    write_log()
+    return result
 
 def new_game(time_control="1+0"):
     """
@@ -1514,29 +1505,30 @@ def new_game(time_control="1+0"):
     # can only execute if no human interference.
     if is_capslock_on():
         LOG += "Tried to start new game with time control {} but failed as caps lock is on. \n ".format(time_control)
+        write_log()
         return False
 
-    # Never seek while a game is visibly live: the play-button clicks would
-    # land on the running game (this happens when game setup fails during
-    # the lobby-to-game page transition)
-    for state in SITE.live_clock_states:
-        if read_clock(capture_bottom_clock(state=state)) is not None:
-            # A readable clock could also be a FINISHED game whose end-state
-            # clock bleeds into this region; a visible end-of-game screen
-            # means the game is over and seeking is safe. This deliberately
-            # asks the site for a clock-independent answer - a readable clock
-            # is what raised the question, so a clock-based end test here
-            # would be circular.
-            if SITE.game_over_screen_visible():
-                break
-            debug_files = save_debug_screenshot(
-                "new_game_blocked_live_game", extra_info={'clock_state': state})
-            LOG += "ERROR: Tried to seek a new game but a live game appears to be on screen (clock readable in state {}). Not clicking. Debug files: {}. \n".format(
-                state, debug_files)
-            write_log()
-            return False
+    # Never seek while a game is being played: the play-button clicks would
+    # land on the running game (this happens when game setup fails during the
+    # lobby-to-game page transition). *Which* screen counts as a live game is
+    # the site's question, not the client's - the old test here was Lichess's
+    # (a clock readable at a live clock position), and on chess.com, whose
+    # clock never moves and keeps showing the final time, it was true on every
+    # finished board too.
+    live = SITE.live_game_on_screen()
+    if live is not None:
+        debug_files = save_debug_screenshot(
+            "new_game_blocked_live_game", extra_info={'reason': live})
+        LOG += "ERROR: Tried to seek a new game but a live game appears to be on screen ({}). Not clicking. Debug files: {}. \n".format(
+            live, debug_files)
+        write_log()
+        return False
 
-    return SITE.start_new_game(_site_actions(), time_control)
+    LOG += "Seeking a new game at {}. \n".format(time_control)
+    result = SITE.start_new_game(_site_actions(), time_control)
+    LOG += "Seek click-through {}. \n".format("completed" if result else "did not run")
+    write_log()
+    return result
 
 def find_clicks(move_uci):
     ''' Given a move in uci form, find the click from and click to positions. '''

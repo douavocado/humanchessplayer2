@@ -347,6 +347,45 @@ refused — 0 mismatches. Pinned by
 `testing/client/test_chess_com_new_game_page.py`, which synthesises the bands
 from measured greys because the screenshots are gitignored.
 
+### 6. The pre-seek guard is a site question too
+
+`new_game()` refuses to click through the lobby while a game is being played,
+because those clicks land on the running game. The test was Lichess's — a
+clock readable at a live clock position, with a visible end-of-game screen as
+the escape — and the client applied it to every site.
+
+On chess.com it is never false, for the same reason Method 3 was dropped from
+`detect_game_end`: one clock position, never moves, and a finished game goes
+on showing the time it ended with. The only thing between that and a refused
+seek was the result modal, and chess.com swaps the modal for its analysis
+panel a few seconds after the game ends. Across all 57
+`new_game_blocked_live_game` screenshots in `logs/`, the modal dark fraction
+was **0.000–0.126** — every one below the 0.20 threshold, i.e. no modal on
+screen in any of them. Every session on 2026-07-25 shows the shape:
+
+```
+GAME 1 ENDED
+[ERROR] Tried to seek a new game but a live game appears to be on screen
+[WARN ] Game 2 skipped, seeking again
+[INFO ] chess.com: found Start Game button at (2939, 308)   <- only the retry sought
+```
+
+So the bot never sought after its own games; it sought on the *retry* once the
+new-game wait had timed out, which is why a too-short wait and this guard
+looked like one bug.
+
+The question moved to `Site.live_game_on_screen()`, which returns the reason a
+game looks live or `None`. The default is the Lichess test unchanged.
+chess.com overrides it with the one unambiguous statement of liveness it has:
+**is a clock ticking** — two reads 1.2s apart, a drop of 1..6s. The wait is
+affordable here because it happens between games, which is exactly why the
+same test is *not* used in `detect_new_game` (section 5), where it would cost
+a second of our own clock at the start of every game.
+
+*Verification:* all 56 historically-blocked screens now permit the seek; a
+live game whose clock is moving still blocks it. Pinned by
+`testing/client/test_seek_guard.py`, both sites.
+
 ## Migration stages
 
 Each stage is independently shippable and independently verifiable.

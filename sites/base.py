@@ -157,6 +157,37 @@ class Site(ABC):
             self._start_like_fens = fens
         return self._start_like_fens
 
+    def live_game_on_screen(self) -> Optional[str]:
+        """
+        Why a game looks like it is still being played, or None if seeking a
+        new one is safe.
+
+        Asked before clicking through the lobby, because those clicks land on
+        the running game if one is up - which is what happens when game setup
+        fails during the lobby-to-game transition. The string is the reason,
+        for the caller to log.
+
+        The default is the Lichess test: a clock readable at a *live* clock
+        position, with a visible end-of-game screen as the escape. That escape
+        is asked of the site rather than of the clock deliberately - a
+        readable clock is what raised the question, so a clock-based end test
+        here would be circular. A site whose clock does not move between game
+        states gets no information out of this and must override.
+        """
+        from chessimage.image_scrape_utils import capture_bottom_clock, read_clock
+
+        for state in self.live_clock_states:
+            try:
+                reading = read_clock(capture_bottom_clock(state=state))
+            except Exception:
+                continue
+            if reading is None:
+                continue
+            if self.game_over_screen_visible():
+                return None
+            return f"clock readable in state {state}"
+        return None
+
     @abstractmethod
     def detect_new_game(self, expected_time: Optional[float] = None) -> Optional[int]:
         """Return our starting time in seconds if a new game is on screen."""
