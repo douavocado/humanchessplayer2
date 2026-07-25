@@ -10,6 +10,8 @@ absent. chess.com instead covers the board centre with a result modal, and
 that modal is what this site keys off.
 """
 
+import time
+
 import chess
 import cv2
 import numpy as np
@@ -55,10 +57,17 @@ TITLE_MATCH_THRESHOLD = 0.75
 # find_new_game_* screenshots. The left-nav entries are really anchored to the
 # window rather than the board, so board-relative is a convention borrowed for
 # consistency rather than a claim about how the page reflows.
-PLAY_MENU_OFFSET = (-2.71, 0.06)        # left nav "Play" (hover reveals submenu)
-PLAY_ONLINE_OFFSET = (-1.71, 0.06)      # submenu "Play Online"
+PLAY_MENU_OFFSET = (-2.71, 0.06)        # left nav "Play"
+PLAY_ONLINE_OFFSET = (9.14, 0.40)       # "Play Online" card on the /play panel
 TIME_CONTROL_DROPDOWN_OFFSET = (9.21, 0.25)   # the "1 min (Bullet)" selector
 START_GAME_FALLBACK_OFFSET = (9.21, 0.52)     # used only if colour search fails
+
+# How long to wait for the New Game panel after asking for it. Page loads
+# vary from instant to seconds, and every click after this point is at a
+# fixed position, so a fixed sleep is the wrong tool - see
+# _wait_for_new_game_panel.
+NEW_GAME_PANEL_TIMEOUT = 6.0
+NEW_GAME_PANEL_POLL = 0.4
 
 # The time-control grid, once the dropdown is open: three columns by category
 # row. chess.com's default grid has no 5+3, so that control is unreachable
@@ -284,10 +293,36 @@ class ChessComSite(Site):
                           int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
         return x0 + bx + bw // 2, y0 + by + bh // 2
 
+    def _wait_for_new_game_panel(self, actions, timeout=NEW_GAME_PANEL_TIMEOUT):
+        """
+        Wait for the New Game panel, returning the Start Game button position.
+
+        The green Start Game button exists only on that panel, so finding it
+        is the same question as "did the page we asked for actually load?".
+        Everything clicked after this point is at a fixed board-relative
+        position, so getting this wrong does not merely miss - it clicks
+        whatever else the page happens to be showing there.
+        """
+        deadline = time.time() + timeout
+        while True:
+            found = self._find_start_game_button()
+            if found is not None:
+                return found
+            if time.time() >= deadline:
+                return None
+            actions.sleep(NEW_GAME_PANEL_POLL)
+
     def start_new_game(self, actions, time_control="1+0"):
         """
         Seek a game: Play -> Play Online -> time-control dropdown -> the
         control -> Start Game.
+
+        "Play" in the left nav does open a hover submenu containing its own
+        Play Online entry, but clicking it navigates to /play, and the
+        submenu goes with the old page. The Play Online that matters is
+        therefore the card on the right-hand panel of /play, not the submenu
+        entry - driving the submenu left the bot clicking a menu that was no
+        longer on screen and it never reached the time-control grid.
 
         Unsupported time controls are refused rather than approximated. The
         default grid has no 5+3, and clicking the nearest cell would silently
@@ -305,13 +340,21 @@ class ChessComSite(Site):
             actions.click(pos[0], pos[1], tolerance=tolerance, clicks=1,
                           duration=np.random.uniform(0.3, 0.7))
 
-        # 1. left nav "Play", which reveals the submenu on hover
+        # 1. left nav "Play" -> the /play page and its right-hand panel
         click(self._at(PLAY_MENU_OFFSET))
-        actions.sleep(0.6)
+        actions.sleep(0.8)
 
-        # 2. "Play Online" opens the New Game panel
-        click(self._at(PLAY_ONLINE_OFFSET))
-        actions.sleep(1.5)
+        # 2. "Play Online" on that panel opens the New Game panel. Skipped if
+        #    that panel is already up, which is the normal case when a
+        #    previous seek left us there - clicking Play Online again from
+        #    the New Game panel would land on the time-control selector.
+        if self._find_start_game_button() is None:
+            click(self._at(PLAY_ONLINE_OFFSET))
+            if self._wait_for_new_game_panel(actions) is None:
+                actions.log(
+                    "chess.com: New Game panel never appeared after Play -> Play Online; "
+                    "not seeking rather than clicking blind. \n")
+                return False
 
         # 3. open the time-control dropdown
         click(self._at(TIME_CONTROL_DROPDOWN_OFFSET))
