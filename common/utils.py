@@ -200,50 +200,113 @@ def check_safe_premove(board:chess.Board, premove_uci: str):
     return True
         
     
+# A single ply changes at most four squares (castling, which moves both the
+# king and the rook); every other move changes two or three. So a placement
+# diff wider than 4 squares per remaining ply can never be closed, which is
+# what keeps the full-width search below affordable.
+_MAX_SQUARES_PER_PLY = 4
+
+# Ceiling on legal moves generated per patch_fens call. The search runs
+# inside the client's ~14 scans/second loop, so a pathological position must
+# fail fast rather than eat the clock. Measured worst case over the 24 real
+# link failures in one session batch was ~1200 moves generated.
+PATCH_FENS_MOVE_BUDGET = 20000
+
+
+def _placement_diff_mask(board, target):
+    """ Bitboard of the squares whose piece differs between two positions.
+
+        Zero exactly when the placements are identical, so it doubles as the
+        terminating test and as the search's pruning heuristic.
+    """
+    diff = board.occupied ^ target.occupied
+    for colour in (chess.WHITE, chess.BLACK):
+        for piece_type in chess.PIECE_TYPES:
+            diff |= (board.pieces_mask(piece_type, colour)
+                     ^ target.pieces_mask(piece_type, colour))
+    return diff
+
+
 def patch_fens(fen_before, fen_after, depth_lim:int=3):
     """ If get_move_made function is not able to find legal move to link the two fens
         we try to find in between fens to link the two fens.
-        
+
         If no in between board are found, return None. Else return the fens and
         the moves made in between.
-        
+
+        The search is full width: restricting it to moves whose from-square
+        changed occupancy misses every sequence where the square is refilled
+        before the target position, which is what our own premoves look like
+        (f1g2 then e1g1 puts the rook back on f1, so f1 never reads as
+        vacated). That filter cost ~1.3 history wipes per game live.
+
+        Deepening one ply at a time makes the shortest link win. That matters
+        because patch_fens can also "confirm" a longer piece-shuffle line
+        through the same position, and callers - the unreadable-turn fallback
+        above all - rank candidates on ply count.
+
         Note when looking to patch fens with 3 or more plies missing, no longer becomes accurate
-    """    
-    moves_found = _recurse_patch_fens(fen_before, fen_after, depth_lim, [])
-    if moves_found is not None:
-        return_fens = [fen_before]
-        dummy_board = chess.Board(fen_before)
-        for move_uci in moves_found:
-            dummy_board.push_uci(move_uci)
-            return_fens.append(dummy_board.fen())
-        return moves_found, return_fens
-    else:
+    """
+    target = chess.Board(fen_after)
+    for depth in range(0, depth_lim + 1):
+        board = chess.Board(fen_before)
+        budget = [PATCH_FENS_MOVE_BUDGET]
+        moves_found = _recurse_patch_fens(board, target, depth, [], budget)
+        if moves_found is not None:
+            return_fens = [fen_before]
+            dummy_board = chess.Board(fen_before)
+            for move_uci in moves_found:
+                dummy_board.push_uci(move_uci)
+                return_fens.append(dummy_board.fen())
+            return moves_found, return_fens
+    return None
+
+
+def _recurse_patch_fens(board, target, depth_lim, move_stack, budget):
+    """ Depth-limited search for a move sequence turning board into target.
+
+        board is mutated and restored in place - rebuilding it from a fen at
+        every node dominated the runtime (seconds per call, on a clock the
+        bot is trying not to flag).
+    """
+    diff = _placement_diff_mask(board, target)
+    if diff == 0 and board.turn == target.turn: # terminating condition
+        return list(move_stack)
+    if depth_lim <= 0: # second terminating condition to make sure search doesn't go on forever
         return None
-    
-def _recurse_patch_fens(fen_before, fen_after, depth_lim, move_stack):
-    before_b = chess.Board(fen_before)
-    after_b = chess.Board(fen_after)
-    if before_b.board_fen() == after_b.board_fen() and before_b.turn == after_b.turn: # terminating condition
-        return move_stack
-    elif depth_lim <= 0: # second terminating condition to make sure search doesn't go on forever
+    if chess.popcount(diff) > _MAX_SQUARES_PER_PLY * depth_lim:
         return None
-    else:
-        changed_squares = chess.SquareSet(before_b.occupied ^ after_b.occupied)
-        # find which squares were empty and which squares were occupied in the before board    
-        if before_b.turn == chess.WHITE:
-            moved_square_from = [sq for sq in changed_squares if before_b.color_at(sq) == chess.WHITE]
+
+    for move in _ordered_patch_moves(board, diff):
+        budget[0] -= 1
+        if budget[0] < 0:
+            return None
+        board.push(move)
+        move_stack.append(move.uci())
+        res = _recurse_patch_fens(board, target, depth_lim - 1, move_stack, budget)
+        move_stack.pop()
+        board.pop()
+        if res is not None:
+            return res
+    return None
+
+
+def _ordered_patch_moves(board, diff):
+    """ Legal moves, those touching a differing square first.
+
+        Ordering only - the search stays full width, because the linking move
+        can also be a transit move onto and off a square that ends up
+        matching. Trying the moves that visibly close the diff first finds
+        the real line sooner and cuts the work by roughly an order of
+        magnitude.
+    """
+    touching, other = [], []
+    for move in board.legal_moves:
+        if (chess.BB_SQUARES[move.from_square] | chess.BB_SQUARES[move.to_square]) & diff:
+            touching.append(move)
         else:
-            moved_square_from = [sq for sq in changed_squares if before_b.color_at(sq) == chess.BLACK]
-        
-        test_moves = [move for move in before_b.legal_moves if move.from_square in moved_square_from]
-        for move in test_moves:
-            new_move_stack = move_stack[:] + [move.uci()]
-            dummy_board = before_b.copy()
-            dummy_board.push(move)
-            res = _recurse_patch_fens(dummy_board.fen(), fen_after, depth_lim -1, new_move_stack)
-            if res is not None:
-                return res
-        return None
+            other.append(move)
+    return touching + other
 
 def flip_uci(move_uci):
     """ Given a move uci, return a uci which is the move flipped. For example
