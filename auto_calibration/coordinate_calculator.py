@@ -8,7 +8,7 @@ All positions are calculated relative to the detected board position.
 
 from typing import Dict, Optional, Tuple
 
-from .config import ChessConfig
+from .config import DEFAULT_SITE, ChessConfig
 
 
 class CoordinateCalculator:
@@ -46,6 +46,17 @@ class CoordinateCalculator:
     REF_CLOCK_GAP = 29          # Gap between board and clock
     REF_RESULT_X_OFFSET = 155   # From clock X (result is in the right panel)
     
+    # chess.com puts the player line above and below the *board*, not beside
+    # the clock, and writes the rating inline after the username - "squishypup
+    # (1453)" - so the crop has to be a whole name row and cannot be placed
+    # from the clock at all. Offsets are in board steps (one square), measured
+    # on a 1872px board at 3840x2160.
+    CHESS_COM_RATING_X_STEPS = 0.192       # From board left: past the avatar
+    CHESS_COM_RATING_WIDTH_STEPS = 1.795   # Long username plus the rating
+    CHESS_COM_RATING_HEIGHT_STEPS = 0.145
+    CHESS_COM_RATING_ABOVE_BOARD_STEPS = 0.244   # Top row, above the board
+    CHESS_COM_RATING_BELOW_BOARD_STEPS = 0.162   # Bottom row, below the board
+
     # Resign button position relative to notation
     # The button row (takeback, draw, resign) sits INSIDE the notation panel,
     # just above its bottom edge; the flag is the rightmost of the 3 buttons
@@ -54,21 +65,30 @@ class CoordinateCalculator:
     REF_RESIGN_BUTTON_X_OFFSET = 98  # From notation X to resign button centre (rightmost of 3 buttons)
     
     def __init__(self, board_detection: Optional[Dict] = None,
-                 clock_detection: Optional[Dict] = None):
+                 clock_detection: Optional[Dict] = None,
+                 site: str = DEFAULT_SITE):
         """
         Initialise calculator.
-        
+
         Args:
             board_detection: Board detection result.
             clock_detection: Clock detection result.
+            site: Which site the screenshots came from. Only the player-info
+                  geometry differs so far; everything else is derived from
+                  the board and clock detections and is site-independent.
         """
         self.board = board_detection
         self.clocks = clock_detection
+        self.site = site or DEFAULT_SITE
         self.scale = 1.0
-        
+
         if board_detection:
             self.scale = board_detection['size'] / self.REFERENCE_BOARD_SIZE
-    
+
+    def set_site(self, site: str):
+        """Set which site these coordinates are being fitted for."""
+        self.site = site or DEFAULT_SITE
+
     def set_board(self, board_detection: Dict):
         """Set board detection result and update scale."""
         self.board = board_detection
@@ -130,7 +150,11 @@ class CoordinateCalculator:
         coordinates['notation'] = self._calculate_notation(clock_x, board_y, board_size)
         
         # Calculate rating positions
-        coordinates['rating'] = self._calculate_ratings(clock_x, self.clocks)
+        if self.site == "chess_com":
+            coordinates['rating'] = self._calculate_ratings_chess_com(
+                board_x, board_y, board_size)
+        else:
+            coordinates['rating'] = self._calculate_ratings(clock_x, self.clocks)
         
         # Calculate result region (for game end detection)
         coordinates['result_region'] = self._calculate_result_region(clock_x, self.clocks)
@@ -169,6 +193,38 @@ class CoordinateCalculator:
             'height': notation_height
         }
     
+    def _calculate_ratings_chess_com(self, board_x: int, board_y: int,
+                                     board_size: int) -> Dict:
+        """
+        Player-line positions for chess.com, derived from the board.
+
+        The four Lichess variants collapse to two rows here: chess.com never
+        swaps the player panels, we are always the bottom player whatever
+        colour we have. The crop is a whole name row rather than a rating
+        box, because the rating is written inline after a username of
+        unpredictable length, so a narrow box lands on whatever characters
+        happen to fall at that x (it was reading "53)" - every game of
+        2026-07-25 detected no rating at all).
+        """
+        step = board_size / 8
+
+        x = int(board_x + self.CHESS_COM_RATING_X_STEPS * step)
+        width = int(self.CHESS_COM_RATING_WIDTH_STEPS * step)
+        height = int(self.CHESS_COM_RATING_HEIGHT_STEPS * step)
+        opp_y = int(board_y - self.CHESS_COM_RATING_ABOVE_BOARD_STEPS * step)
+        own_y = int(board_y + board_size
+                    + self.CHESS_COM_RATING_BELOW_BOARD_STEPS * step)
+
+        def row(y):
+            return {'x': x, 'y': y, 'width': width, 'height': height}
+
+        return {
+            'opp_white': row(opp_y),
+            'opp_black': row(opp_y),
+            'own_white': row(own_y),
+            'own_black': row(own_y),
+        }
+
     def _calculate_ratings(self, clock_x: int, clock_detection: Optional[Dict]) -> Dict:
         """
         Calculate rating positions (scaled).

@@ -14,6 +14,7 @@ import numpy as np
 import chess
 import os
 import pytesseract
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -1513,10 +1514,79 @@ def get_fen_from_image(board_image, bottom:str='w', turn:bool=None, fast_mode:bo
         board.turn = turn
     return board.fen()
 
+# A rating is three or four digits, optionally wrapped in the parentheses
+# chess.com writes it in. Anchored, so a digit run inside a username is only
+# a candidate when tesseract splits it off as its own word. The bracket
+# classes are wide because tesseract routinely reads "(1429)" as "{1429)" or
+# "(1440;" at this font size - what matters is that *a* bracket glyph is
+# there, not which one.
+_RATING_WORD_RE = re.compile(r"^(?P<open>[(\[{<]?)(?P<rating>\d{3,4})(?P<close>[)\]}>;:]?)$")
+
+# Plausible rating range. Wider than any real bullet pool on purpose - the
+# point is to throw out OCR debris, not to judge strength.
+RATING_MIN = 100
+RATING_MAX = 3999
+
+# Confidence floors. A bare number carries the whole burden of being the
+# rating, so it keeps the original threshold; parentheses are independent
+# evidence, and over 58 real chess.com frames the bracketed reads bottomed
+# out at 66 while every wrong value arrived bare below 50.
+RATING_MIN_CONFIDENCE = 75
+RATING_BRACKETED_MIN_CONFIDENCE = 60
+
+
+def rating_from_words(words):
+    """ Pick the rating out of one OCR'd line of player info.
+
+        words: iterable of (text, confidence) as tesseract reports them.
+
+        Lichess puts the rating alone in its own element, so the whole crop
+        is the number. chess.com writes it inline after a username of
+        unpredictable length - "squishypup (1453)" - followed by a flag and
+        rank bars, so the crop has to be a whole name row and the number has
+        to be picked out of it.
+    """
+    bracketed = None
+    bare = None
+    n_words = 0
+    for text, confidence in words:
+        text = text.strip().rstrip('?')
+        if not text:
+            continue
+        n_words += 1
+        match = _RATING_WORD_RE.match(text)
+        if match is None:
+            continue
+        rating = int(match.group('rating'))
+        if not (RATING_MIN <= rating <= RATING_MAX):
+            continue
+        if match.group('open') or match.group('close'):
+            # Brackets are structural evidence that this is the rating field
+            # and not a digit run inside a username ("AlbertXu2010") or a
+            # trophy rank, so the digits themselves carry less of the burden.
+            if bracketed is None and confidence >= RATING_BRACKETED_MIN_CONFIDENCE:
+                bracketed = rating
+        elif bare is None:
+            bare = (rating, confidence)
+
+    if bracketed is not None:
+        return bracketed
+
+    # Nothing bracketed. The only layout that legitimately shows a bare
+    # rating is one that crops the number on its own, so require the line to
+    # be that single word - otherwise a username split off its digits
+    # ("analysis" "2013"), or the pre/post-game layout put the rating on a
+    # line with the trophy rank, and the number means nothing. Every wrong
+    # value in the 2026-07-25 frames arrived this way.
+    if n_words == 1 and bare is not None and bare[1] >= RATING_MIN_CONFIDENCE:
+        return bare[0]
+    return None
+
+
 def capture_rating(side, position):
     """
     Capture and recognize a chess rating from the screen using pytesseract
-    
+
     Args:
         side (str): Either 'own' or 'opp' 
         position (str): Either 'start' or 'playing'
@@ -1558,41 +1628,12 @@ def capture_rating(side, position):
     custom_config = '--oem 3 --psm 7'
     
     try:
-        # Get text and confidence data
+        # Read word by word rather than treating the crop as one number:
+        # int() on the whole string returned None for every chess.com game
+        # (2026-07-25), because the line reads "squishypup (1453)".
         data = pytesseract.image_to_data(processed_img, output_type=pytesseract.Output.DICT, config=custom_config)
-        
-        # Filter out low-confidence text and calculate average confidence
-        confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
-        if not confidences:
-            return None
-            
-        avg_confidence = sum(confidences) / len(confidences)
-        
-        # If confidence is too low, return None
-        if avg_confidence < 75:
-            return None
-        
-        # Extract text
-        text = pytesseract.image_to_string(processed_img, config=custom_config).strip()
-        
-        if not text:
-            return None
-        
-        # Remove question mark if present
-        if text.endswith('?'):
-            text = text[:-1]
-        
-        # Try to convert to integer
-        try:
-            rating = int(text)
-            # Ensure rating is reasonable (less than 9999)
-            if rating < 9999:
-                return rating
-            else:
-                return None
-        except ValueError:
-            return None
-            
+        return rating_from_words(zip(data['text'], (int(c) for c in data['conf'])))
+
     except Exception as e:
         # Handle any pytesseract errors
         print("Tesseract Error in capture_rating: {} \n".format(e))

@@ -27,7 +27,7 @@ from .board_detector import BoardDetector
 from .clock_detector import ClockDetector
 from .coordinate_calculator import CoordinateCalculator
 from .visualiser import CalibrationVisualiser
-from .config import save_config
+from .config import DEFAULT_SITE, save_config
 from .template_extractor import TemplateExtractor
 from .colour_extractor import extract_colour_scheme
 
@@ -147,24 +147,30 @@ class OfflineFitter:
     Can also extract templates and colours for complete profile calibration.
     """
     
-    def __init__(self, screenshots_dir: Optional[Path] = None, profile_name: Optional[str] = None):
+    def __init__(self, screenshots_dir: Optional[Path] = None, profile_name: Optional[str] = None,
+                 site: Optional[str] = None):
         """
         Initialise offline fitter.
-        
+
         Args:
             screenshots_dir: Directory containing screenshots.
                            If None, uses default location.
             profile_name: Name of the profile for template storage.
                          If None, templates go to generic location.
+            site: Which site the screenshots came from. Recorded in
+                  calibration_info so ChessConfig.get_site() has a source
+                  other than a hand-edited file, and used for the few
+                  coordinates whose layout is site-specific.
         """
         if screenshots_dir is None:
             screenshots_dir = get_screenshots_directory()
         self.screenshots_dir = Path(screenshots_dir)
         self.profile_name = profile_name
-        
+        self.site = site or DEFAULT_SITE
+
         self.board_detector = BoardDetector()
         self.clock_detector = ClockDetector()
-        self.calculator = CoordinateCalculator()
+        self.calculator = CoordinateCalculator(site=self.site)
         
         # Template extractor for the profile
         if profile_name:
@@ -592,7 +598,8 @@ class OfflineFitter:
                 'method': 'offline_fitting',
                 'screenshots_used': len(detections),
                 'board_confidence': board_detection.get('confidence', 0),
-                'clock_states_detected': list(bottom_clocks.keys()) + list(top_clocks.keys())
+                'clock_states_detected': list(bottom_clocks.keys()) + list(top_clocks.keys()),
+                'site': self.site
             },
             'coordinates': coordinates
         }
@@ -1035,7 +1042,8 @@ class OfflineFitter:
                 'method': 'offline_single',
                 'source_screenshot': screenshot_path,
                 'board_confidence': board_detection.get('confidence', 0),
-                'state_hint': state_hint
+                'state_hint': state_hint,
+                'site': self.site
             },
             'coordinates': coordinates
         }
@@ -1055,6 +1063,7 @@ def fit_from_screenshots(
     save_to_config: bool = True,
     output_path: Optional[str] = None,
     profile_name: Optional[str] = None,
+    site: Optional[str] = None,
     extract_all: bool = False,
     visualise: bool = False,
     output_root: Optional[str] = None
@@ -1067,6 +1076,7 @@ def fit_from_screenshots(
         save_to_config: Whether to save result to chess_config.json.
         output_path: Optional output file path. If None, uses default.
         profile_name: Name of the profile (for template storage).
+        site: Which chess site the screenshots came from.
         extract_all: If True, also extract templates and colours.
         visualise: Whether to save visualisations per screenshot.
         output_root: Optional root directory for visualisations.
@@ -1076,7 +1086,8 @@ def fit_from_screenshots(
     """
     fitter = OfflineFitter(
         Path(screenshots_dir) if screenshots_dir else None,
-        profile_name=profile_name
+        profile_name=profile_name,
+        site=site
     )
     config = fitter.fit_from_screenshots(
         visualise=visualise,
@@ -1127,21 +1138,23 @@ def fit_from_single(screenshot_path: str,
                    state_hint: Optional[str] = None,
                    save_to_config: bool = True,
                    output_path: Optional[str] = None,
+                   site: Optional[str] = None,
                    visualise: bool = True) -> Optional[Dict]:
     """
     Convenience function to fit from single screenshot.
-    
+
     Args:
         screenshot_path: Path to screenshot.
         state_hint: Optional state hint.
         save_to_config: Whether to save result to chess_config.json.
         output_path: Optional output file path.
+        site: Which chess site the screenshot came from.
         visualise: Whether to create debug visualisations.
     
     Returns:
         Configuration dictionary, or None if failed.
     """
-    fitter = OfflineFitter()
+    fitter = OfflineFitter(site=site)
     config = fitter.fit_from_single_screenshot(screenshot_path, state_hint, visualise=visualise)
     
     if config and save_to_config:
@@ -1165,6 +1178,10 @@ if __name__ == "__main__":
                        help="Extract templates and colours in addition to coordinates")
     parser.add_argument("--visualise", "--visualize", action="store_true",
                        help="Save debug visualisations in calibration_outputs/")
+    parser.add_argument("--site", type=str, default=DEFAULT_SITE,
+                       help="Chess site the screenshots came from (lichess, chess_com). "
+                            "Recorded in calibration_info and used for the coordinates "
+                            "whose layout differs by site, e.g. the player/rating rows.")
 
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument("--profile", type=str,
@@ -1190,8 +1207,9 @@ if __name__ == "__main__":
         fit_from_single(
             args.file, 
             args.state, 
-            not args.no_save, 
+            not args.no_save,
             output_path=resolved_output,
+            site=args.site,
             visualise=args.visualise
         )
     elif args.dir:
@@ -1200,6 +1218,7 @@ if __name__ == "__main__":
             not args.no_save,
             output_path=resolved_output,
             profile_name=profile_name,
+            site=args.site,
             extract_all=args.extract_all,
             visualise=args.visualise
         )
@@ -1210,6 +1229,7 @@ if __name__ == "__main__":
             not args.no_save,
             output_path=resolved_output,
             profile_name=profile_name,
+            site=args.site,
             extract_all=args.extract_all,
             visualise=args.visualise
         )
