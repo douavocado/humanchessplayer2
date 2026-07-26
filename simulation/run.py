@@ -72,9 +72,11 @@ def _play_chunk(task: tuple) -> list:
         from .game_runner import GameRunner
 
         engine_a = Engine(playing_level=cfg.bot_a.difficulty,
-                          quickness=cfg.bot_a.quickness)
+                          quickness=cfg.bot_a.quickness,
+                          eval_noise_scale=cfg.bot_a.eval_noise_scale)
         engine_b = Engine(playing_level=cfg.bot_b.difficulty,
-                          quickness=cfg.bot_b.quickness)
+                          quickness=cfg.bot_b.quickness,
+                          eval_noise_scale=cfg.bot_b.eval_noise_scale)
         if progress_q is not None:
             progress_q.put({"type": "loaded", "worker": worker_id,
                             "n_seeds": len(jobs)})
@@ -147,6 +149,9 @@ def main(argv=None) -> int:
                    help="move-time pacing for both bots (default common."
                         "constants.QUICKNESS); match the value your real games "
                         "used when comparing sim vs real")
+    p.add_argument("--eval-noise-scale", type=float,
+                   help="move-selection noise scale for both bots (default "
+                        "common.constants.HUMAN_EVAL_NOISE_SCALE)")
     p.add_argument("--sides", choices=["fixed", "alternate"], default="fixed",
                    help="fixed: bot a is always white; alternate: colours swap "
                         "every game")
@@ -162,6 +167,8 @@ def main(argv=None) -> int:
         p.add_argument(f"--{tag}-mouse", dest=f"{tag}_mouse", type=float,
                        help=f"bot {tag}'s mouse quickness (default "
                             "common.constants.MOUSE_QUICKNESS)")
+        p.add_argument(f"--{tag}-eval-noise-scale", dest=f"{tag}_eval_noise_scale", type=float,
+                       help=f"bot {tag}'s eval-noise scale (overrides --eval-noise-scale)")
     p.add_argument("--max-plies", type=int, default=400)
     p.add_argument("--out", help="output PGN path")
     p.add_argument("--plain", action="store_true",
@@ -186,6 +193,8 @@ def main(argv=None) -> int:
             quickness=(g("quickness") if g("quickness") is not None
                        else args.quickness),
             mouse_quickness=g("mouse"),
+            eval_noise_scale=(g("eval_noise_scale") if g("eval_noise_scale") is not None
+                              else args.eval_noise_scale),
         )
 
     # Default names keep the historic fixed-sides labels so existing

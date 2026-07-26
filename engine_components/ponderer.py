@@ -31,7 +31,6 @@ import chess.engine
 
 from common.board_information import phase_of_game, calculate_threatened_levels
 from common.utils import extend_mate_score
-from common.constants import HUMAN_EVAL_NOISE_SCALE
 from common.search_constants import MAX_CALC_DEPTH_COEFF
 
 
@@ -374,7 +373,7 @@ def ponder(engine, board, time_allowed, search_width, time_per_position=0.1, pre
                 eval_ = new_eval - 100
                 re_evaluate_dic[move_uci][0] = new_eval - 100 # penalty
             base_noise_sd = 40*(np.tanh(eval_/(engine.playing_level*50)))**2 + 20
-            noise_sd = HUMAN_EVAL_NOISE_SCALE*4*base_noise_sd/(time_allowed*(depth_considered+4))
+            noise_sd = engine.eval_noise_scale*4*base_noise_sd/(time_allowed*(depth_considered+4))
 
             noise = np.random.randn()*noise_sd*noise_phase
             re_evaluate_dic[move_uci][0] += noise

@@ -53,11 +53,17 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None):
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
         self.quickness = QUICKNESS if quickness is None else quickness
+        # Per-instance eval-noise scale (see the noise formula in
+        # get_human_move / ponderer.py); None keeps the global
+        # HUMAN_EVAL_NOISE_SCALE. Overridable per instance so the strength
+        # calibration work (breadth vs. noise, independent of playing_level)
+        # can vary it per simulated bot.
+        self.eval_noise_scale = HUMAN_EVAL_NOISE_SCALE if eval_noise_scale is None else eval_noise_scale
         # Values are populated by update_info; typed loosely (Any) since
         # they're heterogeneous (bool, list, int, float) and set as a batch
         # via dict.update() rather than individual attribute assignment.
@@ -344,7 +350,7 @@ class Engine:
         for move_uci in new_human_move_evals.keys():
             eval_, depth_considered = new_human_move_evals[move_uci]
             base_noise_sd = 40*(np.tanh(eval_/(self.playing_level*50)))**2 + 20
-            noise_sd = HUMAN_EVAL_NOISE_SCALE*4*base_noise_sd/(target_time*(depth_considered+4))
+            noise_sd = self.eval_noise_scale*4*base_noise_sd/(target_time*(depth_considered+4))
             
             noise = np.random.randn()*noise_sd*noise_phase - DEPTH_PENALTY*(2- depth_considered)
             if depth_considered == 0:

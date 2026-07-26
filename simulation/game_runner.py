@@ -53,15 +53,19 @@ class BotSpec:
     difficulty: int = None           # engine playing_level; None -> DIFFICULTY
     quickness: float = None          # move-time pacing; None -> QUICKNESS
     mouse_quickness: float = None    # gesture speed; None -> MOUSE_QUICKNESS
+    eval_noise_scale: float = None   # move-selection noise; None -> HUMAN_EVAL_NOISE_SCALE
 
     def __post_init__(self):
-        from common.constants import DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS
+        from common.constants import (DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS,
+                                      HUMAN_EVAL_NOISE_SCALE)
         if self.difficulty is None:
             self.difficulty = DIFFICULTY
         if self.quickness is None:
             self.quickness = QUICKNESS
         if self.mouse_quickness is None:
             self.mouse_quickness = MOUSE_QUICKNESS
+        if self.eval_noise_scale is None:
+            self.eval_noise_scale = HUMAN_EVAL_NOISE_SCALE
 
 
 @dataclass
