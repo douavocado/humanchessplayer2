@@ -13,6 +13,7 @@ from typing import Optional
 
 import chess
 
+from .adjudicate_result import CLOCK_THRESHOLD_FRACTION, adjudicate_position
 from .client_model import SimClient
 from .clock import SimClock
 from .latency_model import LatencyModel
@@ -32,7 +33,7 @@ class SimMove:
 @dataclass
 class SimGame:
     result: str                 # "1-0" / "0-1" / "1/2-1/2"
-    termination: str            # checkmate | resignation | timeout | draw | max-plies
+    termination: str            # checkmate | resignation | timeout | draw | max-plies | adjudicated
     seed: int
     initial_time: float
     increment: float
@@ -43,6 +44,9 @@ class SimGame:
     black_name: str = "SimBotBlack"
     white_elo: int = 2450
     black_elo: int = 2450
+    # Set only when termination == "adjudicated": the Stockfish eval (White's
+    # pov, centipawns) the result was decided from. None otherwise.
+    adjudicated_cp: Optional[float] = None
 
 
 @dataclass
@@ -54,10 +58,18 @@ class BotSpec:
     quickness: float = None          # move-time pacing; None -> QUICKNESS
     mouse_quickness: float = None    # gesture speed; None -> MOUSE_QUICKNESS
     eval_noise_scale: float = None   # move-selection noise; None -> HUMAN_EVAL_NOISE_SCALE
+    moderate_sharpness_breadth_bonus: int = None  # None -> MODERATE_SHARPNESS_BREADTH_BONUS
+    midgame_premove_veto_p: float = None  # None -> MIDGAME_PREMOVE_VETO_P
+    opening_breadth_strength_bonus: int = None  # None -> OPENING_BREADTH_STRENGTH_BONUS
+    midgame_breadth_strength_bonus: int = None  # None -> MIDGAME_BREADTH_STRENGTH_BONUS
 
     def __post_init__(self):
         from common.constants import (DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS,
                                       HUMAN_EVAL_NOISE_SCALE)
+        from common.search_constants import (MODERATE_SHARPNESS_BREADTH_BONUS,
+                                             MIDGAME_PREMOVE_VETO_P,
+                                             OPENING_BREADTH_STRENGTH_BONUS,
+                                             MIDGAME_BREADTH_STRENGTH_BONUS)
         if self.difficulty is None:
             self.difficulty = DIFFICULTY
         if self.quickness is None:
@@ -66,6 +78,14 @@ class BotSpec:
             self.mouse_quickness = MOUSE_QUICKNESS
         if self.eval_noise_scale is None:
             self.eval_noise_scale = HUMAN_EVAL_NOISE_SCALE
+        if self.moderate_sharpness_breadth_bonus is None:
+            self.moderate_sharpness_breadth_bonus = MODERATE_SHARPNESS_BREADTH_BONUS
+        if self.midgame_premove_veto_p is None:
+            self.midgame_premove_veto_p = MIDGAME_PREMOVE_VETO_P
+        if self.opening_breadth_strength_bonus is None:
+            self.opening_breadth_strength_bonus = OPENING_BREADTH_STRENGTH_BONUS
+        if self.midgame_breadth_strength_bonus is None:
+            self.midgame_breadth_strength_bonus = MIDGAME_BREADTH_STRENGTH_BONUS
 
 
 @dataclass
@@ -76,6 +96,16 @@ class SimConfig:
     bot_a: BotSpec = field(default_factory=BotSpec)
     bot_b: BotSpec = field(default_factory=BotSpec)
     max_plies: int = 400
+    # Default (False): stop the game and adjudicate from a Stockfish eval as
+    # soon as either side's clock first drops below CLOCK_THRESHOLD_FRACTION
+    # of initial_time (simulation/adjudicate_result.py), instead of playing
+    # to a real conclusion. Most bullet games otherwise end on the clock
+    # (56-62% "timeout" across every run generated pre-this-change), which
+    # conflates move quality with clock-race variance and dilutes the Elo
+    # signal from anything that only changes move quality -- see
+    # cheat_detection/runs/adjudication/. --simulate-full (simulation/run.py)
+    # restores the old full-length behaviour.
+    simulate_full: bool = False
 
     def __post_init__(self):
         from common.constants import RESOLUTION_SCALE
@@ -142,6 +172,12 @@ class GameRunner:
                 game.result = "1/2-1/2"
                 game.termination = "max-plies"
                 break
+            if not cfg.simulate_full:
+                threshold = CLOCK_THRESHOLD_FRACTION * cfg.initial_time
+                if clocks[chess.WHITE][-1] < threshold or clocks[chess.BLACK][-1] < threshold:
+                    game.result, game.adjudicated_cp = adjudicate_position(board, self.engine_a.stockfish_engine)
+                    game.termination = "adjudicated"
+                    break
 
             side = board.turn
             decision = clients[side].decide(

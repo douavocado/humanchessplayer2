@@ -73,10 +73,18 @@ def _play_chunk(task: tuple) -> list:
 
         engine_a = Engine(playing_level=cfg.bot_a.difficulty,
                           quickness=cfg.bot_a.quickness,
-                          eval_noise_scale=cfg.bot_a.eval_noise_scale)
+                          eval_noise_scale=cfg.bot_a.eval_noise_scale,
+                          moderate_sharpness_breadth_bonus=cfg.bot_a.moderate_sharpness_breadth_bonus,
+                          midgame_premove_veto_p=cfg.bot_a.midgame_premove_veto_p,
+                          opening_breadth_strength_bonus=cfg.bot_a.opening_breadth_strength_bonus,
+                          midgame_breadth_strength_bonus=cfg.bot_a.midgame_breadth_strength_bonus)
         engine_b = Engine(playing_level=cfg.bot_b.difficulty,
                           quickness=cfg.bot_b.quickness,
-                          eval_noise_scale=cfg.bot_b.eval_noise_scale)
+                          eval_noise_scale=cfg.bot_b.eval_noise_scale,
+                          moderate_sharpness_breadth_bonus=cfg.bot_b.moderate_sharpness_breadth_bonus,
+                          midgame_premove_veto_p=cfg.bot_b.midgame_premove_veto_p,
+                          opening_breadth_strength_bonus=cfg.bot_b.opening_breadth_strength_bonus,
+                          midgame_breadth_strength_bonus=cfg.bot_b.midgame_breadth_strength_bonus)
         if progress_q is not None:
             progress_q.put({"type": "loaded", "worker": worker_id,
                             "n_seeds": len(jobs)})
@@ -152,6 +160,22 @@ def main(argv=None) -> int:
     p.add_argument("--eval-noise-scale", type=float,
                    help="move-selection noise scale for both bots (default "
                         "common.constants.HUMAN_EVAL_NOISE_SCALE)")
+    p.add_argument("--moderate-sharpness-bonus", type=int,
+                   help="breadth bonus in the 0.10-0.25 sharpness band for "
+                        "both bots (default common.search_constants."
+                        "MODERATE_SHARPNESS_BREADTH_BONUS)")
+    p.add_argument("--midgame-premove-veto-p", type=float,
+                   help="probability of vetting an ordinary premove with "
+                        "check_safe_premove, for both bots (default "
+                        "common.search_constants.MIDGAME_PREMOVE_VETO_P)")
+    p.add_argument("--opening-breadth-bonus", type=int,
+                   help="extra root moves considered in the opening (out of "
+                        "book), for both bots (default common.search_"
+                        "constants.OPENING_BREADTH_STRENGTH_BONUS)")
+    p.add_argument("--midgame-breadth-bonus", type=int,
+                   help="extra root moves considered in the midgame, for "
+                        "both bots (default common.search_constants."
+                        "MIDGAME_BREADTH_STRENGTH_BONUS)")
     p.add_argument("--sides", choices=["fixed", "alternate"], default="fixed",
                    help="fixed: bot a is always white; alternate: colours swap "
                         "every game")
@@ -169,7 +193,24 @@ def main(argv=None) -> int:
                             "common.constants.MOUSE_QUICKNESS)")
         p.add_argument(f"--{tag}-eval-noise-scale", dest=f"{tag}_eval_noise_scale", type=float,
                        help=f"bot {tag}'s eval-noise scale (overrides --eval-noise-scale)")
+        p.add_argument(f"--{tag}-moderate-sharpness-bonus", dest=f"{tag}_moderate_sharpness_bonus", type=int,
+                       help=f"bot {tag}'s moderate-sharpness breadth bonus "
+                            "(overrides --moderate-sharpness-bonus)")
+        p.add_argument(f"--{tag}-midgame-premove-veto-p", dest=f"{tag}_midgame_premove_veto_p", type=float,
+                       help=f"bot {tag}'s ordinary-premove veto probability "
+                            "(overrides --midgame-premove-veto-p)")
+        p.add_argument(f"--{tag}-opening-breadth-bonus", dest=f"{tag}_opening_breadth_bonus", type=int,
+                       help=f"bot {tag}'s opening breadth bonus "
+                            "(overrides --opening-breadth-bonus)")
+        p.add_argument(f"--{tag}-midgame-breadth-bonus", dest=f"{tag}_midgame_breadth_bonus", type=int,
+                       help=f"bot {tag}'s midgame breadth bonus "
+                            "(overrides --midgame-breadth-bonus)")
     p.add_argument("--max-plies", type=int, default=400)
+    p.add_argument("--simulate-full", action="store_true",
+                   help="play every game to a real conclusion instead of the "
+                        "default: stop and adjudicate from a Stockfish eval "
+                        "as soon as either side's clock drops below 25%% of "
+                        "initial time (see simulation/adjudicate_result.py)")
     p.add_argument("--out", help="output PGN path")
     p.add_argument("--plain", action="store_true",
                    help="plain-line progress on stderr instead of a tqdm bar")
@@ -195,6 +236,18 @@ def main(argv=None) -> int:
             mouse_quickness=g("mouse"),
             eval_noise_scale=(g("eval_noise_scale") if g("eval_noise_scale") is not None
                               else args.eval_noise_scale),
+            moderate_sharpness_breadth_bonus=(
+                g("moderate_sharpness_bonus") if g("moderate_sharpness_bonus") is not None
+                else args.moderate_sharpness_bonus),
+            midgame_premove_veto_p=(
+                g("midgame_premove_veto_p") if g("midgame_premove_veto_p") is not None
+                else args.midgame_premove_veto_p),
+            opening_breadth_strength_bonus=(
+                g("opening_breadth_bonus") if g("opening_breadth_bonus") is not None
+                else args.opening_breadth_bonus),
+            midgame_breadth_strength_bonus=(
+                g("midgame_breadth_bonus") if g("midgame_breadth_bonus") is not None
+                else args.midgame_breadth_bonus),
         )
 
     # Default names keep the historic fixed-sides labels so existing
@@ -208,7 +261,8 @@ def main(argv=None) -> int:
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
 
     cfg = SimConfig(initial_time=float(base), increment=float(inc),
-                    bot_a=bot_a, bot_b=bot_b, max_plies=args.max_plies)
+                    bot_a=bot_a, bot_b=bot_b, max_plies=args.max_plies,
+                    simulate_full=args.simulate_full)
     jobs = [(args.seed + i, args.sides == "fixed" or i % 2 == 0)
             for i in range(args.games)]
     workers = max(1, min(args.workers, len(jobs)))
