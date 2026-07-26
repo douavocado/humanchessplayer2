@@ -14,13 +14,11 @@ scripts/debug_output/
 # Offline screenshots
 **/offline_screenshots/**/*
 models/data/**
-models/model_weights/**
 models/model_results.txt
 model_research/plots/**
 model_research/reports/**
 model_research/results/**
 Debugging/**
-Engines/**
 **/train_PGNs/**
 __pycache__/
 **/__pycache__/
@@ -31,6 +29,11 @@ venv/
 **/visualisations/**
 **/visualisations_piece_to/**
 **/data/**
+# Opening books are runtime prerequisites, not training data - keep tracked
+# despite the **/data/** blanket rule above.
+!assets/data/
+!assets/data/Opening_books/
+!assets/data/Opening_books/**
 .vscode/**
 **/vscode/**
 **/saved_screenshots/**
@@ -76,3 +79,6 @@ auto_calibration/debug_calibration.ipynb
 # Simulation calibration (machine-specific measurements) and outputs
 simulation/calibration/
 simulation/games/
+
+# Personal scratch/throwaway scripts
+scratch/
