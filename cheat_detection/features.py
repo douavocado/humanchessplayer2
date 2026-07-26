@@ -68,6 +68,7 @@ class MoveFeatures:
     is_blunder: bool
     emt: Optional[float]
     clock_before: Optional[float]
+    kind: Optional[str] = None  # engine/premove/ponder_hit/... -- see MoveRecord.kind
 
 
 def extract_move_features(
@@ -116,6 +117,7 @@ def extract_move_features(
         is_blunder=wc_loss >= cfg.blunder_wc_loss,
         emt=rec.emt,
         clock_before=rec.clock_before,
+        kind=rec.kind,
     )
 
 

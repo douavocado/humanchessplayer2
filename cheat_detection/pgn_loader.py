@@ -29,6 +29,9 @@ class MoveRecord:
     emt: Optional[float]        # elapsed move time in seconds, if derivable
     clock_before: Optional[float]  # clock the mover started thinking with, seconds
     clock_after: Optional[float]  # clock remaining after the move, seconds
+    kind: Optional[str] = None  # engine/premove/ponder_hit/scramble/... -- only
+                                 # present on simulated PGNs (see pgn_writer.py);
+                                 # None for real human exports, which have no such label
 
 
 @dataclass
@@ -97,6 +100,9 @@ def parse_game(game: chess.pgn.Game) -> Optional[GameRecord]:
         emt = node.emt()            # explicit emt tag, if any
         clock_before = prev_clock[mover]  # includes any increment from the previous move
 
+        kind_match = re.search(r"%kind ([^\]\s]+)", node.comment or "")
+        kind = kind_match.group(1) if kind_match else None
+
         if emt is None and clock_after is not None and prev_clock[mover] is not None:
             # emt = time_before - time_after + increment
             emt = prev_clock[mover] - clock_after + (inc or 0)
@@ -116,6 +122,7 @@ def parse_game(game: chess.pgn.Game) -> Optional[GameRecord]:
             emt=emt,
             clock_before=clock_before,
             clock_after=clock_after,
+            kind=kind,
         ))
         board.push(node.move)
         ply += 1
