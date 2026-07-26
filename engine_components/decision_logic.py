@@ -21,7 +21,8 @@ from common.search_constants import (
     KING_DANGER_THRESHOLD, KING_DANGER_BREADTH_BONUS, TACTICAL_MIDGAME_BREADTH_DELTA,
     ENDGAME_LOW_MOB_BREADTH_FLOOR, ENDGAME_LOW_MOB_BREADTH_BONUS,
     ENDGAME_BREADTH_FLOOR, ENDGAME_BREADTH_BONUS, STANDARD_BREADTH_DELTA,
-    MOOD_BREADTH_DELTAS,
+    MOOD_BREADTH_DELTAS, MODERATE_SHARPNESS_LO, MODERATE_SHARPNESS_HI,
+    MODERATE_SHARPNESS_BREADTH_BONUS,
 )
 from common.constants import (
     MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
@@ -69,6 +70,18 @@ def decide_breadth(engine, total_time=None):
         else:
             # not in the endgame, lots of good moves
             no_moves = max(base_no + STANDARD_BREADTH_DELTA, 1)
+
+    # Real eval-stakes but no single forced answer: neither the quiet-position
+    # time cut nor the sharp-position king-danger/tactical/intuition-gate
+    # treatment reaches this band, and it's the band the bucketed
+    # human-likeness diagnostic showed diverging most from human play (see
+    # search_constants.py). Bonus applied flat on top of whichever
+    # eff_mob/king-danger branch fired above.
+    sharpness = engine.sharpness
+    if sharpness is not None and MODERATE_SHARPNESS_LO <= sharpness < MODERATE_SHARPNESS_HI:
+        no_moves += MODERATE_SHARPNESS_BREADTH_BONUS
+        engine.log += "Moderate sharpness ({:.3f}): breadth bonus +{} \n".format(
+            sharpness, MODERATE_SHARPNESS_BREADTH_BONUS)
 
     # Now for mood dependent logic
     no_moves = max(no_moves + MOOD_BREADTH_DELTAS.get(engine.mood, 0), 1)

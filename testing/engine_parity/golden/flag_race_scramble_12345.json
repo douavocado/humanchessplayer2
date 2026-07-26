@@ -9,8 +9,8 @@
   "mood": "hurry",
   "move_made": "e8g8",
   "ponder_line_count": 3,
-  "premove": null,
-  "sharpness": 0.019314750127034652,
+  "premove": "d7d6",
+  "sharpness": 0.036749285344509164,
   "stockfish_move": "d7d6",
   "stockfish_ponder_line_count": 2,
   "time_take": 0.1

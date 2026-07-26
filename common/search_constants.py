@@ -94,6 +94,42 @@ MOOD_BREADTH_DELTAS = {
 }
 
 # ---------------------------------------------------------------------------
+# 2b. Search breadth: eval-stakes (sharpness) adjustment
+# ---------------------------------------------------------------------------
+# Breadth above reacts only to structural move-count (eff_mob) and king
+# danger -- not eval-stakes. get_time_taken's "complicated position" trigger
+# migrated to sharpness (win-probability spread across top candidates) a
+# while back, but breadth never did: a real-stakes-but-no-single-forced-move
+# position (moderate sharpness) gets no compensating widening the way quiet
+# (<0.10, time cut) or sharp (>=0.25, king-danger bonus / tactical narrowing
+# / intuition gate) positions do. The bucketed human-likeness diagnostic
+# (cheat_detection/runs/difficulty4/buckets_*.md) showed this exact band is
+# where the bot's blunder rate diverges most from human play, and diverges
+# *further* -- not less -- at higher DIFFICULTY, i.e. widening breadth
+# globally doesn't reach this band because decide_breadth isn't keying off
+# the signal that identifies it. Thresholds match the diagnostic's bucket
+# edges (and get_time_taken's sharpness thresholds) so "moderate" means the
+# same thing everywhere. Applied as a flat bonus on top of whichever
+# eff_mob/king-danger branch fired, mirroring how MOOD_BREADTH_DELTAS is
+# layered on afterward.
+#
+# Magnitude calibration (cheat_detection/runs/moderate_breadth_fix/, 300-game
+# D3 self-play, 2026-07-26): a +3 bonus over-corrected. It closed the gap
+# against the 2800+ baseline (moderate-bucket blunder-rate z: +0.23 -> -0.08,
+# win-chance-loss z: +0.28 -> -0.12 -- every |z| shrank) but overshot the
+# bot's own native comparison population, 2500-2800 (blunder-rate z: +0.04
+# -> -0.22, win-chance-loss z: +0.03 -> -0.29 -- that baseline was already
+# near-perfectly calibrated pre-fix, so +3 pushed it past zero into a worse
+# overshoot). Interpolating the two data points (bonus=0, bonus=3) against
+# the 2500-2800 population's blunder rate puts the zero-crossing near +1;
+# not re-verified by simulation at this exact value -- if retuning further,
+# check the 2500-2800 bucket first since that is the population the sim
+# bot's own rating (2450) actually sits in.
+MODERATE_SHARPNESS_LO = 0.10
+MODERATE_SHARPNESS_HI = 0.25
+MODERATE_SHARPNESS_BREADTH_BONUS = 1
+
+# ---------------------------------------------------------------------------
 # 4. Fixed Stockfish scan widths (independent of the human-move filter)
 # ---------------------------------------------------------------------------
 
