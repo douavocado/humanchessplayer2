@@ -130,6 +130,65 @@ MODERATE_SHARPNESS_HI = 0.25
 MODERATE_SHARPNESS_BREADTH_BONUS = 1
 
 # ---------------------------------------------------------------------------
+# 2c. Premove safety-vet probability (engine_components/premover.py)
+# ---------------------------------------------------------------------------
+# How often an ordinary (non-opening, non-scramble) premove gets a
+# check_safe_premove second-guess before being allowed to fire, vs. trusted
+# outright. Not a correctness bug fix so much as a discovered strength/
+# human-likeness lever: raw search quality isn't the bottleneck (even a
+# shallow Stockfish is far past human bullet strength) -- the bottleneck is
+# how much a *fast, pre-committed* decision second-guesses itself, which is
+# tunable the same way breadth and eval noise are. Validated once at the
+# extreme (1.0 vs the old always-trust-it 0.0, cheat_detection/runs/
+# adjudication/, 300-game D3 self-play under the default early-stopped
+# simulation, 2026-07-26): premove's share of the instant-fire worst
+# mistakes in adjudicated losses fell 61% -> 35%. Intermediate values are
+# untested -- this constant exists to be swept, not treated as settled.
+# Mirrors SCRAMBLE_VETO_P_* (common/constants.py) in spirit but is a flat
+# probability rather than gated on a per-game skill draw, since (unlike the
+# scramble branch, which must preserve an occasional human-catastrophe
+# throw) there's no clock-pressure justification for ever skipping the
+# check outside a flag race.
+MIDGAME_PREMOVE_VETO_P = 1.0
+
+# ---------------------------------------------------------------------------
+# 2d. Per-phase breadth strength bonus (opening / midgame only)
+# ---------------------------------------------------------------------------
+# root_moves in get_human_move (engine.py) is human_move_ucis[:no_root_moves]
+# -- the NN's top-N human-plausible ranking, truncated to the breadth decided
+# here, BEFORE any of those candidates get a real Stockfish eval attached.
+# The NN ranking, not engine search, is what actually bottlenecks strength:
+# the eval every candidate in root_moves gets is already a genuine Stockfish
+# score (from the pre-computed multipv analysis), so a move the NN ranks
+# outside the window is never seen by the engine at all, however good it is.
+# Widening breadth is therefore close to monotonically strengthening (more
+# of the legal move list gets a real engine eval and a chance to win the
+# final argmax) -- there is no meaningful "evaluation budget" tradeoff to
+# widening it, unlike MODERATE_SHARPNESS_BREADTH_BONUS above, which reacts to
+# eval-stakes rather than acting as a blanket strength dial. The cost is the
+# obvious one: wider breadth also makes the bot look more like an engine and
+# less like a human (fewer, more consistent mistakes) -- see the module
+# docstring. That's why this isn't a single global knob: cheat_detection's
+# elo_progression report (cheat_detection/runs/elo_progression/report.md,
+# 8000-game human corpus, 2100-2900 pooled by rating band) found the human
+# blunder-rate improvement with rating is concentrated almost entirely in
+# game phase, not position character (sharpness/eff_mob buckets improve
+# roughly proportionally, ~30-40% relative, at every rating band) -- opening
+# blunder rate falls 56% relative from 2100-2299 to 2800+, middlegame 34%,
+# endgame does not improve at all (+6.5%, noisy/non-monotonic). So the
+# strength dial should widen breadth in the opening and (less so) the
+# midgame, and explicitly NOT touch the endgame -- widening endgame breadth
+# uniformly would make the bot's endgame play *more* consistent than real
+# humans at any rating actually are, re-creating the same too-consistent
+# failure mode DIFFICULTY raises across the board. Applied as a flat bonus
+# on top of whichever eff_mob/king-danger/moderate-sharpness branch fired,
+# same layering as MOOD_BREADTH_DELTAS. Both default to 0 (no behavioural
+# change) -- these are unswept dials, not a calibrated fix; see
+# engine.py/BotSpec for the per-instance overrides used to sweep them.
+OPENING_BREADTH_STRENGTH_BONUS = 0
+MIDGAME_BREADTH_STRENGTH_BONUS = 0
+
+# ---------------------------------------------------------------------------
 # 4. Fixed Stockfish scan widths (independent of the human-move filter)
 # ---------------------------------------------------------------------------
 
@@ -187,3 +246,26 @@ PONDER_TIME_PER_POSITION = 0.05
 # cap is tighter than the broad fallback book's.
 OPENING_REPERTOIRE_TOP_N = 3
 OPENING_BOOK_TOP_N = 5
+
+# ---------------------------------------------------------------------------
+# 8. Stockfish engine config (Threads / Hash)
+# ---------------------------------------------------------------------------
+# Every Stockfish call in the pipeline is wall-clock capped (most at 20ms;
+# see engine_components/state.py, ponderer.py, premover.py) rather than
+# depth-capped -- deliberately, to keep the bot's own move latency low. That
+# cap is left alone here. What's untouched until now is *how much search*
+# happens inside it: engine.stockfish_engine / ponder_stockfish_engine were
+# never configured past UCI defaults (Threads=1, Hash=16MB). Raising these
+# doesn't add any latency -- the wall-clock cap is unchanged -- it just lets
+# more of the search actually happen within it (Stockfish's lazy-SMP scales
+# effective node count with threads for the same wall time). Free strength
+# with zero human-likeness footprint: it doesn't touch any modeled-behaviour
+# constant, so it can't make the bot look less human, only make its
+# within-budget evals less noisy.
+# Kept modest: a live session runs one Engine instance (2 Stockfish
+# processes configured this way), but simulation runs several worker
+# processes each with two Engine instances -- Threads=2 there means real
+# thread contention across workers, which would blunt (not reverse) the
+# benefit rather than help further, so this isn't scaled up aggressively.
+STOCKFISH_THREADS = 2
+STOCKFISH_HASH_MB = 128

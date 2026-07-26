@@ -35,7 +35,9 @@ from common.board_information import (
     phase_of_game, calculate_threatened_levels,
             )
 from common.search_constants import (
-    MAX_CALC_DEPTH_COEFF, PONDER_TIME_PER_POSITION,
+    MAX_CALC_DEPTH_COEFF, PONDER_TIME_PER_POSITION, MODERATE_SHARPNESS_BREADTH_BONUS,
+    STOCKFISH_THREADS, STOCKFISH_HASH_MB, MIDGAME_PREMOVE_VETO_P,
+    OPENING_BREADTH_STRENGTH_BONUS, MIDGAME_BREADTH_STRENGTH_BONUS,
 )
 from common.utils import (extend_mate_score)
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
@@ -53,7 +55,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None):
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
@@ -64,6 +66,32 @@ class Engine:
         # calibration work (breadth vs. noise, independent of playing_level)
         # can vary it per simulated bot.
         self.eval_noise_scale = HUMAN_EVAL_NOISE_SCALE if eval_noise_scale is None else eval_noise_scale
+        # Per-instance breadth bonus for the moderate-sharpness band (see
+        # decide_breadth / search_constants.py); None keeps the global
+        # MODERATE_SHARPNESS_BREADTH_BONUS. Overridable so an Elo-delta
+        # experiment can A/B the fix (0 = pre-fix behaviour) against the
+        # shipped default on an otherwise identical bot.
+        self.moderate_sharpness_breadth_bonus = (
+            MODERATE_SHARPNESS_BREADTH_BONUS if moderate_sharpness_breadth_bonus is None
+            else moderate_sharpness_breadth_bonus)
+        # Per-instance probability of vetting an ordinary premove with
+        # check_safe_premove (see premover.py / MIDGAME_PREMOVE_VETO_P);
+        # None keeps the global default. A strength/human-likeness lever to
+        # sweep, not a fixed correctness knob -- see search_constants.py.
+        self.midgame_premove_veto_p = (
+            MIDGAME_PREMOVE_VETO_P if midgame_premove_veto_p is None
+            else midgame_premove_veto_p)
+        # Per-instance breadth strength dials for the opening/midgame phases
+        # only (see decide_breadth / search_constants.py 2d); None keeps the
+        # respective global default (0 = no behavioural change). Endgame has
+        # no equivalent override -- the human elo-progression data showed no
+        # rating-driven improvement there, so it's deliberately not a lever.
+        self.opening_breadth_strength_bonus = (
+            OPENING_BREADTH_STRENGTH_BONUS if opening_breadth_strength_bonus is None
+            else opening_breadth_strength_bonus)
+        self.midgame_breadth_strength_bonus = (
+            MIDGAME_BREADTH_STRENGTH_BONUS if midgame_breadth_strength_bonus is None
+            else midgame_breadth_strength_bonus)
         # Values are populated by update_info; typed loosely (Any) since
         # they're heterogeneous (bool, list, int, float) and set as a batch
         # via dict.update() rather than individual attribute assignment.
@@ -94,6 +122,13 @@ class Engine:
         self.stockfish_scorer = StockFishSelector(PATH_TO_STOCKFISH)
         self.stockfish_engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_STOCKFISH)
         self.ponder_stockfish_engine = chess.engine.SimpleEngine.popen_uci(PATH_TO_PONDER_STOCKFISH)
+        # Every call against these two is wall-clock capped (not depth-capped)
+        # to keep move latency low; that cap is unchanged. Threads/Hash above
+        # UCI defaults just let more search happen inside the same wall time
+        # -- free strength, zero effect on latency or modelled behaviour.
+        stockfish_config = {"Threads": STOCKFISH_THREADS, "Hash": STOCKFISH_HASH_MB}
+        self.stockfish_engine.configure(stockfish_config)
+        self.ponder_stockfish_engine.configure(stockfish_config)
         self.stockfish_analysis: Optional[list] = None
         self._stockfish_path = PATH_TO_STOCKFISH  # Store for potential engine restart
 

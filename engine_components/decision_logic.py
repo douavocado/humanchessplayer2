@@ -22,7 +22,6 @@ from common.search_constants import (
     ENDGAME_LOW_MOB_BREADTH_FLOOR, ENDGAME_LOW_MOB_BREADTH_BONUS,
     ENDGAME_BREADTH_FLOOR, ENDGAME_BREADTH_BONUS, STANDARD_BREADTH_DELTA,
     MOOD_BREADTH_DELTAS, MODERATE_SHARPNESS_LO, MODERATE_SHARPNESS_HI,
-    MODERATE_SHARPNESS_BREADTH_BONUS,
 )
 from common.constants import (
     MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
@@ -79,9 +78,26 @@ def decide_breadth(engine, total_time=None):
     # eff_mob/king-danger branch fired above.
     sharpness = engine.sharpness
     if sharpness is not None and MODERATE_SHARPNESS_LO <= sharpness < MODERATE_SHARPNESS_HI:
-        no_moves += MODERATE_SHARPNESS_BREADTH_BONUS
+        no_moves += engine.moderate_sharpness_breadth_bonus
         engine.log += "Moderate sharpness ({:.3f}): breadth bonus +{} \n".format(
-            sharpness, MODERATE_SHARPNESS_BREADTH_BONUS)
+            sharpness, engine.moderate_sharpness_breadth_bonus)
+
+    # Per-phase strength dial (see OPENING_BREADTH_STRENGTH_BONUS /
+    # MIDGAME_BREADTH_STRENGTH_BONUS in search_constants.py): widening
+    # breadth is close to a monotonic strength increase since it's the NN
+    # ranking, not engine search, that gates which moves ever get a real
+    # eval -- scoped to opening/midgame only per the human elo-progression
+    # data (endgame shows no rating-driven improvement, so it's left alone).
+    if game_phase == "opening":
+        no_moves += engine.opening_breadth_strength_bonus
+        if engine.opening_breadth_strength_bonus:
+            engine.log += "Opening phase: breadth strength bonus +{} \n".format(
+                engine.opening_breadth_strength_bonus)
+    elif game_phase == "midgame":
+        no_moves += engine.midgame_breadth_strength_bonus
+        if engine.midgame_breadth_strength_bonus:
+            engine.log += "Midgame phase: breadth strength bonus +{} \n".format(
+                engine.midgame_breadth_strength_bonus)
 
     # Now for mood dependent logic
     no_moves = max(no_moves + MOOD_BREADTH_DELTAS.get(engine.mood, 0), 1)

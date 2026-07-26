@@ -23,7 +23,10 @@ import chess.engine
 
 from common.board_information import get_lucas_analytics
 from common.utils import scraped_fen_sanity_issues, InvalidPositionError
-from common.search_constants import SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH
+from common.search_constants import (
+    SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH,
+    STOCKFISH_THREADS, STOCKFISH_HASH_MB,
+)
 
 
 def new_game(engine):
@@ -133,6 +136,7 @@ def calculate_analytics(engine):
         print("[ENGINE] WARNING: Stockfish engine crashed, attempting restart...")
         try:
             engine.stockfish_engine = chess.engine.SimpleEngine.popen_uci(engine._stockfish_path)
+            engine.stockfish_engine.configure({"Threads": STOCKFISH_THREADS, "Hash": STOCKFISH_HASH_MB})
             analysis = engine.stockfish_engine.analyse(engine.current_board, limit=chess.engine.Limit(depth=10, time=0.02), multipv=no_lines)
             engine.log += "Engine restart successful. \n"
             print("[ENGINE] Engine restart successful.")

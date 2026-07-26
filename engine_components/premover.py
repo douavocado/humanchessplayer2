@@ -4,12 +4,32 @@ get_premove finds a move to queue while it isn't our turn: takeback
 premoves first (best-takeback check), then an opponent-best-reply
 simulation (opening book if in book, else a stockfish-move search on the
 resulting position), filtered for human plausibility (not moving into an
-en-pris square) and, in the opening or a flag-race scramble, vetted with
-check_safe_premove before being allowed to fire.
+en-pris square) and vetted with check_safe_premove before being allowed to
+fire -- unconditionally in the opening, probabilistically everywhere else
+(scramble and ordinary midgame/endgame alike), each gated on its own
+per-game/per-instance probability.
 
 Eighth slice of the engine.py strangler-fig extraction (see
-testing/engine_parity/ for the regression harness). Verbatim move
-(self -> engine), no interface redesign.
+testing/engine_parity/ for the regression harness). Originally the ordinary
+(non-opening, non-scramble) branch had no check_safe_premove call at all --
+a mistake-impact analysis of adjudicated game losses
+(cheat_detection/runs/adjudication/) found the bot's instant worst mistakes
+were ~4x over-represented as premoves relative to their overall move share
+(61% vs 14%) and concentrated in the middlegame, i.e. exactly this
+unvetted branch.
+
+That finding was first patched as an unconditional vet (2026-07-26), then
+turned into a tunable dial (engine.midgame_premove_veto_p, default
+MIDGAME_PREMOVE_VETO_P = 1.0): the interesting result wasn't "add this one
+check", it was discovering that how much a fast-fire path second-guesses
+itself is itself a strength/human-likeness lever, the same way breadth and
+eval noise are -- separate from raw search quality (which is not the
+bottleneck; even a shallow-depth Stockfish is far past human bullet
+strength) and worth sweeping the same way, not hardcoding to whatever value
+happened to test well first. The scramble branch's existing
+engine.scramble_veto_p (gated on this game's scramble_skill, not a flat
+constant -- a panicky game must still occasionally queue an unsafe premove,
+see its own comment below) was the precedent this generalises.
 """
 import numpy as np
 
@@ -137,6 +157,14 @@ def get_premove(engine, board, side, takeback_only=False):
                 premove_uci = candidate_premove
             else:
                 engine.log += "Scramble premove {} is not a safe premove, filtering out. \n".format(candidate_premove)
+                premove_uci = None
+        elif np.random.random() < engine.midgame_premove_veto_p:
+            # Ordinary (non-opening, non-scramble) premove. Tunable strength
+            # lever, not a hardcoded check -- see module docstring.
+            if check_safe_premove(board, candidate_premove) == True:
+                premove_uci = candidate_premove
+            else:
+                engine.log += "Premove {} is not a safe premove, filtering out. \n".format(candidate_premove)
                 premove_uci = None
         else:
             premove_uci = candidate_premove
