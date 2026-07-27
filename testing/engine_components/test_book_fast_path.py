@@ -93,6 +93,49 @@ class TestBookFastPath(unittest.TestCase):
         self.assertTrue(eng.analytics_updated)
 
 
+class TestBookDerivedPremove(unittest.TestCase):
+    """The fast path returns before the normal premove/ponder preparation, so
+    without this it stops refilling the very channels it competes with -- a
+    6-game smoke test showed premove 14.0% -> 5.8% and ponder_hit 16.7% ->
+    13.2%. Queuing our book reply to the book's own predicted opponent reply
+    recovers the premove half for two polyglot lookups and no search."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.eng = Engine(log_file=None, opening_book_fast_path=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.eng.close_engines()
+
+    def test_start_position_yields_a_book_premove(self):
+        from engine_components.opening_book import book_premove
+        board = chess.Board()
+        our_move = self.eng.book_fast_move  # not armed yet
+        self.assertIsNone(our_move)
+        self.eng.update_info(_info(board))
+        after = board.copy()
+        after.push(chess.Move.from_uci(self.eng.book_fast_move))
+        pm = book_premove(self.eng, after)
+        self.assertIsNotNone(pm)
+        # legal in the position it would actually be fired from
+        probe = after.copy()
+        probe.push(chess.Move.from_uci(pm[1]))
+        self.assertIn(chess.Move.from_uci(pm[0]), probe.legal_moves)
+
+    def test_out_of_book_position_yields_none(self):
+        from engine_components.opening_book import book_premove
+        odd = chess.Board("4k3/8/8/3q4/8/8/4P3/4K3 b - - 0 30")
+        self.assertIsNone(book_premove(self.eng, odd))
+
+    def test_make_move_attaches_the_premove(self):
+        eng = self.eng
+        eng.update_info(_info(chess.Board()))
+        out = eng.make_move(log=False, seed=77)
+        self.assertTrue(out.get("book_fast"))
+        self.assertIn("premove", out)
+
+
 class TestPonderKnobs(unittest.TestCase):
 
     def test_defaults_resolve_to_the_module_constants(self):

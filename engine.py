@@ -727,6 +727,19 @@ class Engine:
             return_dic["move_made"] = self.book_fast_move
             return_dic["time_take"] = self._get_time_taken(obvious=True, human_filters=False)
             return_dic["book_fast"] = True
+            # Refill the premove channel on the way out. Without this the fast
+            # path starves the very queue it competes with -- it returns before
+            # the normal premove/ponder preparation, and a smoke test measured
+            # premove volume falling 14.0% -> 5.8% once it was enabled.
+            after_board = self.current_board.copy()
+            after_board.push(chess.Move.from_uci(self.book_fast_move))
+            book_pm = opening_book.book_premove(self, after_board)
+            if book_pm is not None:
+                return_dic["premove"] = book_pm[0]
+                self.log += "Opening book fast path queuing book premove {} (expecting {}). \n".format(
+                    book_pm[0], book_pm[1])
+            else:
+                return_dic["premove"] = None
             self.book_fast_move = None
             self.log += "Opening book fast path: playing {} in {} seconds without analysis. \n".format(
                 return_dic["move_made"], return_dic["time_take"])
