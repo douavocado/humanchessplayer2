@@ -72,6 +72,31 @@ than accept any integer, so it cannot promise precision that was never
 measured. A caller asking for 2700 vs 2750 should get the same bot, and should
 be able to see that from the API rather than by reading this document.
 
+## Feature priority: speed first
+
+Two knobs cannot in general hit four targets, and Phase A showed the bot's
+starting profile is spread across the entire width of the table (see Phase A
+findings). So the objective is **weighted, not equal**: the timing features
+(`movetime_mean`, `instant_move_rate`) are primary, and `t1_rate` /
+`blunder_rate` are fit as far as the speed choice allows, with the residual
+reported rather than hidden.
+
+This was a judgement call by the repo owner, and the measurements support it.
+Per-feature *resolvable* rating signal -- the 2100-2299 -> 2800+ span divided
+by the standard error a 150-game arm achieves -- ranks the timing features
+above the accuracy ones:
+
+| feature | span over 700 Elo | se (150-game arm) | span/se |
+|---|---|---|---|
+| Mean emt | 0.26s | ~0.015 | **17.3** |
+| Instant rate | 7.0pp | ~0.0045 | **15.6** |
+| Blunder rate | 2.1pp | ~0.0017 | 12.5 |
+| Top-1 match | 5.0pp | ~0.0045 | 11.2 |
+
+Timing carries more rating information per unit of measurement noise, so a dial
+that gets timing right and move-agreement approximately right is better
+calibrated than one that splits the difference.
+
 ## Scope
 
 **In:** a `target_rating` parameter resolving to a knob vector, fit against the
@@ -215,6 +240,73 @@ following the `midgame_breadth_strength_bonus` precedent.
 5. **Fit quality reported honestly**: a table of target vs achieved for each
    anchor, with standard errors, published in this directory. An anchor that
    misses is recorded as missing rather than quietly re-fit.
+
+## Phase A findings (measured 2026-07-27)
+
+5 arms x 150 complete self-play games, 60+0, analysed at depth 10 against
+`baselines/bullet_1plus0_2300_plus.json`.
+
+| arm | noise | quick | t1 | blunder | emt | instant |
+|---|---|---|---|---|---|---|
+| noise_low | 0.55 | 2.5 | 0.3514 | 0.0458 | 1.109 | 0.2440 |
+| baseline | 0.75 | 2.5 | 0.3338 | 0.0418 | 1.114 | 0.2519 |
+| noise_high | 0.95 | 2.5 | 0.3331 | 0.0406 | 1.100 | 0.2469 |
+| quick_fast | 0.75 | 2.0 | 0.3377 | 0.0370 | 1.016 | 0.2526 |
+| quick_slow | 0.75 | 3.0 | 0.3492 | 0.0450 | 1.213 | 0.2439 |
+
+**1. Mean emt is fully controllable and linear in `quickness`.**
+
+```
+emt = 0.1964 * quickness + 0.6234        (R^2 ~ 1 on three points)
+```
+
+That spans the entire band table: quickness 1.92 (2850) to 3.24 (2200), with
+the shipped default of 2.5 landing at emt 1.114, i.e. **~2560**. This is the
+strongest and best-measured relationship in Phase A (~20 se across the probed
+range) and it is the dial's working axis.
+
+| band | 2200 | 2350 | 2450 | 2550 | 2650 | 2750 | 2850 |
+|---|---|---|---|---|---|---|---|
+| target emt | 1.26 | 1.23 | 1.19 | 1.15 | 1.11 | 1.02 | 1.00 |
+| quickness | 3.24 | 3.09 | 2.88 | 2.68 | 2.48 | 2.02 | 1.92 |
+
+**2. Instant rate is immovable by either knob -- the key negative result.**
+Across all five arms it sits in 0.2439-0.2526, a span of 0.0087 against a
+per-arm se of ~0.0045: flat. The human table runs 0.3087 (2100-2299) to 0.3791
+(2800+), so the bot is **12.6 se below the table floor** and neither knob
+closes any of it.
+
+This is mechanism, not tuning. Sub-1s moves cannot be produced by shortening
+think time, because the engine-compute floor sets a hard minimum -- which is
+exactly why `common/constants.py` routes confidence through the premove channel
+rather than through think time. Instant rate is a *channel* feature: it is
+produced by premove fires, ponder-dic hits, and snap-gate decisions, none of
+which `quickness` or `eval_noise_scale` touch.
+
+**Consequence for the knob set:** the two timing features have different
+mechanisms and only one currently has a working knob. `quickness` owns mean
+emt; instant rate needs the instant-channel knobs (`GAME_PREMOVE_MEAN`,
+`GAME_PONDER_SNAP_MEAN`, the snap gate, and the ambiguity deltas landed inert
+in a4d2c7e). Phase B must add them.
+
+**3. `eval_noise_scale` moves t1 weakly and saturates above 0.75.** 0.55 ->
+0.75 costs 0.0176 t1 (2.8 se, real); 0.75 -> 0.95 costs 0.0007 (0.1 se, noise).
+Extrapolating the live region's slope, reaching the 2850 t1 of 0.3970 would
+need a noise scale near 0.03. **The top of the table is not reachable on t1**,
+and the pre-identified fallback does not help: the breadth sweep already showed
+breadth leaves t1 flat while buying blunder rate, which is the one feature
+already past the top of the table.
+
+**4. Do not tune on `blunder_rate` or `acpl` at this sample size.** They move
+non-monotonically across arms (acpl 75.0 / 88.8 / 95.2 / 105.6 / 85.8 with no
+clean ordering in either knob), consistent with the documented ACPL-variance
+warning in CLAUDE.md. Treat them as guards, not targets, until a replicate
+exists.
+
+**5. The bot has no single rating.** Baseline placement per feature: t1 below
+2100, blunder above 2800, emt ~2560, instant below 2100. The per-feature spread
+is the full width of the table, which is what makes the weighted objective
+above necessary rather than merely convenient.
 
 ## Limitations to carry into the docs
 
