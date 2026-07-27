@@ -1,7 +1,11 @@
 # Ambiguity-conditioned intuition snap gate
 
 Date: 2026-07-27
-Status: **design approved, not implemented.**
+Status: **implemented and landed inert.** Parity passed unchanged (no
+`--record`), confirming bit-identical behaviour at the default deltas; a
+same-seed run with `--ambiguity-forced-snap-delta 1.0` diverges, confirming
+the lever bites when set. The follow-up sweep below has **not** been run, so
+the deltas are still 0.0 and no behaviour has changed yet.
 
 ## Problem
 

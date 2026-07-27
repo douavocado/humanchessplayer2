@@ -62,10 +62,14 @@ class BotSpec:
     midgame_premove_veto_p: float = None  # None -> MIDGAME_PREMOVE_VETO_P
     opening_breadth_strength_bonus: int = None  # None -> OPENING_BREADTH_STRENGTH_BONUS
     midgame_breadth_strength_bonus: int = None  # None -> MIDGAME_BREADTH_STRENGTH_BONUS
+    ambiguity_forced_snap_delta: float = None  # None -> AMBIGUITY_FORCED_SNAP_DELTA
+    ambiguity_messy_snap_delta: float = None   # None -> AMBIGUITY_MESSY_SNAP_DELTA
 
     def __post_init__(self):
         from common.constants import (DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS,
-                                      HUMAN_EVAL_NOISE_SCALE)
+                                      HUMAN_EVAL_NOISE_SCALE,
+                                      AMBIGUITY_FORCED_SNAP_DELTA,
+                                      AMBIGUITY_MESSY_SNAP_DELTA)
         from common.search_constants import (MODERATE_SHARPNESS_BREADTH_BONUS,
                                              MIDGAME_PREMOVE_VETO_P,
                                              OPENING_BREADTH_STRENGTH_BONUS,
@@ -86,6 +90,10 @@ class BotSpec:
             self.opening_breadth_strength_bonus = OPENING_BREADTH_STRENGTH_BONUS
         if self.midgame_breadth_strength_bonus is None:
             self.midgame_breadth_strength_bonus = MIDGAME_BREADTH_STRENGTH_BONUS
+        if self.ambiguity_forced_snap_delta is None:
+            self.ambiguity_forced_snap_delta = AMBIGUITY_FORCED_SNAP_DELTA
+        if self.ambiguity_messy_snap_delta is None:
+            self.ambiguity_messy_snap_delta = AMBIGUITY_MESSY_SNAP_DELTA
 
 
 @dataclass

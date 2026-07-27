@@ -206,6 +206,17 @@ INITIAL_SCAN_MULTIPV_CAP = 50
 SHARPNESS_SCAN_MULTIPV = 5
 SHARPNESS_SCAN_DEPTH = 12
 
+# Ambiguity is read off the *same* sharpness scan: how many candidates sit
+# within this win-probability window of the best one. 1 means the position
+# has a single right answer (a shot to recognise), >= 2 means several
+# near-equal tries. The intuition snap gate splits on it -- humans snap
+# recognisable positions far more often as they get stronger, while slowing
+# down relatively on messy ones (docs/position-conditioned-human-likeness.md).
+# Like the width/depth above this MUST match the analyser
+# (cheat_detection/config.py:ambiguity_wc_window, same 0.05, also an
+# inclusive `<=`), or the gate is tuned against a quantity we never measure.
+AMBIGUITY_WC_WINDOW = 0.05
+
 # Width of the quick scan of the position *after* the opponent's predicted
 # reply, used to pick a premove / anticipated response (engine.py premove
 # logic and engine_components/premover.py).

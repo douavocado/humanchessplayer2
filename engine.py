@@ -29,6 +29,7 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               MOVE_TO_WEIGHTS_TACTICS_PTH,
                               DEPTH_PENALTY, ZERO_DEPTH_PENALTY, CAPTURE_BONUS,
                               OPENING_REPERTOIRE_PATH,
+                              AMBIGUITY_FORCED_SNAP_DELTA, AMBIGUITY_MESSY_SNAP_DELTA,
                               )
 
 from common.board_information import (
@@ -55,7 +56,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None):
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
@@ -92,6 +93,16 @@ class Engine:
         self.midgame_breadth_strength_bonus = (
             MIDGAME_BREADTH_STRENGTH_BONUS if midgame_breadth_strength_bonus is None
             else midgame_breadth_strength_bonus)
+        # Per-instance ambiguity split on the intuition snap gate (see
+        # decision_logic.get_time_taken); None keeps the respective global
+        # default, both 0.0 = no behavioural change. Overridable so the sweep
+        # that picks their values can A/B them on an otherwise identical bot.
+        self.ambiguity_forced_snap_delta = (
+            AMBIGUITY_FORCED_SNAP_DELTA if ambiguity_forced_snap_delta is None
+            else ambiguity_forced_snap_delta)
+        self.ambiguity_messy_snap_delta = (
+            AMBIGUITY_MESSY_SNAP_DELTA if ambiguity_messy_snap_delta is None
+            else ambiguity_messy_snap_delta)
         # Values are populated by update_info; typed loosely (Any) since
         # they're heterogeneous (bool, list, int, float) and set as a batch
         # via dict.update() rather than individual attribute assignment.
@@ -159,6 +170,10 @@ class Engine:
         # The sharpness scan itself ({move_uci: win_chance} from the deep
         # narrow scan), kept for _chosen_move_wc_loss. None if the scan failed.
         self.sharpness_scan: Optional[dict] = None
+        # How many of those candidates are near-equally good (1 = one right
+        # answer, >= 2 = several tries). Read off the same scan, so it costs
+        # nothing extra; splits the intuition snap gate. None if unavailable.
+        self.ambiguity: Optional[int] = None
         # Per-game character (see _sample_game_character): one draw per game
         # each, resampled at every game boundary, None until the first
         # update_info. game_pace_sf scales every base think time in

@@ -223,12 +223,25 @@ def get_time_taken(engine, obvious=False, human_filters=True):
         # thins further). Prevents the bot from reliably over-thinking
         # sharp positions and falling behind on time.
         snap_gate = engine.game_snap_gate if engine.game_snap_gate is not None else 0.65
+        # Sharp positions are not all alike. A position with ONE right answer
+        # is something a strong player *recognises* and bangs out; one with
+        # several near-equal tries is where they actually stop to choose. That
+        # split widens with strength (instant rate in sharp-forced positions
+        # +13.2pp from 2100-2299 to 2800+, vs +6.1pp in quiet), so the gate is
+        # offset by ambiguity rather than keying on sharpness alone. Offsets
+        # are additive on the per-game draw so this game's trust-the-gut vs
+        # grinding character still shows through.
+        ambiguity = engine.ambiguity
+        if ambiguity == 1:
+            snap_gate = min(1.0, snap_gate + engine.ambiguity_forced_snap_delta)
+        elif ambiguity is not None and ambiguity >= 2:
+            snap_gate = max(0.0, snap_gate - engine.ambiguity_messy_snap_delta)
         snap_in_sharp = (sharpness >= 0.25) and (np.random.random() < snap_gate)
         if snap_in_sharp:
             base_time *= 0.5
-            engine.log += "Sharp position (sharpness={:.3f}) but snapping on intuition (gate {:.2f}); base_time *= 0.5 -> {} \n".format(
-                sharpness, snap_gate, base_time)
-            print(f"[ENGINE] Sharp position (sharpness={sharpness:.3f}): snapping on intuition (no long think).")
+            engine.log += "Sharp position (sharpness={:.3f}, ambiguity={}) but snapping on intuition (gate {:.2f}); base_time *= 0.5 -> {} \n".format(
+                sharpness, ambiguity, snap_gate, base_time)
+            print(f"[ENGINE] Sharp position (sharpness={sharpness:.3f}, ambiguity={ambiguity}): snapping on intuition (no long think).")
         else:
             # The sharper (more critical) the position, the more we think.
             # "Complicated position" is defined by eval-stakes -- the spread

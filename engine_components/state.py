@@ -26,7 +26,32 @@ from common.utils import scraped_fen_sanity_issues, InvalidPositionError
 from common.search_constants import (
     SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH,
     STOCKFISH_THREADS, STOCKFISH_HASH_MB,
+    AMBIGUITY_WC_WINDOW,
 )
+
+
+def compute_ambiguity(sharpness_scan):
+    """ How many of the scanned candidates are about as good as the best one.
+
+        Read off the sharpness scan that compute_sharpness already stores
+        ({uci: win_chance}), so this costs no extra Stockfish work: 1 means
+        the position has a single right answer, >= 2 means several near-equal
+        tries. Drives the intuition snap gate's forced/messy split in
+        decision_logic.get_time_taken.
+
+        Deliberately identical to cheat_detection's definition (candidates
+        within AMBIGUITY_WC_WINDOW of the best, inclusive) so the bot gates on
+        the quantity the offline analyser measures.
+
+        Returns ambiguity : int >= 1, or None when the scan is unavailable
+        (failed scan / no candidate carried a pv) -- the caller treats None as
+        "apply no split" rather than assuming a forced position.
+    """
+    if not sharpness_scan:
+        return None
+    best_wc = max(sharpness_scan.values())
+    return sum(1 for wc in sharpness_scan.values()
+               if best_wc - wc <= AMBIGUITY_WC_WINDOW)
 
 
 def new_game(engine):
@@ -161,8 +186,13 @@ def calculate_analytics(engine):
     # This is the criterion for "complicated position" used when deciding
     # how long to think (see _get_time_taken).
     engine.sharpness = engine._compute_sharpness()
-    engine.log += "Position sharpness: {} \n".format(engine.sharpness)
-    print(f"[ENGINE] Position sharpness: {engine.sharpness:.3f}")
+    # Read off the same scan compute_sharpness just stored: how many
+    # candidates are near-equally good. Splits the intuition snap gate
+    # (see decision_logic.get_time_taken).
+    engine.ambiguity = compute_ambiguity(engine.sharpness_scan)
+    engine.log += "Position sharpness: {} (ambiguity {}) \n".format(
+        engine.sharpness, engine.ambiguity)
+    print(f"[ENGINE] Position sharpness: {engine.sharpness:.3f} (ambiguity {engine.ambiguity})")
 
     # Now determine our player "mood" and set it as our mode for the rest of the calculations
     engine.mood = engine._set_mood()

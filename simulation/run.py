@@ -77,14 +77,18 @@ def _play_chunk(task: tuple) -> list:
                           moderate_sharpness_breadth_bonus=cfg.bot_a.moderate_sharpness_breadth_bonus,
                           midgame_premove_veto_p=cfg.bot_a.midgame_premove_veto_p,
                           opening_breadth_strength_bonus=cfg.bot_a.opening_breadth_strength_bonus,
-                          midgame_breadth_strength_bonus=cfg.bot_a.midgame_breadth_strength_bonus)
+                          midgame_breadth_strength_bonus=cfg.bot_a.midgame_breadth_strength_bonus,
+                          ambiguity_forced_snap_delta=cfg.bot_a.ambiguity_forced_snap_delta,
+                          ambiguity_messy_snap_delta=cfg.bot_a.ambiguity_messy_snap_delta)
         engine_b = Engine(playing_level=cfg.bot_b.difficulty,
                           quickness=cfg.bot_b.quickness,
                           eval_noise_scale=cfg.bot_b.eval_noise_scale,
                           moderate_sharpness_breadth_bonus=cfg.bot_b.moderate_sharpness_breadth_bonus,
                           midgame_premove_veto_p=cfg.bot_b.midgame_premove_veto_p,
                           opening_breadth_strength_bonus=cfg.bot_b.opening_breadth_strength_bonus,
-                          midgame_breadth_strength_bonus=cfg.bot_b.midgame_breadth_strength_bonus)
+                          midgame_breadth_strength_bonus=cfg.bot_b.midgame_breadth_strength_bonus,
+                          ambiguity_forced_snap_delta=cfg.bot_b.ambiguity_forced_snap_delta,
+                          ambiguity_messy_snap_delta=cfg.bot_b.ambiguity_messy_snap_delta)
         if progress_q is not None:
             progress_q.put({"type": "loaded", "worker": worker_id,
                             "n_seeds": len(jobs)})
@@ -168,6 +172,16 @@ def main(argv=None) -> int:
                    help="probability of vetting an ordinary premove with "
                         "check_safe_premove, for both bots (default "
                         "common.search_constants.MIDGAME_PREMOVE_VETO_P)")
+    p.add_argument("--ambiguity-forced-snap-delta", type=float,
+                   help="added to the intuition snap-gate probability when the "
+                        "position has one clearly best move (ambiguity == 1), "
+                        "for both bots (default common.constants."
+                        "AMBIGUITY_FORCED_SNAP_DELTA)")
+    p.add_argument("--ambiguity-messy-snap-delta", type=float,
+                   help="subtracted from the intuition snap-gate probability "
+                        "when several candidates are near-equal (ambiguity >= "
+                        "2), for both bots (default common.constants."
+                        "AMBIGUITY_MESSY_SNAP_DELTA)")
     p.add_argument("--opening-breadth-bonus", type=int,
                    help="extra root moves considered in the opening (out of "
                         "book), for both bots (default common.search_"
@@ -205,6 +219,12 @@ def main(argv=None) -> int:
         p.add_argument(f"--{tag}-midgame-breadth-bonus", dest=f"{tag}_midgame_breadth_bonus", type=int,
                        help=f"bot {tag}'s midgame breadth bonus "
                             "(overrides --midgame-breadth-bonus)")
+        p.add_argument(f"--{tag}-ambiguity-forced-snap-delta", dest=f"{tag}_ambiguity_forced_snap_delta", type=float,
+                       help=f"bot {tag}'s forced-position snap-gate offset "
+                            "(overrides --ambiguity-forced-snap-delta)")
+        p.add_argument(f"--{tag}-ambiguity-messy-snap-delta", dest=f"{tag}_ambiguity_messy_snap_delta", type=float,
+                       help=f"bot {tag}'s messy-position snap-gate offset "
+                            "(overrides --ambiguity-messy-snap-delta)")
     p.add_argument("--max-plies", type=int, default=400)
     p.add_argument("--simulate-full", action="store_true",
                    help="play every game to a real conclusion instead of the "
@@ -248,6 +268,12 @@ def main(argv=None) -> int:
             midgame_breadth_strength_bonus=(
                 g("midgame_breadth_bonus") if g("midgame_breadth_bonus") is not None
                 else args.midgame_breadth_bonus),
+            ambiguity_forced_snap_delta=(
+                g("ambiguity_forced_snap_delta") if g("ambiguity_forced_snap_delta") is not None
+                else args.ambiguity_forced_snap_delta),
+            ambiguity_messy_snap_delta=(
+                g("ambiguity_messy_snap_delta") if g("ambiguity_messy_snap_delta") is not None
+                else args.ambiguity_messy_snap_delta),
         )
 
     # Default names keep the historic fixed-sides labels so existing

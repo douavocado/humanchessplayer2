@@ -196,6 +196,23 @@ GAME_PONDER_WIDTH_CLIP = (0, 5)
 # the bot's time-vs-sharpness correlation overshot the human baseline
 # (~0.07 vs ~0.02) -- humans barely slow down for sharp positions in bullet.
 GAME_SNAP_GATE_RANGE = (0.55, 0.95)
+# Ambiguity split on that gate: sharp positions are not all alike. Humans snap
+# a position with ONE right answer far more readily than one with several
+# near-equal tries, and the gap widens with strength -- instant rate in
+# sharp-forced positions climbs +13.2pp from 2100-2299 to 2800+ (vs +6.1pp in
+# quiet), until at the top band sharp-forced is the *fastest* bucket (.464)
+# while at the bottom it is indistinguishable from quiet. The bot shows the
+# mirror symptom: corr_time_sharpness +0.056 vs a human +0.037, i.e. it slows
+# down where strong humans speed up. These are additive offsets on the
+# per-game draw above, so the trust-the-gut-vs-grinding character survives the
+# split rather than being flattened by it.
+#
+# Both default to 0.0: the mechanism ships inert (bit-identical behaviour, no
+# extra RNG draw) and the values come from a sweep, exactly as the breadth
+# bonuses did. Grid and judging criteria:
+# docs/superpowers/specs/2026-07-27-ambiguity-snap-gate-design.md
+AMBIGUITY_FORCED_SNAP_DELTA = 0.0   # ambiguity == 1: raise the snap probability
+AMBIGUITY_MESSY_SNAP_DELTA = 0.0    # ambiguity >= 2: lower it
 # "Hesitation before the mistake" (engine.py:_adjust_time_for_move_loss):
 # humans think longer in positions where they end up erring, giving a
 # positive per-game correlation between move time and move loss (~ +0.10 in
