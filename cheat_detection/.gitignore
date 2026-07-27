@@ -7,9 +7,12 @@ report.md
 report.json
 # Downloaded/filtered human corpora (can be large)
 corpora/
-# Orchestrator working dir (fetched games, reports) -- except the
-# breadth-sweep driver script itself, which is code, not a generated output.
+# Orchestrator working dir (fetched games, reports) -- except the sweep
+# driver scripts themselves, which are code, not generated output.
 runs/*
 !runs/breadth_sweep/
 runs/breadth_sweep/*
 !runs/breadth_sweep/run_sweep.py
+!runs/strength_dial/
+runs/strength_dial/*
+!runs/strength_dial/run_phase_a.py
