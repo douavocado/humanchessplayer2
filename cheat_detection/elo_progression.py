@@ -180,24 +180,57 @@ def collect(pgn_path: str, cfg: AnalysisConfig, max_games: Optional[int] = None)
     return by_band
 
 
+INSTANT_SECS = AnalysisConfig().instant_move_secs
+
+
+def _median(xs: list[float]) -> float:
+    s = sorted(xs)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+
+
 def _stats(mfeats: list[MoveFeatures]) -> dict[str, float]:
     n = len(mfeats)
     if n == 0:
         return {"n": 0}
-    return {
+    out = {
         "n": n,
         "blunder_rate": sum(m.is_blunder for m in mfeats) / n,
         "mean_wc_loss": sum(m.wc_loss for m in mfeats) / n,
         "acpl": sum(m.cp_loss for m in mfeats) / n,
         "t1_rate": sum(m.matched_top1 for m in mfeats) / n,
     }
+    # Timing, over the moves that carry a clock (same convention as
+    # features.aggregate_features: emt is None when the PGN lacks the tag).
+    timed = [m.emt for m in mfeats if m.emt is not None]
+    out["n_timed"] = len(timed)
+    if timed:
+        out["movetime_mean"] = sum(timed) / len(timed)
+        out["movetime_median"] = _median(timed)
+        out["instant_rate"] = sum(t < INSTANT_SECS for t in timed) / len(timed)
+    else:
+        out["movetime_mean"] = out["movetime_median"] = out["instant_rate"] = None
+    return out
 
 
-def _row(band, s) -> str:
-    if s["n"] < 30:
-        return f"| {band_label(band)} | {s['n']} | n/a | n/a | n/a |"
+# Column set shared by every per-bucket table: mistake profile first, then the
+# timing profile (the "where do stronger players move faster" axis).
+_HEADER = ("| Band | n moves | Blunder rate | Mean win-chance loss | ACPL | "
+           "Top-1 match | Mean emt | Median emt | Instant rate |")
+_HEADER_SEP = "|---|---|---|---|---|---|---|---|---|"
+_NA_COLS = 8
+
+
+def _row(band, s, min_n: int = 30) -> str:
+    if s["n"] < min_n:
+        return f"| {band_label(band)} | {s['n']} | " + " | ".join(["n/a"] * (_NA_COLS - 1)) + " |"
+    if s["movetime_mean"] is None:
+        timing = "n/a | n/a | n/a"
+    else:
+        timing = (f"{s['movetime_mean']:.2f} | {s['movetime_median']:.2f} | "
+                  f"{s['instant_rate']:.4f}")
     return (f"| {band_label(band)} | {s['n']} | {s['blunder_rate']:.4f} | "
-            f"{s['mean_wc_loss']:.4f} | {s['acpl']:.1f} |")
+            f"{s['mean_wc_loss']:.4f} | {s['acpl']:.1f} | {s['t1_rate']:.4f} | {timing} |")
 
 
 def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
@@ -206,26 +239,25 @@ def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
                   "not a significance test; sample sizes are large enough per band that "
                   "this is a reasonable simplification.\n")
 
+    lines.append("Timing columns cover only moves carrying a clock tag; `emt` is elapsed "
+                  f"move time in seconds and an \"instant\" move is emt < {INSTANT_SECS:g}s.\n")
+
     lines.append("## Overall (all positions)\n")
-    lines.append("| Band | n moves | Blunder rate | Mean win-chance loss | ACPL | Top-1 match |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append(_HEADER)
+    lines.append(_HEADER_SEP)
     for band in BANDS:
         s = _stats([mf for mf, _ in by_band[band]])
-        if s["n"] < min_n:
-            lines.append(f"| {band_label(band)} | {s['n']} | n/a | n/a | n/a | n/a |")
-            continue
-        lines.append(f"| {band_label(band)} | {s['n']} | {s['blunder_rate']:.4f} | "
-                      f"{s['mean_wc_loss']:.4f} | {s['acpl']:.1f} | {s['t1_rate']:.4f} |")
+        lines.append(_row(band, s, min_n))
     lines.append("")
 
     lines.append("## By position-sharpness bucket (eval-stakes)\n")
     for b in BUCKETS:
         lines.append(f"### {BUCKET_LABEL[b]}\n")
-        lines.append("| Band | n moves | Blunder rate | Mean win-chance loss | ACPL |")
-        lines.append("|---|---|---|---|---|")
+        lines.append(_HEADER)
+        lines.append(_HEADER_SEP)
         for band in BANDS:
             s = _stats([mf for mf, _ in by_band[band] if bucket_of(mf) == b])
-            lines.append(_row(band, s))
+            lines.append(_row(band, s, min_n))
         lines.append("")
 
     lines.append(f"## By effective-mobility bucket (Lucas eff_mob, structural complexity -- "
@@ -233,21 +265,21 @@ def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
     for b in EFF_MOB_BUCKETS:
         label = "Forced/tactical (eff_mob < cutoff)" if b == "forced_tactical" else "Open (eff_mob >= cutoff)"
         lines.append(f"### {label}\n")
-        lines.append("| Band | n moves | Blunder rate | Mean win-chance loss | ACPL |")
-        lines.append("|---|---|---|---|---|")
+        lines.append(_HEADER)
+        lines.append(_HEADER_SEP)
         for band in BANDS:
             s = _stats([mf for mf, lu in by_band[band] if eff_mob_bucket(lu) == b])
-            lines.append(_row(band, s))
+            lines.append(_row(band, s, min_n))
         lines.append("")
 
     lines.append("## By game phase\n")
     for phase in PHASES:
         lines.append(f"### {phase}\n")
-        lines.append("| Band | n moves | Blunder rate | Mean win-chance loss | ACPL |")
-        lines.append("|---|---|---|---|---|")
+        lines.append(_HEADER)
+        lines.append(_HEADER_SEP)
         for band in BANDS:
             s = _stats([mf for mf, _ in by_band[band] if mf.phase == phase])
-            lines.append(_row(band, s))
+            lines.append(_row(band, s, min_n))
         lines.append("")
 
     lines.append("## Position-character mix per band (does the bucket distribution itself shift?)\n")

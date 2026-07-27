@@ -50,8 +50,15 @@ def evaluate(report_path, dispersion_path):
     disp = json.load(open(dispersion_path))["features"]
     rows, n_z, n_out, n_pbf = [], 0, 0, 0
     pz_sum = pz_n = 0
+    skipped = []
     for f in r["features"]:
         k = f["key"]
+        # A feature the bot has no moves for is unmeasurable, not an outlier:
+        # e.g. the time-pressure stats when every game was adjudicated at the
+        # clock threshold before the scramble. Skip rather than crash on None.
+        if f["zscore"] is None or f["bot_value"] is None:
+            skipped.append(k)
+            continue
         d = disp.get(k)
         row = {"key": k, "z": f["zscore"], "bot": f["bot_value"]}
         if abs(f["zscore"]) >= 2:
@@ -80,7 +87,8 @@ def evaluate(report_path, dispersion_path):
         rows.append(row)
     summary = {"z_flags": n_z, "player_outliers": n_out,
                "persistent_bf": n_pbf,
-               "mean_abs_player_z": pz_sum / max(pz_n, 1)}
+               "mean_abs_player_z": pz_sum / max(pz_n, 1),
+               "skipped": skipped}
     return summary, rows
 
 
@@ -98,6 +106,8 @@ def main():
     n_avg = sum(1 for r in rows if r.get("too_avg"))
     print(f"  too-average features (|player_z|<0.2): {n_avg}/"
           f"{sum(1 for r in rows if 'player_z' in r)}")
+    if s["skipped"]:
+        print(f"  skipped (no bot data): {', '.join(s['skipped'])}")
     for r in sorted(rows, key=lambda r: -abs(r.get("player_z", 0))):
         marks = ("Z" if r.get("Z") else " ") + \
                 ("O" if r.get("OUT") else " ") + \
