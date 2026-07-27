@@ -185,6 +185,24 @@ HUMAN_EVAL_NOISE_SCALE = 0.75
 # the one remaining persistent variance flag (instant_move_rate) needs.
 # BASE up 2.8 -> 3.0 compensates the mean for the width-0 games.
 GAME_PONDER_WIDTH_BASE = 3.0
+# Opening-book fast path: consult the book BEFORE calculate_analytics rather
+# than after, so a memorised move stops paying for a full-width multipv scan
+# plus an uncapped depth-12 sharpness scan.
+#
+# This is the only lever that can raise the instant-move rate in the opening.
+# The per-move compute floor (screen detection + engine + mouse) means the
+# engine's requested opening think time is ALREADY below it, so no pacing knob
+# moves the instant rate -- Phase A varied eval_noise_scale 0.55-0.95 and
+# quickness 2.0-3.0 and held instant rate within 0.0087 (per-arm se 0.0045).
+# Only paths that bypass engine compute produce sub-1s moves.
+#
+# Ships OFF: unlike the other tuning levers here it changes behaviour by
+# construction rather than being a no-op at its default, so the engine parity
+# harness only stays green while this is False. Taking the fast path also
+# skips check_obvious_move, which is acceptable because a real blunder takes
+# the game OUT of book -- measured over 1,176 opening positions, 69.9% were
+# book hits and 0 of those 822 hits had a hanging queen or rook.
+OPENING_BOOK_FAST_PATH = False
 GAME_PONDER_WIDTH_SPREAD = 1.4
 GAME_PONDER_WIDTH_PRIVATE = 0.4
 GAME_PONDER_WIDTH_CLIP = (0, 5)

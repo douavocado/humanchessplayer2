@@ -64,16 +64,22 @@ class BotSpec:
     midgame_breadth_strength_bonus: int = None  # None -> MIDGAME_BREADTH_STRENGTH_BONUS
     ambiguity_forced_snap_delta: float = None  # None -> AMBIGUITY_FORCED_SNAP_DELTA
     ambiguity_messy_snap_delta: float = None   # None -> AMBIGUITY_MESSY_SNAP_DELTA
+    opening_book_fast_path: bool = None        # None -> OPENING_BOOK_FAST_PATH
+    ponder_time_per_position: float = None     # None -> PONDER_TIME_PER_POSITION
+    game_ponder_width_base: float = None       # None -> GAME_PONDER_WIDTH_BASE
 
     def __post_init__(self):
         from common.constants import (DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS,
                                       HUMAN_EVAL_NOISE_SCALE,
                                       AMBIGUITY_FORCED_SNAP_DELTA,
-                                      AMBIGUITY_MESSY_SNAP_DELTA)
+                                      AMBIGUITY_MESSY_SNAP_DELTA,
+                                      OPENING_BOOK_FAST_PATH,
+                                      GAME_PONDER_WIDTH_BASE)
         from common.search_constants import (MODERATE_SHARPNESS_BREADTH_BONUS,
                                              MIDGAME_PREMOVE_VETO_P,
                                              OPENING_BREADTH_STRENGTH_BONUS,
-                                             MIDGAME_BREADTH_STRENGTH_BONUS)
+                                             MIDGAME_BREADTH_STRENGTH_BONUS,
+                                             PONDER_TIME_PER_POSITION)
         if self.difficulty is None:
             self.difficulty = DIFFICULTY
         if self.quickness is None:
@@ -94,6 +100,12 @@ class BotSpec:
             self.ambiguity_forced_snap_delta = AMBIGUITY_FORCED_SNAP_DELTA
         if self.ambiguity_messy_snap_delta is None:
             self.ambiguity_messy_snap_delta = AMBIGUITY_MESSY_SNAP_DELTA
+        if self.opening_book_fast_path is None:
+            self.opening_book_fast_path = OPENING_BOOK_FAST_PATH
+        if self.ponder_time_per_position is None:
+            self.ponder_time_per_position = PONDER_TIME_PER_POSITION
+        if self.game_ponder_width_base is None:
+            self.game_ponder_width_base = GAME_PONDER_WIDTH_BASE
 
 
 @dataclass

@@ -83,7 +83,7 @@ def sample_game_character(engine):
     # constants) -- the low end (width 1-2 games) carries the
     # between-game instant-rate spread.
     engine.game_ponder_width = int(round(np.clip(
-        GAME_PONDER_WIDTH_BASE + GAME_PONDER_WIDTH_SPREAD * z_snap
+        engine.game_ponder_width_base + GAME_PONDER_WIDTH_SPREAD * z_snap
         + GAME_PONDER_WIDTH_PRIVATE * float(np.random.randn()),
         *GAME_PONDER_WIDTH_CLIP)))
     engine.log += "Sampled per-game character: pace {:.3f}, premove propensity {:.3f}, snap gate {:.3f}, ponder snap {:.3f}, scramble fire {:.3f}, scramble skill {:.3f}, ponder width {} \n".format(

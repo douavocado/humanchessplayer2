@@ -30,6 +30,7 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               DEPTH_PENALTY, ZERO_DEPTH_PENALTY, CAPTURE_BONUS,
                               OPENING_REPERTOIRE_PATH,
                               AMBIGUITY_FORCED_SNAP_DELTA, AMBIGUITY_MESSY_SNAP_DELTA,
+                              OPENING_BOOK_FAST_PATH, GAME_PONDER_WIDTH_BASE,
                               )
 
 from common.board_information import (
@@ -56,7 +57,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None):
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
@@ -67,6 +68,26 @@ class Engine:
         # calibration work (breadth vs. noise, independent of playing_level)
         # can vary it per simulated bot.
         self.eval_noise_scale = HUMAN_EVAL_NOISE_SCALE if eval_noise_scale is None else eval_noise_scale
+        # Opening-book fast path (see OPENING_BOOK_FAST_PATH): when armed,
+        # update_info consults the book before running the analytics scans and
+        # make_move returns that move straight away. Ships off -- this one
+        # changes behaviour rather than being inert at its default.
+        self.opening_book_fast_path = (
+            OPENING_BOOK_FAST_PATH if opening_book_fast_path is None
+            else opening_book_fast_path)
+        # Set by update_info when the fast path arms; consumed and cleared by
+        # make_move. None means "take the normal path this move".
+        self.book_fast_move: Optional[str] = None
+        # Per-instance ponder budget knobs; None keeps the globals. Lowering
+        # the per-position cost is the structural lever on ponder-hit rate
+        # (see search_constants.py) and the width base caps how many opponent
+        # replies a game prepares -- both swept for the instant-move channel.
+        self.ponder_time_per_position = (
+            PONDER_TIME_PER_POSITION if ponder_time_per_position is None
+            else ponder_time_per_position)
+        self.game_ponder_width_base = (
+            GAME_PONDER_WIDTH_BASE if game_ponder_width_base is None
+            else game_ponder_width_base)
         # Per-instance breadth bonus for the moderate-sharpness band (see
         # decide_breadth / search_constants.py); None keeps the global
         # MODERATE_SHARPNESS_BREADTH_BONUS. Overridable so an Elo-delta
@@ -691,7 +712,29 @@ class Engine:
         move_start = time.time()
         return_dic: dict[str, Any] = {}
         self.log += "Make move function called. \n"
-        
+
+        # Opening-book fast path (armed in update_info, which skipped the
+        # analytics scans for this move). Return the memorised move straight
+        # away, priced like an obvious move -- that branch of _get_time_taken
+        # reads no analytics, which is exactly why it is safe here.
+        #
+        # Everything below is deliberately skipped: check_obvious_move (a real
+        # blunder takes the game out of book -- 0 of 822 measured book hits had
+        # a hanging queen or rook), the opponent-blunder check, and the
+        # premove/ponder preparation. The last of those is a real cost and the
+        # sweep measures it.
+        if self.book_fast_move is not None:
+            return_dic["move_made"] = self.book_fast_move
+            return_dic["time_take"] = self._get_time_taken(obvious=True, human_filters=False)
+            return_dic["book_fast"] = True
+            self.book_fast_move = None
+            self.log += "Opening book fast path: playing {} in {} seconds without analysis. \n".format(
+                return_dic["move_made"], return_dic["time_take"])
+            if log == True:
+                self._write_log()
+            return return_dic
+
+
         # If analytics for the position hasn't been called, issue warning.
         if self.analytics_updated == False:
             self.log += "WARNING: calculating move with outdated analytics. Please run .calculate_analytics() function to update for the new information dict. \n"
@@ -809,7 +852,7 @@ class Engine:
         # If we have extra time than that of alloted then we may do some pondering for the position after our move
         time_spent = move_end - move_start
         
-        time_per_position = PONDER_TIME_PER_POSITION # nominal cost per ponder position (see search_constants)
+        time_per_position = self.ponder_time_per_position # nominal cost per ponder position (see search_constants); per-instance for the ponder-width sweep
         time_left = return_dic["time_take"] - time_spent
         search_width = self._decide_breadth(time_left) # this is slightly incorrect, but close enough
         if time_left > time_per_position*search_width * 1.15:

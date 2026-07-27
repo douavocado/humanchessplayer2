@@ -21,7 +21,8 @@ import numpy as np
 import chess
 import chess.engine
 
-from common.board_information import get_lucas_analytics
+from common.board_information import get_lucas_analytics, phase_of_game
+from engine_components import opening_book
 from common.utils import scraped_fen_sanity_issues, InvalidPositionError
 from common.search_constants import (
     SHARPNESS_SCAN_MULTIPV, SHARPNESS_SCAN_DEPTH,
@@ -117,6 +118,27 @@ def update_info(engine, info_dic, auto_update_analytics=True):
     engine._last_seen_ply = ply
 
     engine.analytics_updated = False
+
+    # Opening-book fast path: a memorised move needs no analysis, so consult
+    # the book BEFORE the expensive scans rather than after them (the normal
+    # path reaches consult_book inside get_human_move, by which point
+    # calculate_analytics has already run a full-width multipv scan plus an
+    # uncapped depth-12 sharpness scan). This is the only lever that can move
+    # the opening instant-move rate: requested opening think time already sits
+    # below the per-move compute floor, so pacing knobs cannot.
+    #
+    # Cleared on every update_info so a hit can never leak into the next
+    # position, and only ever armed when the flag is on -- consult_book draws
+    # from the RNG, so gating it here is what keeps the disabled default
+    # bit-identical to before.
+    engine.book_fast_move = None
+    if engine.opening_book_fast_path and phase_of_game(engine.current_board) == "opening":
+        book_move = opening_book.consult_book(engine, engine.current_board)
+        if book_move is not None:
+            engine.book_fast_move = book_move.uci()
+            engine.log += "Opening book fast path armed with {}; skipping analytics. \n".format(
+                engine.book_fast_move)
+            return
 
     if auto_update_analytics == True:
         engine.calculate_analytics()

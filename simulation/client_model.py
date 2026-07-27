@@ -24,6 +24,7 @@ import chess
 
 from common.move_timing import (
     MOVE_DELAY,
+    BOOK_FAST_PATH_COMPUTE_FRACTION,
     ponder_response_wait,
     resign_pause,
     scramble_response_wait,
@@ -205,7 +206,14 @@ class SimClient:
         # Realised think: the client sleeps up to (time_take - MOVE_DELAY),
         # but real compute overruns that floor on heavy positions.
         compute = self.latency.compute_time(phase_of_game(board))
+        if out.get("book_fast"):
+            # The book fast path skipped the analytics scans and the
+            # premove/ponder preparation, so it must not be charged a full
+            # move's compute -- that floor is precisely what it exists to
+            # duck, and charging it anyway would make the lever look inert.
+            compute *= BOOK_FAST_PATH_COMPUTE_FRACTION
         think = max(float(out["time_take"]) - MOVE_DELAY, compute)
 
         gesture = self._gesture(move_uci, own_time)
-        return MoveDecision(move_uci, overhead + think + gesture, "engine")
+        kind = "book" if out.get("book_fast") else "engine"
+        return MoveDecision(move_uci, overhead + think + gesture, kind)

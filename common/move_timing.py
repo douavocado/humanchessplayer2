@@ -23,6 +23,21 @@ MOVE_DELAY = 0.25
 DRAG_MOVE_DELAY = 0.07
 CLICK_MOVE_DELAY = 0.03
 
+# What fraction of a normal move's engine compute an opening-book fast-path
+# move costs (see OPENING_BOOK_FAST_PATH). The fast path skips
+# calculate_analytics -- the full-width multipv scan plus the uncapped
+# depth-12 sharpness scan -- and returns before the premove/ponder
+# preparation, so it does strictly less work than any other branch.
+#
+# Measured headless on a dev box: a book move's make_move costs 0.082s once
+# analytics has run, and calculate_analytics itself costs 0.110s, so the fast
+# path keeps 0.082 of 0.192s. The RATIO is what transfers between machines,
+# not either absolute -- the simulator's compute_time distributions are
+# calibrated on the machine that actually runs the client (screen detection
+# and mouse automation included) and must not be replaced with dev-box
+# timings.
+BOOK_FAST_PATH_COMPUTE_FRACTION = 0.43
+
 # Chance a gesture is deliberately fumbled to look human.
 MOUSE_SLIP_PROB = 0.03
 
