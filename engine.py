@@ -23,7 +23,7 @@ from common.constants import (PATH_TO_STOCKFISH, MOVE_FROM_WEIGHTS_OP_PTH, MOVE_
                               MOVE_FROM_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_MID_PTH,
                               MOVE_TO_WEIGHTS_END_PTH, MOVE_TO_WEIGHTS_OP_PTH,
                               ALTER_MOVE_PROB_WEIGHTS_PTH,
-                              QUICKNESS,
+                              QUICKNESS, DIFFICULTY,
                               HUMAN_EVAL_NOISE_SCALE,
                               PATH_TO_PONDER_STOCKFISH, MOVE_FROM_WEIGHTS_TACTICS_PTH,
                               MOVE_TO_WEIGHTS_TACTICS_PTH,
@@ -59,7 +59,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None, target_rating: Optional[int] = None, reeval_order: Optional[str] = None):
+    def __init__(self, playing_level:int = DIFFICULTY, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None, target_rating: Optional[int] = None, reeval_order: Optional[str] = None):
         # Target-rating dial (common/strength_profiles.py): resolves a
         # requested playing strength to the knobs whose rating mapping has
         # actually been fitted. Precedence is
