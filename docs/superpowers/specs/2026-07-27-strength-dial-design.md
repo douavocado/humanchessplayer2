@@ -301,7 +301,9 @@ already past the top of the table.
 non-monotonically across arms (acpl 75.0 / 88.8 / 95.2 / 105.6 / 85.8 with no
 clean ordering in either knob), consistent with the documented ACPL-variance
 warning in CLAUDE.md. Treat them as guards, not targets, until a replicate
-exists.
+exists. **This warning was then ignored in the first write-up of Phase B and
+Phase C, both of which had to be retracted** -- the replicate that would have
+caught it cost one extra arm.
 
 **5. The bot has no single rating.** Baseline placement per feature: t1 below
 2100, blunder above 2800, emt ~2560, instant below 2100. The per-feature spread
@@ -412,37 +414,106 @@ eval spread between candidates is far below that penalty, so the choice is
 decided by the re-evaluation lottery, not by evals or by the noise term on top
 of them. The t1 lever was never noise.
 
-**2. `midgame_breadth_strength_bonus` -> blunder rate points the wrong way.**
+**2. `midgame_breadth_strength_bonus` -> blunder rate: not measurable.**
 
 | breadth | +0 | +1 | +2 | +3 |
 |---|---|---|---|---|
 | blunder | 0.0418 | 0.0448 | 0.0380 | 0.0343 |
 | t1 | 0.3338 | 0.3433 | 0.3495 | 0.3554 |
 
-The blunder trend is real (-0.0075 over +0 -> +3, 3.1 se) but the achievable
-range, 0.0343-0.0448, sits at or below the **2850** band (0.0444). The bot is
-already better than the best humans at every setting and breadth only improves
-it further; reaching 2200's 0.0657 would need to go the other way, past +0.
+This was first written up as "a real trend (-0.0075 over +0 -> +3, 3.1 se)
+pointing the wrong way for a dial". **That reading is retracted.** It used the
+binomial standard error for blunder rate (~0.0017/arm), and Phase C later
+showed the real between-seed spread is ~0.0062 -- understated by about 3.6x.
+At the corrected error the breadth trend is ~0.9 se: nothing.
 
-Breadth *does* move t1 (0.3338 -> 0.3554, ~3.4 se), which **contradicts the
-earlier "breadth leaves t1 flat" finding** -- that was measured on adjudicated
-games. Breadth is a better t1 lever than noise, though +3 only reaches ~2350.
+Breadth *does* move t1 (0.3338 -> 0.3554, ~3.4 se, which survives the
+correction because t1's binomial error is sound). That contradicts the earlier
+"breadth leaves t1 flat" finding, which was measured on adjudicated games.
 
-**3. The structural obstruction.** The two results share one cause. The bot is
-**superhuman on error avoidance and subhuman on move agreement**, and every
-strength knob moves those together: more breadth raises t1 *and* lowers blunder
-rate. To look human it needs t1 up **and** blunder rate up. No knob does that,
-because strength in this engine is a single direction while the bot's profile
-is off the human manifold in two directions at once.
+**3. What survives about the bot's position relative to humans.** The
+*directional* claims -- which knob moves blunder rate which way -- do not
+survive at 150 games/arm. The *level* claims do, because they pool twelve arms
+rather than comparing two: bot blunder averages 0.0407 (se of the mean
+~0.0012) against the 2850 band's 0.0444, and baseline t1 of 0.3338 sits below
+the 2200 floor of 0.3466.
 
-This is why the accuracy half of the dial is not merely weakly calibrated but
-uncalibratable with the current knob set. It is not a tuning problem, and no
-amount of extra sweep compute addresses it -- it needs a lever that makes the
-bot *choose differently* without making it *choose better*, i.e. the
-re-evaluation-lottery structure above, not a strength knob.
+So the bot is **superhuman at error avoidance and subhuman at move agreement**
+-- off the human manifold in two directions at once. That framing stands. What
+cannot be claimed from this data is how any particular knob moves it on the
+blunder axis.
 
 **Consequence for `CALIBRATED_KNOBS`:** it stays `("quickness",)`. The dial is
 a pace dial, and the spec should keep saying so.
+
+**4. Blunder rate costs ~600 games/arm to measure.** Worth knowing before
+spending compute on it: at 150 games/arm it carries no information, so any
+future arm intended to move it needs roughly 4x the budget. t1 is the only
+accuracy feature measurable at the 150-game price.
+
+## Phase C findings (measured 2026-07-28): the re-evaluation draw
+
+Driver: `cheat_detection/runs/strength_dial/run_phase_c.py`. Four arms, same
+conventions.
+
+Phase B left t1 with no working owner. The mechanism behind that turned out to
+be the re-evaluation draw in `get_human_move`: when there is not time to
+re-evaluate every root move, the ones that miss out stay at
+`depth_considered` 0 and take a ~60cp penalty (`DEPTH_PENALTY` x2 +
+`ZERO_DEPTH_PENALTY`). In a quiet position that dwarfs the real eval spread
+between candidates, so missing the draw is effectively disqualification.
+
+Measured on 115 real positions, and the phase pattern matches the t1 deficit
+exactly:
+
+| | root moves | re-evaluated | draw active |
+|---|---|---|---|
+| Quiet | 8.46 | 6.18 | **63.2%** |
+| Moderate | 8.17 | 11.33 | 38.9% |
+| Sharp | 7.80 | 12.60 | 30.0% |
+
+Quiet positions take the `*0.7` "little at stake" time cut, which shrinks the
+budget below the candidate count; sharp positions are covered. The draw was
+`random.sample` over candidates sorted by eval -- blind to both quality and
+human plausibility.
+
+| ordering | t1 | blunder (not evidence) |
+|---|---|---|
+| random | 0.3338 | 0.0418 |
+| **human** | **0.3496 / 0.3442** (two seeds) | 0.0483 / 0.0396 |
+| eval | 0.3552 | 0.0389 |
+| human + breadth +2 | 0.3522 | 0.0373 |
+
+`human` raises t1 by ~+0.013, replicated across two seeds agreeing to 0.8 se,
+lifting the bot from below the human floor (0.3466) to roughly at it. `eval`
+gains more (+0.021) but by making the bot play *better* -- the wrong direction
+given finding 3.
+
+**Shipped `REEVAL_ORDER = "human"` (12b322d)** -- the first behavioural default
+change in this line of work. The justification that does not depend on any
+metric: uniformly random sampling of which candidates to calculate was never a
+defensible model of human thought.
+
+**Retraction.** The first reading of the seed-810000 arm claimed t1 *and*
+blunder rate both rose, and built a two-stage story on it: that `human` moves
+the bot *onto* the human manifold (both up) while strength knobs move it
+*along* the manifold (t1 up, blunder down). The replicate killed it -- the two
+identical-config arms differ on blunder by 0.0087, more than either differs
+from the baseline. Only the t1 half survives. The manifold framing may still be
+true; this data cannot support it.
+
+**The parity harness does not guard this change.** Its scenarios reach the draw
+only degenerately -- `promotion_stop_incident` at R=0 (all orderings coincide),
+`resign_candidate` at R=1, `midgame_reference` at R >= N -- so parity stayed
+green through the default flip. That is evidence the harness misses this path,
+not evidence the change is inert; two sim arms differ by +0.013 t1.
+`testing/engine_components/test_reeval_order.py` guards it directly instead.
+
+**Operational note: do not trust the parity harness under load.** Run
+concurrently with a 6-worker sweep, `lucas_win_prob` swings 30-40 points
+against the ~12 documented in CLAUDE.md, and the harness false-fails about half
+the time. A failure taken under load was nearly attributed to an unrelated
+change.
 
 ## Limitations to carry into the docs
 
