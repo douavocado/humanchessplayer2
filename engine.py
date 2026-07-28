@@ -40,6 +40,7 @@ from common.search_constants import (
     MAX_CALC_DEPTH_COEFF, PONDER_TIME_PER_POSITION, MODERATE_SHARPNESS_BREADTH_BONUS,
     STOCKFISH_THREADS, STOCKFISH_HASH_MB, MIDGAME_PREMOVE_VETO_P,
     OPENING_BREADTH_STRENGTH_BONUS, MIDGAME_BREADTH_STRENGTH_BONUS,
+    REEVAL_ORDER, REEVAL_ORDERS,
 )
 from common.utils import (extend_mate_score)
 from common import strength_profiles
@@ -58,7 +59,7 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None, target_rating: Optional[int] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None, target_rating: Optional[int] = None, reeval_order: Optional[str] = None):
         # Target-rating dial (common/strength_profiles.py): resolves a
         # requested playing strength to the knobs whose rating mapping has
         # actually been fitted. Precedence is
@@ -104,6 +105,13 @@ class Engine:
         self.game_ponder_width_base = (
             GAME_PONDER_WIDTH_BASE if game_ponder_width_base is None
             else game_ponder_width_base)
+        # Ordering of the re-evaluation draw in get_human_move; see
+        # REEVAL_ORDER. "random" is the shipped behaviour.
+        self.reeval_order = REEVAL_ORDER if reeval_order is None else reeval_order
+        if self.reeval_order not in REEVAL_ORDERS:
+            raise ValueError(
+                "reeval_order must be one of {}, got {!r}".format(
+                    REEVAL_ORDERS, self.reeval_order))
         # Per-instance breadth bonus for the moderate-sharpness band (see
         # decide_breadth / search_constants.py); None keeps the global
         # MODERATE_SHARPNESS_BREADTH_BONUS. Overridable so an Elo-delta
@@ -397,7 +405,19 @@ class Engine:
         depth = min((re_evaluations // no_root_moves) + 1, max_depth)
         
         reval_start = time.time()
-        re_evaluate_moves = random.sample(top_human_moves, min(re_evaluations, len(top_human_moves)))
+        # Which candidates get the deeper look when there isn't time for all
+        # of them (see REEVAL_ORDER). Missing out means depth_considered 0 and
+        # a ~60cp penalty, which in a quiet position dwarfs the real eval
+        # spread -- so this choice is effectively a disqualification draw.
+        _k = min(re_evaluations, len(top_human_moves))
+        if self.reeval_order == "eval":
+            re_evaluate_moves = top_human_moves[:_k]
+        elif self.reeval_order == "human":
+            _by_human = [m for m in root_moves if m in human_move_evals]
+            _by_human += [m for m in top_human_moves if m not in _by_human]
+            re_evaluate_moves = _by_human[:_k]
+        else:
+            re_evaluate_moves = random.sample(top_human_moves, _k)
         san_re_evaluate_moves = [self.current_board.san(chess.Move.from_uci(x)) for x in re_evaluate_moves]
         time_allowed = target_time - (reval_start - start)
         self.log += "Re-evaluating moves: {} with depth {} with time allowed {} \n".format(san_re_evaluate_moves, depth, time_allowed)

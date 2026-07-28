@@ -83,7 +83,8 @@ def _play_chunk(task: tuple) -> list:
                           opening_book_fast_path=cfg.bot_a.opening_book_fast_path,
                           ponder_time_per_position=cfg.bot_a.ponder_time_per_position,
                           game_ponder_width_base=cfg.bot_a.game_ponder_width_base,
-                          target_rating=cfg.bot_a.target_rating)
+                          target_rating=cfg.bot_a.target_rating,
+                          reeval_order=cfg.bot_a.reeval_order)
         engine_b = Engine(playing_level=cfg.bot_b.difficulty,
                           quickness=cfg.bot_b.quickness,
                           eval_noise_scale=cfg.bot_b.eval_noise_scale,
@@ -96,7 +97,8 @@ def _play_chunk(task: tuple) -> list:
                           opening_book_fast_path=cfg.bot_b.opening_book_fast_path,
                           ponder_time_per_position=cfg.bot_b.ponder_time_per_position,
                           game_ponder_width_base=cfg.bot_b.game_ponder_width_base,
-                          target_rating=cfg.bot_b.target_rating)
+                          target_rating=cfg.bot_b.target_rating,
+                          reeval_order=cfg.bot_b.reeval_order)
         if progress_q is not None:
             progress_q.put({"type": "loaded", "worker": worker_id,
                             "n_seeds": len(jobs)})
@@ -180,6 +182,10 @@ def main(argv=None) -> int:
                    help="probability of vetting an ordinary premove with "
                         "check_safe_premove, for both bots (default "
                         "common.search_constants.MIDGAME_PREMOVE_VETO_P)")
+    p.add_argument("--reeval-order", choices=("random", "human", "eval"),
+                   help="which root moves get the deeper second look when "
+                        "there is not time for all of them (default "
+                        "common.search_constants.REEVAL_ORDER)")
     p.add_argument("--target-rating", type=int,
                    help="playing-strength dial for both bots; snaps to a "
                         "supported level (common.strength_profiles."
@@ -304,6 +310,7 @@ def main(argv=None) -> int:
             target_rating=(
                 g("target_rating") if g("target_rating") is not None
                 else args.target_rating),
+            reeval_order=args.reeval_order,
             opening_book_fast_path=(
                 g("opening_book_fast_path") if g("opening_book_fast_path") is not None
                 else args.opening_book_fast_path),

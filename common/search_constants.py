@@ -280,3 +280,34 @@ OPENING_BOOK_TOP_N = 5
 # benefit rather than help further, so this isn't scaled up aggressively.
 STOCKFISH_THREADS = 2
 STOCKFISH_HASH_MB = 128
+
+
+# ---------------------------------------------------------------------------
+# 8. Re-evaluation ordering (Engine.get_human_move)
+# ---------------------------------------------------------------------------
+# Which root moves get the deeper second look, when there is not time for all
+# of them. Moves that miss out are left at depth_considered 0 and take a ~60cp
+# penalty (DEPTH_PENALTY x2 + ZERO_DEPTH_PENALTY), which in a quiet position
+# is far larger than the real eval spread between candidates -- so missing out
+# is effectively disqualification.
+#
+# Measured on 115 real positions: the engine picks 8.46 root moves in quiet
+# positions but re-evaluates only 6.18, so ~2.3 candidates per position are
+# knocked out, and the lottery is active in 63.2% of quiet positions (vs 30%
+# of sharp ones, where the wider time budget covers everything).
+#
+#   "random" -- uniform random.sample, the shipped behaviour. Blind to both
+#               move quality and human plausibility, so it disqualifies the
+#               engine's best move about a quarter of the time it is present.
+#   "human"  -- the most human-plausible candidates first (NN order). What a
+#               human actually does: you calculate your most natural moves,
+#               not a random subset.
+#   "eval"   -- the highest-eval candidates first. Upper bound on the t1 gain,
+#               but it also makes the bot *choose better*, which is the wrong
+#               direction: the bot is already superhuman on error avoidance
+#               (see the strength-dial spec's structural obstruction).
+#
+# Ships "random" so the parity harness stays green; the others are here to be
+# measured.
+REEVAL_ORDER = "random"
+REEVAL_ORDERS = ("random", "human", "eval")

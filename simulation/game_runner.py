@@ -68,6 +68,7 @@ class BotSpec:
     ponder_time_per_position: float = None     # None -> PONDER_TIME_PER_POSITION
     game_ponder_width_base: float = None       # None -> GAME_PONDER_WIDTH_BASE
     target_rating: int = None                  # None -> no dial; see common/strength_profiles.py
+    reeval_order: str = None                   # None -> REEVAL_ORDER
 
     def __post_init__(self):
         from common.constants import (DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS,
@@ -80,7 +81,8 @@ class BotSpec:
                                              MIDGAME_PREMOVE_VETO_P,
                                              OPENING_BREADTH_STRENGTH_BONUS,
                                              MIDGAME_BREADTH_STRENGTH_BONUS,
-                                             PONDER_TIME_PER_POSITION)
+                                             PONDER_TIME_PER_POSITION,
+                                             REEVAL_ORDER)
         if self.difficulty is None:
             self.difficulty = DIFFICULTY
         if self.quickness is None:
@@ -107,6 +109,8 @@ class BotSpec:
             self.ponder_time_per_position = PONDER_TIME_PER_POSITION
         if self.game_ponder_width_base is None:
             self.game_ponder_width_base = GAME_PONDER_WIDTH_BASE
+        if self.reeval_order is None:
+            self.reeval_order = REEVAL_ORDER
 
 
 @dataclass
