@@ -333,7 +333,7 @@ explicit.
 Two of the three objections above are bullet-specific rather than intrinsic:
 
 - *The compute cost* only bites because the per-move floor is most of a 60+0
-  move. At 10+0 it is a small fraction, so a breadth bump no longer gates the
+  move. At ten minutes it is a small fraction, so a breadth bump no longer gates the
   instant-move rate -- the mechanism that makes it disqualifying here simply
   is not present there.
 - *Integer granularity* only bites because the band-to-band feature gaps at
@@ -349,8 +349,8 @@ pattern recognition and clock economy, longer controls reward calculation
 depth, and search breadth is the thing in this engine that most directly
 models calculation depth. `eval_noise_scale`'s saturation above 0.75 is what
 caps the dial's top end at 1+0; breadth may well be the knob that lifts that
-cap at 10+0, where `DIFFICULTY` could reasonably become the *primary* strength
-axis rather than a frozen constant.
+cap at ten minutes, where `DIFFICULTY` could reasonably become the *primary*
+strength axis rather than a frozen constant.
 
 | feature | owning knob | evidence | usable range |
 |---|---|---|---|
@@ -391,17 +391,25 @@ out.
 - ~200-300 Elo granularity; the interface should expose coarse steps.
 - Aggregate only -- the bucket profile stays inverted, and a conditioned
   analysis will still identify the bot.
-- **Every number here is calibrated on 60+0, and the timing half of the
+- **Notation warning.** `--tc 60+0` is parsed in **seconds**
+  (`simulation/run.py` sets `initial_time = 60.0`), so "60+0" throughout this
+  document means one minute of bullet, i.e. 1+0 in standard chess notation.
+  Prose elsewhere in the repo (and in CLAUDE.md) uses standard notation, where
+  "3+2" and "10+0" mean *minutes*. The same token therefore means different
+  things in a CLI argument and in prose -- this document spells out longer
+  controls in words to avoid it.
+- **Every number here is calibrated on 60+0 (one minute), and the timing half of the
   control surface is the part least likely to transfer.** Two of the four
   owning knobs are aimed at timing features whose absolute values are
   artefacts of a 60-second budget: the `quickness -> emt` fit
   (`0.1964*q + 0.6234`) is a 60+0 regression and its intercept has no meaning
   at another control, and the instant-move threshold (emt < 1s) is a far
-  larger share of a bullet move than of a 3+2 or 10+0 one. The compute floor
+  larger share of a bullet move than of a three- or ten-minute one. The
+  compute floor
   that makes instant rate a bypass-only feature is *absolute*, so it occupies
-  proportionally less of a longer move -- at 10+0 the engine path may reach
-  sub-1s moves on its own and the book fast path may be unnecessary or even
-  wrong. Expect to redo the strength-timing calibration per time control:
+  proportionally less of a longer move -- at ten minutes the engine path may
+  reach sub-1s moves on its own and the book fast path may be unnecessary or
+  even wrong. Expect to redo the strength-timing calibration per time control:
   a fresh `elo_progression` band table on a corpus pinned to that exact clock,
   then a fresh Phase A. What carries over is the *rule* -- one owning knob per
   feature -- not the roster: which knob owns which feature is itself a
