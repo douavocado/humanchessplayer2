@@ -1,9 +1,23 @@
 # A continuous strength dial calibrated on human rating bands
 
 Date: 2026-07-27
-Status: **design approved; Phase A (measurement) running, no code written.**
-Phase A needs no engine changes, so the fit is being measured before anything
-is built.
+Status: **Phases A-C complete; shipped as a PACE dial, not a strength dial.**
+`Engine(target_rating=N)` / `--target-rating N` exists in both `main.py` and
+`simulation.run` and resolves via `common/strength_profiles.py`, but
+`CALIBRATED_KNOBS` is `("quickness",)` -- only mean elapsed move time has a
+fitted rating mapping. Move agreement and error rates are untouched by it, and
+the flag's own help text says so.
+
+Why it stopped there: Phase B found both accuracy axes uncalibratable with the
+existing knobs (`eval_noise_scale` non-monotone with no range; breadth's
+blunder effect not measurable at the sample size), and Phase C found the one
+lever that does move t1 -- the re-evaluation draw's ordering, shipped as
+`REEVAL_ORDER = "human"` in 12b322d, worth ~+0.013 t1 and the only
+behavioural default change from this work.
+
+Later measurement not in this spec: the timing picture is two independent
+axes, not one. See the long-think findings summarised in CLAUDE.md's
+move-time pacing section and `runs/elo_progression/report_longthink.md`.
 
 ## Problem
 

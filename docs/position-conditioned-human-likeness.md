@@ -1,7 +1,30 @@
 # Position-conditioned human-likeness: where the bot actually diverges
 
-Status: **diagnostic complete, no behavioural change made.** Two follow-up
-workstreams are identified at the end; neither is started.
+Status: **diagnostic complete. Superseded in two places by later measurement
+(2026-07-28) -- read those corrections before acting on anything here.**
+
+1. **"This rules out every strength lever"** (Finding 1) overstated the case.
+   It is true of the *strength* knobs it was about -- `eval_noise_scale` was
+   later measured non-monotone with no usable range, and breadth's blunder
+   effect is not measurable at 150 games/arm. But a lever outside that class
+   does move quiet-position agreement: the ordering of the re-evaluation draw
+   in `get_human_move`, shipped as `REEVAL_ORDER = "human"` (12b322d), worth
+   ~+0.013 aggregate t1 and replicated across three seeds. The draw randomly
+   disqualifies ~2.3 of 8.46 candidates in quiet positions (active in 63.2% of
+   them), which is why the deficit was concentrated there.
+2. **The timing analysis here covers only the fast tail.** `long_think_rate`
+   (emt > 2s) did not exist when this was written. It moves in the *opposite*
+   direction with rating -- 0.122 at 2100-2299 down to 0.088 at 2800+ -- so
+   instant rate and long-think rate are independent axes, and the bot is low on
+   both. See `cheat_detection/runs/elo_progression/report_longthink.md`.
+
+Also note every human comparison below is against the **pooled** 2300+ mean.
+That is the right reference for the bucket contrasts it draws, but it is not a
+target: judging the bot's mean emt against the pooled 1.217 made a value that
+sits at ~2700 on the band table look like a shortfall.
+
+Two follow-up workstreams are identified at the end; both have since been
+acted on -- see `docs/superpowers/specs/`.
 
 Scope warning, up front: **every number here is 1+0 bullet.** See "Time-control
 scope" below before generalising any of it.

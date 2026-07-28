@@ -1,8 +1,29 @@
 # Raising the instant-move rate through the compute-bypass channel
 
 Date: 2026-07-28
-Status: **design; not implemented.** Phase B of the strength dial
-(`2026-07-27-strength-dial-design.md`).
+Status: **levers 1 and 2 implemented and measured; both ship OFF/inert.**
+Lever 3 (the ambiguity snap-gate deltas) remains unswept.
+
+Lever 1, the opening-book fast path, works and is validated at 150 games/arm:
+opening instant rate 0.373 -> 0.567 against a human 0.565, aggregate
+0.260 -> 0.294. It stays **off by default** because the book-derived premove it
+queues adds premove volume, and the failure mode CLAUDE.md flags for that shows
+up in `blunder_rate_timepressure` -- a blunder-rate metric, which carries no
+information at 150 games/arm. Clearing it needs ~600 games/arm; that run has
+not happened, so a clean guard reading in Phase D is **not** a safety
+clearance.
+
+Lever 2's knobs (`ponder_time_per_position`, `game_ponder_width_base`) are
+per-instance and default-unchanged, but **were never measured** -- the endgame
+instant-rate gap they were meant to address (0.287 vs a human 0.496) is still
+open.
+
+Driver: `cheat_detection/runs/strength_dial/run_phase_d.py`.
+
+One correction to the framing below: the aggregate instant-rate deficit that
+motivated this spec is now known to be half the story. Long-think rate (emt >
+2s) moves in the *opposite* direction with rating and the bot is low on that
+too -- see CLAUDE.md's move-time pacing section.
 
 ## Problem
 
