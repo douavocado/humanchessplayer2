@@ -27,6 +27,8 @@ from common.constants import (
     MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
     MISTAKE_HESITATION_RANGE, MISTAKE_HESITATION_MIN_TIME,
     MISTAKE_SNAP_WC_LOSS, MISTAKE_SNAP_PROB, MISTAKE_SNAP_RANGE,
+    OPP_BLUNDER_STARTLE_MULTIPLIER, OPP_BLUNDER_STARTLE_MULTIPLIER_LOW_TIME,
+    OPP_BLUNDER_STARTLE_LOW_TIME_THRESHOLD,
 )
 
 
@@ -267,10 +269,19 @@ def get_time_taken(engine, obvious=False, human_filters=True):
                 base_time *= 0.7
                 engine.log += "Base time after low-sharpness (flat position) analysis: {} \n".format(base_time)
 
-        # If opponent has just blundered, then act startled
+        # If opponent has just blundered, then act startled. Still fires
+        # under time pressure -- being startled doesn't switch off just
+        # because the clock is low -- but the reaction is muted rather than
+        # skipped outright (unlike MISTAKE_HESITATION/SNAP below).
         if engine.opponent_just_blundered == True:
-            engine.log += "Opponent has just blundered, acting startled with longer think time. \n"
-            base_time *= 2
+            if own_time < OPP_BLUNDER_STARTLE_LOW_TIME_THRESHOLD:
+                startle_multiplier = OPP_BLUNDER_STARTLE_MULTIPLIER_LOW_TIME
+                engine.log += "Opponent has just blundered, but our clock is low ({:.1f}s left) -- acting only a little startled (x{}). \n".format(
+                    own_time, startle_multiplier)
+            else:
+                startle_multiplier = OPP_BLUNDER_STARTLE_MULTIPLIER
+                engine.log += "Opponent has just blundered, acting startled with longer think time (x{}). \n".format(startle_multiplier)
+            base_time *= startle_multiplier
 
         # based on the time control, we have a higher end multiplier
         high_range_multiplier = self_initial_time**0.35/(60**0.35)

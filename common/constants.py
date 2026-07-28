@@ -264,6 +264,15 @@ MISTAKE_SNAP_RANGE = (0.65, 0.9)
 # to win back in an exchange (calculate_threatened_levels).
 OPP_BLUNDER_EVAL_SWING_MIN = 50
 OPP_BLUNDER_EN_PRIS_MIN_VALUE = 3
+# The startle reaction itself (decision_logic.py's base_time *= multiplier)
+# still fires under time pressure -- a human doesn't stop being surprised
+# just because their clock is low -- but the reaction is muted rather than
+# skipped outright the way MISTAKE_HESITATION/SNAP are: below
+# OPP_BLUNDER_STARTLE_LOW_TIME_THRESHOLD seconds of own clock, the added
+# think time is roughly halved (multiplier 2.0 -> 1.5).
+OPP_BLUNDER_STARTLE_MULTIPLIER = 2.0
+OPP_BLUNDER_STARTLE_MULTIPLIER_LOW_TIME = 1.5
+OPP_BLUNDER_STARTLE_LOW_TIME_THRESHOLD = 10
 # Flag-race autopilot (engine.py:get_stockfish_move): in a deep scramble a
 # human does not distinguish "+mate" from "+800" -- both read as "winning" --
 # and plays on instinct: shuffling, missing mates, occasionally stalemating
