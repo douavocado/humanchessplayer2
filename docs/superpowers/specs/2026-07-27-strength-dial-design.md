@@ -329,6 +329,29 @@ shipped -- a bare `Engine()` (parity harness, unit tests) runs at twice the
 live bot's base breadth. Change the default to 3 or drop it so callers must be
 explicit.
 
+**The freeze is scoped to 1+0 and should be revisited at longer controls.**
+Two of the three objections above are bullet-specific rather than intrinsic:
+
+- *The compute cost* only bites because the per-move floor is most of a 60+0
+  move. At 10+0 it is a small fraction, so a breadth bump no longer gates the
+  instant-move rate -- the mechanism that makes it disqualifying here simply
+  is not present there.
+- *Integer granularity* only bites because the band-to-band feature gaps at
+  this control are tiny (5pp of top-1 across 700 Elo). Where the gaps are
+  wider, a coarse knob is proportionally less coarse, and the continuous knobs
+  can interpolate within its steps.
+
+Only the third objection -- that it moves breadth and noise together, so it
+cannot be aimed at one feature -- is structural and survives at any control.
+
+There is also a positive argument for it at longer controls: bullet rewards
+pattern recognition and clock economy, longer controls reward calculation
+depth, and search breadth is the thing in this engine that most directly
+models calculation depth. `eval_noise_scale`'s saturation above 0.75 is what
+caps the dial's top end at 1+0; breadth may well be the knob that lifts that
+cap at 10+0, where `DIFFICULTY` could reasonably become the *primary* strength
+axis rather than a frozen constant.
+
 | feature | owning knob | evidence | usable range |
 |---|---|---|---|
 | Mean emt | `quickness` | `emt = 0.1964*q + 0.6234`, ~20 se (Phase A) | **full table**, q 1.92-3.24 |
@@ -380,9 +403,11 @@ out.
   sub-1s moves on its own and the book fast path may be unnecessary or even
   wrong. Expect to redo the strength-timing calibration per time control:
   a fresh `elo_progression` band table on a corpus pinned to that exact clock,
-  then a fresh Phase A. The *structure* of the surface (one owning knob per
-  feature, DIFFICULTY frozen) should carry over; none of the coefficients
-  should be assumed to.
+  then a fresh Phase A. What carries over is the *rule* -- one owning knob per
+  feature -- not the roster: which knob owns which feature is itself a
+  per-control finding, and **`DIFFICULTY` is expected to come back off the
+  freeze at longer controls** (see the Control surface section). None of the
+  coefficients should be assumed to transfer.
 - Likewise the accuracy half: the finding that human improvement is *smallest*
   in quiet positions is plausibly bullet-specific, so which feature is hardest
   to move may itself change at longer controls.
