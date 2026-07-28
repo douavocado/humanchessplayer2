@@ -308,12 +308,84 @@ exists.
 is the full width of the table, which is what makes the weighted objective
 above necessary rather than merely convenient.
 
+## Control surface: one owning knob per feature
+
+This resolves the knob-set question the Design section left open, and replaces
+`DIFFICULTY` as the way playing strength is set.
+
+**`DIFFICULTY` (`Engine.playing_level`) is frozen as a structural constant, not
+a tuning knob.** It fails on three measured counts: it is an integer so it
+cannot interpolate; it drives *both* base search breadth
+(`decision_logic.py:39`) and the eval-noise floor (`engine.py:423`,
+`ponderer.py:375`) simultaneously, so it cannot be aimed at one feature; and
+widening breadth raises the per-move compute floor, which is precisely what
+gates the instant-move rate. `common/constants.py:166` already records that
+`HUMAN_EVAL_NOISE_SCALE` was introduced as the free alternative to a
+`DIFFICULTY` bump, and `cheat_detection/elo_progression.py:13` that
+`DIFFICULTY=4` improved ACPL and blunder rate but got flagged.
+
+Pin it at 3. Its constructor default is currently 6, which matches nothing
+shipped -- a bare `Engine()` (parity harness, unit tests) runs at twice the
+live bot's base breadth. Change the default to 3 or drop it so callers must be
+explicit.
+
+| feature | owning knob | evidence | usable range |
+|---|---|---|---|
+| Mean emt | `quickness` | `emt = 0.1964*q + 0.6234`, ~20 se (Phase A) | **full table**, q 1.92-3.24 |
+| Instant rate | `opening_book_fast_path`, then the ponder knobs | opening 0.389 -> 0.567 vs human 0.565 | opening closed; endgame unproven |
+| Blunder rate | `midgame_breadth_strength_bonus` | 0.0380 -> 0.0169 over +0..+5 | full table, integer steps |
+| Top-1 match | `eval_noise_scale` | -0.088 t1 per unit over 0.55-0.75 | **partial -- saturates above 0.75** |
+
+The rule that makes this a firewall rather than a pile of knobs: **each feature
+has exactly one owner, and a second knob is never reached for to fix a feature
+that already has one.** That is exactly what stopped working with `DIFFICULTY`,
+which owned two features at once.
+
+Precedence stays as specced above: explicit knob argument > `target_rating` >
+module constant.
+
+### What this surface cannot do, and must say on the tin
+
+- **Top-1 match cannot reach the top of the table.** `eval_noise_scale`
+  saturates above 0.75, and the live region's slope implies a value near 0.03
+  to hit 2850's t1. Breadth does not help -- it leaves t1 flat while buying
+  blunder rate. So above roughly 2650 the bot plays at the right *speed* with
+  the right *error rate* while agreeing with the engine like a 2500. State
+  this at the interface rather than letting it be discovered.
+- **The per-bucket profile stays inverted** (quiet below 2100, sharp-forced
+  above 2800). Untouched by any of this.
+- **Endgame instant rate is the open gap** (0.270 vs a human 0.496) and is the
+  one feature whose owner is not yet established. `PONDER_TIME_PER_POSITION` is
+  the candidate and is now a per-instance knob, but nothing has measured it.
+
+Only two mappings are actually fitted today: `quickness -> emt`, and the book
+fast path. Before any `target_rating` ships, breadth -> blunder and noise -> t1
+need the same treatment and the endgame lever needs to be established or ruled
+out.
+
 ## Limitations to carry into the docs
 
 - ~200-300 Elo granularity; the interface should expose coarse steps.
 - Aggregate only -- the bucket profile stays inverted, and a conditioned
   analysis will still identify the bot.
-- 1+0 bullet only.
+- **Every number here is calibrated on 60+0, and the timing half of the
+  control surface is the part least likely to transfer.** Two of the four
+  owning knobs are aimed at timing features whose absolute values are
+  artefacts of a 60-second budget: the `quickness -> emt` fit
+  (`0.1964*q + 0.6234`) is a 60+0 regression and its intercept has no meaning
+  at another control, and the instant-move threshold (emt < 1s) is a far
+  larger share of a bullet move than of a 3+2 or 10+0 one. The compute floor
+  that makes instant rate a bypass-only feature is *absolute*, so it occupies
+  proportionally less of a longer move -- at 10+0 the engine path may reach
+  sub-1s moves on its own and the book fast path may be unnecessary or even
+  wrong. Expect to redo the strength-timing calibration per time control:
+  a fresh `elo_progression` band table on a corpus pinned to that exact clock,
+  then a fresh Phase A. The *structure* of the surface (one owning knob per
+  feature, DIFFICULTY frozen) should carry over; none of the coefficients
+  should be assumed to.
+- Likewise the accuracy half: the finding that human improvement is *smallest*
+  in quiet positions is plausibly bullet-specific, so which feature is hardest
+  to move may itself change at longer controls.
 - Labels are behavioural until live-validated.
 
 ## Follow-ups (not in scope)
