@@ -34,6 +34,35 @@ parser.add_argument("-q", "--quickness", type=float, default=None,
                     help="Engine quickness (overrides default from constants)")
 parser.add_argument("-m", "--mouse-quickness", type=float, default=None,
                     help="Mouse quickness (overrides default from constants)")
+parser.add_argument("--target-rating", type=int, default=None,
+                    help="PACE dial, not a strength dial: sets move-time "
+                         "pacing to match this human rating band, and nothing "
+                         "else. Snaps to a supported level "
+                         "(common.strength_profiles.STRENGTH_LEVELS) because "
+                         "the measured resolution is ~200-300 Elo. Only "
+                         "quickness has a fitted rating mapping; move "
+                         "agreement and error rates are unaffected. -q wins "
+                         "over this")
+parser.add_argument("--opening-book-fast-path", action="store_true", default=None,
+                    help="Play opening-book moves without running the "
+                         "analytics scans first. Raises the opening "
+                         "instant-move rate to roughly human (0.37 -> 0.57 vs "
+                         "a human 0.565) and queues a book-derived premove. "
+                         "Off by default: the added premove volume is not yet "
+                         "cleared against blunder_rate_timepressure, which "
+                         "needs ~600 games/arm to measure")
+parser.add_argument("--reeval-order", choices=("random", "human", "eval"),
+                    default=None,
+                    help="Which candidates get the deeper second look when "
+                         "there is not time for all of them (default "
+                         "common.search_constants.REEVAL_ORDER). 'eval' is a "
+                         "strength setting: +0.021 t1, but by playing better")
+parser.add_argument("--midgame-breadth-bonus", type=int, default=None,
+                    help="Extra midgame search breadth (default "
+                         "common.search_constants."
+                         "MIDGAME_BREADTH_STRENGTH_BONUS). Raises t1 ~+0.022 "
+                         "over +0..+3; its effect on blunder rate is not "
+                         "measurable at the sample sizes tested")
 parser.add_argument("--debug", help="Debug/dry-run mode: only test new game detection with visualisations",
                         action="store_true")
 parser.add_argument("--debug-interval", type=float, default=2.0,
@@ -92,6 +121,19 @@ MOUSE_QUICKNESS = args.mouse_quickness if args.mouse_quickness is not None else 
 constants.DIFFICULTY = DIFFICULTY
 constants.QUICKNESS = QUICKNESS
 constants.MOUSE_QUICKNESS = MOUSE_QUICKNESS
+
+# Strength/behaviour levers added 2026-07-28. These are read into module
+# globals at import time by engine.py, so they must be patched here -- before
+# the `from clients.mp_original import ...` below, which is what pulls engine
+# in. Same ordering the DIFFICULTY/QUICKNESS patch above relies on.
+if args.opening_book_fast_path is not None:
+    constants.OPENING_BOOK_FAST_PATH = args.opening_book_fast_path
+if args.reeval_order is not None:
+    import common.search_constants as _search_constants
+    _search_constants.REEVAL_ORDER = args.reeval_order
+if args.midgame_breadth_bonus is not None:
+    import common.search_constants as _search_constants
+    _search_constants.MIDGAME_BREADTH_STRENGTH_BONUS = args.midgame_breadth_bonus
 
 # Configure which calibration file should be used BEFORE importing gameplay modules.
 # This is picked up by auto_calibration.config.get_config() and thus by chessimage/image_scrape_utils.
@@ -830,11 +872,19 @@ def verify_and_patch_constants():
     mp_original.QUICKNESS = QUICKNESS  
     mp_original.MOUSE_QUICKNESS = MOUSE_QUICKNESS
     
-    # Re-initialize the engine with the correct difficulty if it was overridden
-    if args.difficulty is not None:
+    # Re-initialize the engine when a lever needs to reach the constructor.
+    # Only quickness is forwarded when the user actually set it: Engine's
+    # precedence is explicit argument > target_rating > module constant, so
+    # always passing it would silently defeat --target-rating.
+    if args.difficulty is not None or args.target_rating is not None:
         from engine import Engine
-        mp_original.ENGINE = Engine(playing_level=DIFFICULTY)
-        print(f"Re-initialized engine with difficulty: {DIFFICULTY}")
+        mp_original.ENGINE = Engine(
+            playing_level=DIFFICULTY,
+            quickness=(args.quickness if args.quickness is not None else None),
+            target_rating=args.target_rating)
+        print(f"Re-initialized engine with difficulty: {DIFFICULTY}"
+              + (f", target rating: {mp_original.ENGINE.effective_rating}"
+                 f" (pace only)" if args.target_rating is not None else ""))
     
     print("\n--- Constants Verification ---")
     print(f"main.py - DIFFICULTY: {DIFFICULTY}, QUICKNESS: {QUICKNESS}, MOUSE_QUICKNESS: {MOUSE_QUICKNESS}")
@@ -844,7 +894,8 @@ def verify_and_patch_constants():
     print("--- End Verification ---\n")
 
 # Run verification and patching if any constants were overridden  
-if args.difficulty is not None or args.quickness is not None or args.mouse_quickness is not None:
+if (args.difficulty is not None or args.quickness is not None
+        or args.mouse_quickness is not None or args.target_rating is not None):
     verify_and_patch_constants()
 
 print("Engine Difficulty: {}, Quickness: {}, Mouse Quickness: {}".format(DIFFICULTY, QUICKNESS, MOUSE_QUICKNESS))
