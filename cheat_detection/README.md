@@ -34,6 +34,13 @@ Aggregated per player (Kaladin-style distributions):
 - **Blunder rate**, mean win-chance loss.
 - **Move-time** mean, std, coefficient of variation.
 - **Instant-move rate**, and instant moves *in sharp positions* (a strong tell).
+- **Long-think rate** — the share of moves over `long_think_secs` (default 2.0s
+  = initial_time/30 for 60+0; **rescale it for another time control**). The
+  slow tail, added 2026-07-28. It is a genuinely independent axis from the
+  instant rate, not its mirror: across the human bands instant rate *rises*
+  with rating (0.312 → 0.369) while long-think rate *falls* (0.122 → 0.088), so
+  a bot can be — and this one was — deficient on both at once. Tuning against
+  the fast tail alone hid the larger divergence for a full day.
 - **Correlation of move time with move-loss and with position sharpness** — humans
   think longer before hard/critical moves; a flat correlation is un-human.
 
@@ -310,6 +317,16 @@ per worker and everything already committed is reused on the next run.
 | `analyze.py` | CLI (`baseline` and `report` subcommands) |
 
 ## Notes & limitations
+
+⚠️ **`blunder_rate` carries no information at 150 games/arm.** Two
+identical-config simulation arms measured 0.0483 and 0.0396 — a gap wider than
+either was from the arm they were being compared against. Its real between-seed
+spread (~0.0062) is about 3.6× the binomial standard error (~0.0017), so the
+binomial figure will make noise look significant; two confident conclusions
+were built on it and had to be retracted (2026-07-28). Settling that feature
+needs ~600 games/arm. `t1_rate`'s binomial error *is* sound — replicates agree
+to 0.8 se — so it is the accuracy feature to judge on at the 150-game price.
+The same caution applies to the whole ACPL family, as noted above.
 
 - **Not** a reproduction of Lichess's actual models. Irwin's neural nets and
   Kaladin's CNN are trained on labelled Lichess data (including signals like

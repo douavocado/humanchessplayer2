@@ -33,14 +33,38 @@ override the shared flags per bot:
 
 ```bash
 venv/bin/python -m simulation.run --games 50 --tc 60+0 --sides alternate \
-    --a-name FastBot --a-rating 2500 --a-quickness 1.4 --a-mouse 1.5 \
-    --b-name SlowBot --b-rating 2350 --b-quickness 0.7 --b-mouse 0.8
+    --a-name FastBot --a-rating 2500 --a-quickness 1.9 --a-mouse 1.5 \
+    --b-name SlowBot --b-rating 2350 --b-quickness 3.2 --b-mouse 0.8
 ```
 
 - **rating** — PGN Elo + fed to the engines (affects mood/eagerness),
 - **difficulty** — engine `playing_level`,
-- **quickness** — move-time pacing (per engine instance; higher = quicker),
-- **mouse** — gesture speed (`MOUSE_QUICKNESS`).
+- **quickness** — move-time pacing (per engine instance). **Higher = SLOWER**
+  (`base_time = quickness * ...` in `decision_logic.get_time_taken`; see the
+  comment on `QUICKNESS` in `common/constants.py`). Measured on 60+0:
+  `mean_emt = 0.1964*quickness + 0.6234`, so ~1.9 reproduces a 2800+ human's
+  pace and ~3.2 a 2100-2299 one,
+- **mouse** — gesture speed (`MOUSE_QUICKNESS`),
+- **target-rating** — sets `quickness` from the human rating-band table
+  (`common/strength_profiles.py`). A **pace** dial only: no other knob has a
+  fitted rating mapping, so move agreement and error rates are unaffected. It
+  snaps to `STRENGTH_LEVELS` (2200/2450/2700/2850) because the measured
+  resolution is ~200-300 Elo. An explicit `--quickness` wins over it,
+- **eval-noise-scale** — move-selection noise. ⚠️ Measured **non-monotone**
+  with no usable range on t1 (0.3556 / 0.3429 / 0.3514 / 0.3338 / 0.3331
+  across 0.25-0.95); not a working strength lever,
+- **midgame-breadth-bonus** — extra midgame search breadth; ~+0.022 t1 over
+  +0..+3,
+- **reeval-order** — which candidates get the deeper second look when there
+  is not time for all of them: `human` (default, most plausible first),
+  `random` (the pre-2026-07-28 behaviour), `eval` (highest-eval first, a
+  strength setting worth ~+0.021 t1 but by playing *better*),
+- **opening-book-fast-path** — play book moves without the analytics scans
+  first; raises the opening instant-move rate 0.373 → 0.567 against a human
+  0.565. Off by default (see the spec: its book-derived premove adds premove
+  volume that is not yet cleared),
+- **ponder-time-per-position** / **game-ponder-width-base** — ponder budget
+  and coverage; per-instance but **never measured**.
 
 `--sides alternate` swaps colours every game (bot a is white in games
 0, 2, 4…) so a matchup is colour-balanced; `fixed` (default) keeps bot a on
