@@ -157,7 +157,7 @@ FEATURE_KEYS = [
     "acpl_timepressure", "blunder_rate_timepressure",
     "mean_wc_loss", "blunder_rate",
     "movetime_mean", "movetime_std", "movetime_cv",
-    "instant_move_rate", "instant_in_sharp_rate",
+    "instant_move_rate", "long_think_rate", "instant_in_sharp_rate",
     "corr_time_cploss", "corr_time_sharpness",
     "mean_ambiguity",
 ]
@@ -216,6 +216,7 @@ def aggregate_features(moves: list[MoveFeatures], cfg: AnalysisConfig) -> dict[s
 
     if timed:
         out["instant_move_rate"] = sum(m.emt < cfg.instant_move_secs for m in timed) / len(timed)
+        out["long_think_rate"] = sum(m.emt > cfg.long_think_secs for m in timed) / len(timed)
         sharp = [m for m in timed if m.sharpness >= 0.25]
         out["instant_in_sharp_rate"] = (
             sum(m.emt < cfg.instant_move_secs for m in sharp) / len(sharp) if sharp else None
@@ -225,6 +226,7 @@ def aggregate_features(moves: list[MoveFeatures], cfg: AnalysisConfig) -> dict[s
         out["corr_time_sharpness"] = _pearson([m.emt for m in timed], [m.sharpness for m in timed])
     else:
         out["instant_move_rate"] = None
+        out["long_think_rate"] = None
         out["instant_in_sharp_rate"] = None
         out["corr_time_cploss"] = None
         out["corr_time_sharpness"] = None

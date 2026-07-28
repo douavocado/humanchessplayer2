@@ -35,6 +35,16 @@ class AnalysisConfig:
     # --- Feature thresholds (ported from Irwin/Kaladin conventions) ---
     ambiguity_wc_window: float = 0.05   # moves within this win-prob of best are "equally good"
     instant_move_secs: float = 1.0      # emt below this counts as an "instant" move
+    # emt above this counts as a "long think": the slow tail of the move-time
+    # distribution, the counterpart to instant_move_secs. Set at
+    # initial_time/30, i.e. 2.0s for the 60+0 corpus this is calibrated on --
+    # a different time control needs this rescaled.
+    #
+    # Added because the bot was being tuned against the fast tail alone while
+    # the slow tail was the larger divergence: measured at 0.067 against a
+    # human 0.115, and near-zero outside the midgame (opening 0.002 vs 0.031,
+    # endgame 0.007 vs 0.044).
+    long_think_secs: float = 2.0
     blunder_wc_loss: float = 0.15       # win-prob drop that marks a blunder
     time_pressure_secs: float = 10.0    # clock below this = "time pressure" for the
                                         # degradation features (acpl/blunders in scramble)

@@ -181,6 +181,7 @@ def collect(pgn_path: str, cfg: AnalysisConfig, max_games: Optional[int] = None)
 
 
 INSTANT_SECS = AnalysisConfig().instant_move_secs
+LONG_THINK_SECS = AnalysisConfig().long_think_secs
 
 
 def _median(xs: list[float]) -> float:
@@ -208,27 +209,32 @@ def _stats(mfeats: list[MoveFeatures]) -> dict[str, float]:
         out["movetime_mean"] = sum(timed) / len(timed)
         out["movetime_median"] = _median(timed)
         out["instant_rate"] = sum(t < INSTANT_SECS for t in timed) / len(timed)
+        # The slow tail. Tracked alongside instant_rate because tuning against
+        # the fast tail alone hid a larger divergence -- the bot long-thinks at
+        # 42% of the human rate, and essentially never outside the midgame.
+        out["long_think_rate"] = sum(t > LONG_THINK_SECS for t in timed) / len(timed)
     else:
-        out["movetime_mean"] = out["movetime_median"] = out["instant_rate"] = None
+        out["movetime_mean"] = out["movetime_median"] = None
+        out["instant_rate"] = out["long_think_rate"] = None
     return out
 
 
 # Column set shared by every per-bucket table: mistake profile first, then the
 # timing profile (the "where do stronger players move faster" axis).
 _HEADER = ("| Band | n moves | Blunder rate | Mean win-chance loss | ACPL | "
-           "Top-1 match | Mean emt | Median emt | Instant rate |")
-_HEADER_SEP = "|---|---|---|---|---|---|---|---|---|"
-_NA_COLS = 8
+           "Top-1 match | Mean emt | Median emt | Instant rate | Long-think rate |")
+_HEADER_SEP = "|---|---|---|---|---|---|---|---|---|---|"
+_NA_COLS = 9
 
 
 def _row(band, s, min_n: int = 30) -> str:
     if s["n"] < min_n:
         return f"| {band_label(band)} | {s['n']} | " + " | ".join(["n/a"] * (_NA_COLS - 1)) + " |"
     if s["movetime_mean"] is None:
-        timing = "n/a | n/a | n/a"
+        timing = "n/a | n/a | n/a | n/a"
     else:
         timing = (f"{s['movetime_mean']:.2f} | {s['movetime_median']:.2f} | "
-                  f"{s['instant_rate']:.4f}")
+                  f"{s['instant_rate']:.4f} | {s['long_think_rate']:.4f}")
     return (f"| {band_label(band)} | {s['n']} | {s['blunder_rate']:.4f} | "
             f"{s['mean_wc_loss']:.4f} | {s['acpl']:.1f} | {s['t1_rate']:.4f} | {timing} |")
 
