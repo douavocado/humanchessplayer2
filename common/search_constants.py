@@ -307,7 +307,29 @@ STOCKFISH_HASH_MB = 128
 #               direction: the bot is already superhuman on error avoidance
 #               (see the strength-dial spec's structural obstruction).
 #
-# Ships "random" so the parity harness stays green; the others are here to be
-# measured.
-REEVAL_ORDER = "random"
+# Ships "human". Measured over four 150-game complete self-play arms:
+#
+#   ordering   t1        blunder
+#   random     0.3338    0.0418
+#   human      0.3496 / 0.3442 (two seeds)
+#   eval       0.3552
+#
+# t1 rises ~+0.013 under "human", replicated across two seeds that agree to
+# 0.8 se, lifting the bot from below the human band floor (0.3466) to roughly
+# at it. "eval" gains slightly more (+0.021) but by making the bot play
+# *better*, which is the wrong direction -- it is already superhuman at error
+# avoidance.
+#
+# The blunder-rate column is deliberately NOT quoted as evidence. Two
+# identical-config "human" arms came out 0.0483 and 0.0396 -- a gap wider than
+# either is from the baseline. The binomial standard error (0.0017/arm)
+# understates the real between-seed spread (~0.0062) by about 3.6x, so no
+# blunder-rate comparison at 150 games means anything; settling that feature
+# needs ~600 games/arm. This is the same trap CLAUDE.md warns about for the
+# ACPL family.
+#
+# The independent argument, which does not depend on any metric: uniformly
+# random sampling of which candidates to calculate was never a defensible
+# model of human thought. A player calculates the moves that look plausible.
+REEVAL_ORDER = "human"
 REEVAL_ORDERS = ("random", "human", "eval")
