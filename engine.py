@@ -776,6 +776,7 @@ class Engine:
                     book_pm[0], book_pm[1])
             else:
                 return_dic["premove"] = None
+            return_dic["ponder_dic"] = None
             self.book_fast_move = None
             self.log += "Opening book fast path: playing {} in {} seconds without analysis. \n".format(
                 return_dic["move_made"], return_dic["time_take"])
@@ -793,6 +794,18 @@ class Engine:
         obvious_move, obvious_move_found = self.check_obvious_move()
         obvious_move_end= time.time()
         self.log += "Obvious move check performed in {} seconds. \n".format(obvious_move_end-obvious_move_start)
+
+        # Check whether the opponent's last move hung material -- this has
+        # to run before _get_time_taken (below), which is what actually
+        # reacts to it by doubling the think time ("act startled"). It used
+        # to run at the very end of make_move, by which point this move's
+        # time was already decided, so it could only ever affect the
+        # *next* move's pacing instead of this one.
+        opp_blunder_check_start = time.time()
+        self.log += "Checking for opponent blunders. \n"
+        self._check_opp_blunder()
+        opp_blunder_check_end = time.time()
+        self.log += "Opponent blunder check took {} seconds. \n".format(opp_blunder_check_end - opp_blunder_check_start)
         if log == True:
             self._write_log()
         if obvious_move_found == True:
@@ -834,16 +847,7 @@ class Engine:
 
         if log == True:
             self._write_log()
-        # Now that we have decided what move are going to make, lets check whether the opponent
-        # hung a big piece the previous move (and it was a blunder), so we can act startled
-        opp_blunder_check_start = time.time()
-        self.log += "Checking for opponent blunders. \n"
-        self._check_opp_blunder()
-        opp_blunder_check_end = time.time()
-        self.log += "Opponent blunder check took {} seconds. \n".format(opp_blunder_check_end- opp_blunder_check_start)
-        if log == True:
-            self._write_log()
-        
+
         # If we are in a hurry, and our time is absolutely low then we also return 
         # a premove for the next move.
         # If we are not in a hurry, look for takeback premoves

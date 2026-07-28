@@ -3,7 +3,9 @@
 set_mood decides the human "mood" label (confident/cocky/cautious/tilted/
 hurry/flagging) that other components (pacing, breadth) read off
 engine.mood. check_opp_blunder is the separate "did the opponent just hang
-something" detector that drives startled reactions. Deliberately kept
+something" detector that drives startled reactions -- a real piece left or
+put en pris, by an unforced, unpredicted move -- rather than an instant,
+mechanical snap-up of anything the eval briefly likes. Deliberately kept
 independent of engine analytics like lucas/sharpness where possible -- see
 the set_mood docstring -- so it's mostly time/eval heuristics.
 
@@ -18,6 +20,7 @@ import chess.engine
 
 from common.board_information import is_takeback, calculate_threatened_levels
 from common.utils import extend_mate_score
+from common.constants import OPP_BLUNDER_EVAL_SWING_MIN, OPP_BLUNDER_EN_PRIS_MIN_VALUE
 
 
 def set_mood(engine):
@@ -129,30 +132,71 @@ def set_mood(engine):
 
 
 def check_opp_blunder(engine):
-    """ Check from last couple of positions whether opponent has made a blunder on the
-        last move, and did so by hanging a valuable piece.
+    """ Check whether the opponent's last move was a clear, unexpected blunder:
+        it left or put a piece en pris for real material, and it wasn't
+        something we could already have predicted (their only move, or the
+        engine's own top choice in that position). This is what should gate
+        a startled, longer-than-usual think time -- an instant, no-reaction
+        capture of a hung piece reads as mechanical, not human.
 
-        Returns None. We only update the self.opp_just_blundered variable
+        Sets engine.opponent_just_blundered. Deliberately does NOT reset it
+        to False itself: check_obvious_move (simple_decisions.py) does that
+        reset once per make_move call, before this runs, and may already
+        have set it True for its own narrower "recapture wasn't really a
+        takeback" case -- this function only ever adds a True on top,
+        never removes one.
     """
-    engine.opponent_just_blundered = False
     # We can only do this if we have the previous positions excluding our current position
     if len(engine.input_info["fens"]) < 2:
         engine.log += "Can't detect whether opponent has blundered as we don not have enough previous position info. \n"
         return
-    # First check opponent just blundered based on eval
+
+    # Cheap pre-filter on the raw eval swing before doing the (relatively
+    # expensive) per-square exchange scan below. Loose on purpose -- a fixed
+    # cp threshold saturates in already-winning positions (hanging a whole
+    # rook barely moves the eval when we were already crushing), so this
+    # only rules out genuinely quiet moves. The en pris scan is the real
+    # gate.
     curr_eval = extend_mate_score(engine.stockfish_analysis[0]["score"].pov(engine.input_info["side"]).score(mate_score=2500))
     prev_board = chess.Board(engine.input_info["fens"][-2])
     prev_analysis = engine.stockfish_engine.analyse(prev_board, limit=chess.engine.Limit(depth=8, time=0.02))
     prev_eval = extend_mate_score(prev_analysis["score"].pov(engine.input_info["side"]).score(mate_score=2500))
-    if curr_eval - prev_eval > 150: # then opponent just blundered
-        engine.log += "Opponent has blundered, checking to see if it is from hung piece. \n"
-        # now check if opponent just hung piece they played
-        last_move_obj = chess.Move.from_uci(engine.input_info["last_moves"][-1])
-        if calculate_threatened_levels(last_move_obj.to_square, engine.current_board) >= 3:
-            # then opponent has hung a piece
-            engine.log += "Opponent has hung a piece, acting startled. \n"
-            engine.opponent_just_blundered = True
-        else:
-            engine.log += "Opponent has not hung a piece. \n"
-    else:
+    if curr_eval - prev_eval <= OPP_BLUNDER_EVAL_SWING_MIN:
         engine.log += "Opponent has not blundered. Current eval {}, previous eval {} \n".format(curr_eval, prev_eval)
+        return
+    engine.log += "Eval swing large enough to check for a hung piece (previous eval {}, current eval {}). \n".format(prev_eval, curr_eval)
+
+    # Degree of enprisness: the most material we could win back in an
+    # exchange on any opponent piece still on the board. Scanning every
+    # piece (not just the one that just moved) covers both putting a piece
+    # en pris and leaving one en pris elsewhere on the board.
+    opp_colour = not engine.input_info["side"]
+    worst_sq, worst_val = None, 0.0
+    for sq in chess.SQUARES:
+        piece = engine.current_board.piece_at(sq)
+        if piece is None or piece.color != opp_colour or piece.piece_type == chess.KING:
+            continue
+        val = calculate_threatened_levels(sq, engine.current_board)
+        if val > worst_val:
+            worst_val, worst_sq = val, sq
+
+    if worst_val < OPP_BLUNDER_EN_PRIS_MIN_VALUE:
+        engine.log += "Eval swung but nothing is clearly hanging (worst en pris value {}). Not acting startled. \n".format(worst_val)
+        return
+    engine.log += "Opponent has a piece en pris on {} worth {} in an exchange. \n".format(chess.square_name(worst_sq), worst_val)
+
+    # Unexpectedness: only react startled when we couldn't already have
+    # seen this coming -- not their only legal move, and not what a quick
+    # engine scan already thought was their best try in that position (the
+    # "blunder" may just be the least-bad option under a threat).
+    if prev_board.legal_moves.count() == 1:
+        engine.log += "Opponent's move was forced (only legal move). Not unexpected, not acting startled. \n"
+        return
+    last_move_obj = chess.Move.from_uci(engine.input_info["last_moves"][-1])
+    prev_pv = prev_analysis.get("pv")
+    if prev_pv and prev_pv[0] == last_move_obj:
+        engine.log += "Opponent's move was also the engine's own top choice in that position, so we would have predicted it. Not acting startled. \n"
+        return
+
+    engine.log += "Opponent's blunder was unforced and unpredicted. Acting startled. \n"
+    engine.opponent_just_blundered = True

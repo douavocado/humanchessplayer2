@@ -254,6 +254,16 @@ MISTAKE_HESITATION_MIN_TIME = 10
 MISTAKE_SNAP_WC_LOSS = 0.02
 MISTAKE_SNAP_PROB = 0.7
 MISTAKE_SNAP_RANGE = (0.65, 0.9)
+# Opponent-blunder "act startled" reaction (mood_manager.check_opp_blunder,
+# decision_logic.py's opponent_just_blundered doubling of base_time). The
+# absolute eval swing is only a cheap pre-filter to skip the enpris scan on
+# quiet moves -- it is deliberately loose (a fixed cp threshold saturates in
+# already-winning positions, where hanging a whole rook barely moves the
+# score) and the real gate is EN_PRIS_MIN_VALUE: is any opponent piece,
+# either just moved or merely left behind, worth at least this many pawns
+# to win back in an exchange (calculate_threatened_levels).
+OPP_BLUNDER_EVAL_SWING_MIN = 50
+OPP_BLUNDER_EN_PRIS_MIN_VALUE = 3
 # Flag-race autopilot (engine.py:get_stockfish_move): in a deep scramble a
 # human does not distinguish "+mate" from "+800" -- both read as "winning" --
 # and plays on instinct: shuffling, missing mates, occasionally stalemating
