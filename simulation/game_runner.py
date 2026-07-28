@@ -67,6 +67,7 @@ class BotSpec:
     opening_book_fast_path: bool = None        # None -> OPENING_BOOK_FAST_PATH
     ponder_time_per_position: float = None     # None -> PONDER_TIME_PER_POSITION
     game_ponder_width_base: float = None       # None -> GAME_PONDER_WIDTH_BASE
+    target_rating: int = None                  # None -> no dial; see common/strength_profiles.py
 
     def __post_init__(self):
         from common.constants import (DIFFICULTY, MOUSE_QUICKNESS, QUICKNESS,

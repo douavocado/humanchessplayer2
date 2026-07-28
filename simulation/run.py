@@ -82,7 +82,8 @@ def _play_chunk(task: tuple) -> list:
                           ambiguity_messy_snap_delta=cfg.bot_a.ambiguity_messy_snap_delta,
                           opening_book_fast_path=cfg.bot_a.opening_book_fast_path,
                           ponder_time_per_position=cfg.bot_a.ponder_time_per_position,
-                          game_ponder_width_base=cfg.bot_a.game_ponder_width_base)
+                          game_ponder_width_base=cfg.bot_a.game_ponder_width_base,
+                          target_rating=cfg.bot_a.target_rating)
         engine_b = Engine(playing_level=cfg.bot_b.difficulty,
                           quickness=cfg.bot_b.quickness,
                           eval_noise_scale=cfg.bot_b.eval_noise_scale,
@@ -94,7 +95,8 @@ def _play_chunk(task: tuple) -> list:
                           ambiguity_messy_snap_delta=cfg.bot_b.ambiguity_messy_snap_delta,
                           opening_book_fast_path=cfg.bot_b.opening_book_fast_path,
                           ponder_time_per_position=cfg.bot_b.ponder_time_per_position,
-                          game_ponder_width_base=cfg.bot_b.game_ponder_width_base)
+                          game_ponder_width_base=cfg.bot_b.game_ponder_width_base,
+                          target_rating=cfg.bot_b.target_rating)
         if progress_q is not None:
             progress_q.put({"type": "loaded", "worker": worker_id,
                             "n_seeds": len(jobs)})
@@ -178,6 +180,12 @@ def main(argv=None) -> int:
                    help="probability of vetting an ordinary premove with "
                         "check_safe_premove, for both bots (default "
                         "common.search_constants.MIDGAME_PREMOVE_VETO_P)")
+    p.add_argument("--target-rating", type=int,
+                   help="playing-strength dial for both bots; snaps to a "
+                        "supported level (common.strength_profiles."
+                        "STRENGTH_LEVELS) because the measured resolution is "
+                        "~200-300 Elo. Sets only knobs with a fitted rating "
+                        "mapping (today: quickness). Explicit knob flags win")
     p.add_argument("--opening-book-fast-path", action="store_true", default=None,
                    help="consult the opening book before the analytics scans "
                         "so book moves skip them, for both bots (default "
@@ -229,6 +237,8 @@ def main(argv=None) -> int:
         p.add_argument(f"--{tag}-moderate-sharpness-bonus", dest=f"{tag}_moderate_sharpness_bonus", type=int,
                        help=f"bot {tag}'s moderate-sharpness breadth bonus "
                             "(overrides --moderate-sharpness-bonus)")
+        p.add_argument(f"--{tag}-target-rating", dest=f"{tag}_target_rating", type=int,
+                       help=f"bot {tag}'s strength dial (overrides --target-rating)")
         p.add_argument(f"--{tag}-opening-book-fast-path", dest=f"{tag}_opening_book_fast_path",
                        action="store_true", default=None,
                        help=f"bot {tag}'s opening-book fast path "
@@ -291,6 +301,9 @@ def main(argv=None) -> int:
             midgame_premove_veto_p=(
                 g("midgame_premove_veto_p") if g("midgame_premove_veto_p") is not None
                 else args.midgame_premove_veto_p),
+            target_rating=(
+                g("target_rating") if g("target_rating") is not None
+                else args.target_rating),
             opening_book_fast_path=(
                 g("opening_book_fast_path") if g("opening_book_fast_path") is not None
                 else args.opening_book_fast_path),

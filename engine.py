@@ -42,6 +42,7 @@ from common.search_constants import (
     OPENING_BREADTH_STRENGTH_BONUS, MIDGAME_BREADTH_STRENGTH_BONUS,
 )
 from common.utils import (extend_mate_score)
+from common import strength_profiles
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 from engine_components import simple_decisions, state, mood_manager, stockfish_move_logic, human_move_logic, decision_logic, game_character, premover, ponderer, opening_book
 
@@ -57,11 +58,26 @@ class Engine:
         All other history related data to do with past moves etc are not handled
         in the Engine instance. They are handled in the client wrapper
     """
-    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None):
+    def __init__(self, playing_level:int = 6, log_file: Optional[str] = None, opening_book_path:str = "assets/data/Opening_books/bullet.bin", repertoire_book_path:str = OPENING_REPERTOIRE_PATH, quickness: Optional[float] = None, eval_noise_scale: Optional[float] = None, moderate_sharpness_breadth_bonus: Optional[int] = None, midgame_premove_veto_p: Optional[float] = None, opening_breadth_strength_bonus: Optional[int] = None, midgame_breadth_strength_bonus: Optional[int] = None, ambiguity_forced_snap_delta: Optional[float] = None, ambiguity_messy_snap_delta: Optional[float] = None, opening_book_fast_path: Optional[bool] = None, ponder_time_per_position: Optional[float] = None, game_ponder_width_base: Optional[float] = None, target_rating: Optional[int] = None):
+        # Target-rating dial (common/strength_profiles.py): resolves a
+        # requested playing strength to the knobs whose rating mapping has
+        # actually been fitted. Precedence is
+        #     explicit knob argument > target_rating > module constant
+        # -- explicit arguments must keep winning or every existing sweep
+        # breaks. None (the default) resolves nothing, so the engine is
+        # bit-identical to before and the parity harness stays green.
+        self.target_rating = target_rating
+        _dial = strength_profiles.resolve(target_rating) if target_rating is not None else {}
+        self.effective_rating = _dial.get("effective_rating")
         # Per-instance move-time pacing; None keeps the global QUICKNESS, so
         # live behaviour is unchanged. The simulator sets it to give the two
         # bots of a self-play pair different pacing.
-        self.quickness = QUICKNESS if quickness is None else quickness
+        if quickness is not None:
+            self.quickness = quickness
+        elif "quickness" in _dial:
+            self.quickness = _dial["quickness"]
+        else:
+            self.quickness = QUICKNESS
         # Per-instance eval-noise scale (see the noise formula in
         # get_human_move / ponderer.py); None keeps the global
         # HUMAN_EVAL_NOISE_SCALE. Overridable per instance so the strength
