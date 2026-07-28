@@ -19,6 +19,7 @@ runs/strength_dial/*
 !runs/strength_dial/run_phase_b.py
 !runs/strength_dial/run_phase_c.py
 !runs/strength_dial/run_phase_d.py
+!runs/strength_dial/run_phase_e.py
 # The human rating-band tables are the calibration TARGET for the strength
 # dial and every human-likeness comparison -- not bulk output. Small (~10KB),
 # and not reliably reproducible: regenerating costs ~65 min of compute AND
