@@ -16,3 +16,4 @@ runs/breadth_sweep/*
 !runs/strength_dial/
 runs/strength_dial/*
 !runs/strength_dial/run_phase_a.py
+!runs/strength_dial/run_phase_b.py
