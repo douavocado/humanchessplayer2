@@ -386,6 +386,64 @@ fast path. Before any `target_rating` ships, breadth -> blunder and noise -> t1
 need the same treatment and the endgame lever needs to be established or ruled
 out.
 
+## Phase B findings (measured 2026-07-28): both accuracy axes fail
+
+5 arms x 150 complete self-play games, 60+0, same conventions as Phase A, plus
+Phase A's three noise arms reused.
+
+**1. `eval_noise_scale` -> t1 is non-monotone and has no range.**
+
+| noise | 0.25 | 0.40 | 0.55 | 0.75 | 0.95 |
+|---|---|---|---|---|---|
+| t1 | 0.3556 | 0.3429 | 0.3514 | 0.3338 | 0.3331 |
+
+Down, up, down, flat; every step is 0.1-2 se, so the 0.25-0.55 region is flat
+within noise. The 0.55 -> 0.75 slope Phase A extrapolated from was one wobble
+among several, and the "saturates above 0.75" conclusion recorded there is
+superseded: it saturates in **both** directions. Total span across the whole
+usable range is 0.0225 against a band table needing 0.0504, and the best t1
+reached anywhere (0.3556, at noise 0.25) sits between the 2200 and 2450 bands.
+Even at near-zero noise the bot cannot reach 2450's t1.
+
+Mechanism: in `get_human_move`, un-re-evaluated moves take a 60cp penalty
+(`DEPTH_PENALTY` x2 plus `ZERO_DEPTH_PENALTY`) and *which* moves get
+re-evaluated is `random.sample`. In quiet positions -- 74% of moves -- the true
+eval spread between candidates is far below that penalty, so the choice is
+decided by the re-evaluation lottery, not by evals or by the noise term on top
+of them. The t1 lever was never noise.
+
+**2. `midgame_breadth_strength_bonus` -> blunder rate points the wrong way.**
+
+| breadth | +0 | +1 | +2 | +3 |
+|---|---|---|---|---|
+| blunder | 0.0418 | 0.0448 | 0.0380 | 0.0343 |
+| t1 | 0.3338 | 0.3433 | 0.3495 | 0.3554 |
+
+The blunder trend is real (-0.0075 over +0 -> +3, 3.1 se) but the achievable
+range, 0.0343-0.0448, sits at or below the **2850** band (0.0444). The bot is
+already better than the best humans at every setting and breadth only improves
+it further; reaching 2200's 0.0657 would need to go the other way, past +0.
+
+Breadth *does* move t1 (0.3338 -> 0.3554, ~3.4 se), which **contradicts the
+earlier "breadth leaves t1 flat" finding** -- that was measured on adjudicated
+games. Breadth is a better t1 lever than noise, though +3 only reaches ~2350.
+
+**3. The structural obstruction.** The two results share one cause. The bot is
+**superhuman on error avoidance and subhuman on move agreement**, and every
+strength knob moves those together: more breadth raises t1 *and* lowers blunder
+rate. To look human it needs t1 up **and** blunder rate up. No knob does that,
+because strength in this engine is a single direction while the bot's profile
+is off the human manifold in two directions at once.
+
+This is why the accuracy half of the dial is not merely weakly calibrated but
+uncalibratable with the current knob set. It is not a tuning problem, and no
+amount of extra sweep compute addresses it -- it needs a lever that makes the
+bot *choose differently* without making it *choose better*, i.e. the
+re-evaluation-lottery structure above, not a strength knob.
+
+**Consequence for `CALIBRATED_KNOBS`:** it stays `("quickness",)`. The dial is
+a pace dial, and the spec should keep saying so.
+
 ## Limitations to carry into the docs
 
 - ~200-300 Elo granularity; the interface should expose coarse steps.
