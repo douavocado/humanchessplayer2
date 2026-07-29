@@ -15,6 +15,19 @@ import chess
 import chess.pgn
 
 _TC_RE = re.compile(r"^(\d+)(?:\+(\d+))?")
+_TC_SECONDS_RE = re.compile(r"^(\d+)(?:\+(\d+))?$")
+
+
+def parse_tc_seconds(tc: str) -> float:
+    """Base clock in seconds from a "180+0"-style time control.
+
+    The increment is parsed but deliberately discarded: initial_time means the
+    starting clock, which is what the threshold fractions scale against.
+    """
+    m = _TC_SECONDS_RE.match((tc or "").strip())
+    if not m:
+        raise ValueError(f"bad time control {tc!r}; expected e.g. 180+0")
+    return float(m.group(1))
 
 
 @dataclass

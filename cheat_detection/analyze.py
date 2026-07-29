@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 
 from .baseline import Baseline, build_baseline
@@ -24,21 +23,8 @@ from .config import AnalysisConfig
 from .fetch_lichess import fetch_user_games
 from .orchestrate import DiagnosticSpec, run_diagnostic, save_result
 from .parallel import collect_units
+from .pgn_loader import parse_tc_seconds  # re-exported for existing importers
 from .report import build_report
-
-_TC_SECONDS_RE = re.compile(r"^(\d+)(?:\+(\d+))?$")
-
-
-def parse_tc_seconds(tc: str) -> float:
-    """Base clock in seconds from a "180+0"-style time control.
-
-    The increment is parsed but deliberately discarded: initial_time means the
-    starting clock, which is what the threshold fractions scale against.
-    """
-    m = _TC_SECONDS_RE.match((tc or "").strip())
-    if not m:
-        raise ValueError(f"bad time control {tc!r}; expected e.g. 180+0")
-    return float(m.group(1))
 
 
 def _progress_printer(label: str):
