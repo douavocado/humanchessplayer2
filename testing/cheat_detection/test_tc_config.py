@@ -57,5 +57,28 @@ class TestTimeControlDerivation(unittest.TestCase):
         self.assertEqual(cfg.time_pressure_secs, 12.0)
 
 
+class TestParseTcSeconds(unittest.TestCase):
+
+    def test_parses_base_and_increment(self):
+        from cheat_detection.analyze import parse_tc_seconds
+        self.assertEqual(parse_tc_seconds("180+0"), 180.0)
+        self.assertEqual(parse_tc_seconds("60+0"), 60.0)
+
+    def test_increment_is_optional(self):
+        from cheat_detection.analyze import parse_tc_seconds
+        self.assertEqual(parse_tc_seconds("300"), 300.0)
+
+    def test_increment_does_not_change_the_base(self):
+        """initial_time is the base clock; the increment is not folded in."""
+        from cheat_detection.analyze import parse_tc_seconds
+        self.assertEqual(parse_tc_seconds("180+2"), 180.0)
+
+    def test_rejects_garbage(self):
+        from cheat_detection.analyze import parse_tc_seconds
+        for bad in ("", "-", "?", "blitz", "3+0min"):
+            with self.assertRaises(ValueError):
+                parse_tc_seconds(bad)
+
+
 if __name__ == "__main__":
     unittest.main()

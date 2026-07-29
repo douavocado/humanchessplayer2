@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 from .baseline import Baseline, build_baseline
@@ -24,6 +25,20 @@ from .fetch_lichess import fetch_user_games
 from .orchestrate import DiagnosticSpec, run_diagnostic, save_result
 from .parallel import collect_units
 from .report import build_report
+
+_TC_SECONDS_RE = re.compile(r"^(\d+)(?:\+(\d+))?$")
+
+
+def parse_tc_seconds(tc: str) -> float:
+    """Base clock in seconds from a "180+0"-style time control.
+
+    The increment is parsed but deliberately discarded: initial_time means the
+    starting clock, which is what the threshold fractions scale against.
+    """
+    m = _TC_SECONDS_RE.match((tc or "").strip())
+    if not m:
+        raise ValueError(f"bad time control {tc!r}; expected e.g. 180+0")
+    return float(m.group(1))
 
 
 def _progress_printer(label: str):
@@ -45,6 +60,15 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
                         "(default), or a Welch two-sample t-test at --alpha")
     p.add_argument("--alpha", type=float, dest="flag_pvalue",
                    help="significance level for --test welch (default 0.05)")
+    p.add_argument("--tc", default="60+0",
+                   help="time control of the corpus, e.g. 180+0 (default "
+                        "60+0). Sets the initial clock that long-think and "
+                        "time-pressure thresholds derive from, and is checked "
+                        "against each game's TimeControl header.")
+    p.add_argument("--allow-tc-mismatch", action="store_true",
+                   help="downgrade the TimeControl header check to a warning. "
+                        "Mixing clocks muddies every timing feature, so this "
+                        "is an escape hatch, not a normal mode.")
 
 
 def _add_filter_args(p: argparse.ArgumentParser) -> None:
@@ -72,6 +96,8 @@ def _config_from_args(args) -> AnalysisConfig:
             setattr(cfg, attr, v)
     if getattr(args, "test_mode", None):
         cfg.test_mode = args.test_mode.replace("-", "_")
+    if getattr(args, "tc", None):
+        cfg.initial_time = parse_tc_seconds(args.tc)
     return cfg
 
 
@@ -177,8 +203,6 @@ def main(argv=None) -> int:
     prun.add_argument("--user", required=True, help="Lichess account of the bot")
     prun.add_argument("--rating", type=int, nargs=2, required=True, metavar=("MIN", "MAX"))
     prun.add_argument("--perf", default="bullet", help="bullet/blitz/rapid/classical")
-    prun.add_argument("--tc", help="exact time control for the bot fetch, e.g. 60+0 "
-                                   "(30+0 and 60+0 pacing differ ~2x; keep one clock)")
     prun.add_argument("--baseline", required=True, help="baseline JSON (loaded if present, else built)")
     prun.add_argument("--corpus", help="human corpus PGN to build the baseline if it doesn't exist")
     prun.add_argument("--pgn", help="bot PGN (skip fetch; use this file instead)")
