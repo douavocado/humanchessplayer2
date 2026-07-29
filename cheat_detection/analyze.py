@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 from .baseline import Baseline, build_baseline
@@ -24,6 +25,20 @@ from .fetch_lichess import fetch_user_games
 from .orchestrate import DiagnosticSpec, run_diagnostic, save_result
 from .parallel import collect_units
 from .report import build_report
+
+_TC_SECONDS_RE = re.compile(r"^(\d+)(?:\+(\d+))?$")
+
+
+def parse_tc_seconds(tc: str) -> float:
+    """Base clock in seconds from a "180+0"-style time control.
+
+    The increment is parsed but deliberately discarded: initial_time means the
+    starting clock, which is what the threshold fractions scale against.
+    """
+    m = _TC_SECONDS_RE.match((tc or "").strip())
+    if not m:
+        raise ValueError(f"bad time control {tc!r}; expected e.g. 180+0")
+    return float(m.group(1))
 
 
 def _progress_printer(label: str):
@@ -45,6 +60,10 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
                         "(default), or a Welch two-sample t-test at --alpha")
     p.add_argument("--alpha", type=float, dest="flag_pvalue",
                    help="significance level for --test welch (default 0.05)")
+    p.add_argument("--allow-tc-mismatch", action="store_true",
+                   help="downgrade the TimeControl header check to a warning. "
+                        "Mixing clocks muddies every timing feature, so this "
+                        "is an escape hatch, not a normal mode.")
 
 
 def _add_filter_args(p: argparse.ArgumentParser) -> None:
@@ -72,6 +91,10 @@ def _config_from_args(args) -> AnalysisConfig:
             setattr(cfg, attr, v)
     if getattr(args, "test_mode", None):
         cfg.test_mode = args.test_mode.replace("-", "_")
+    if getattr(args, "tc", None):
+        cfg.initial_time = parse_tc_seconds(args.tc)
+    if getattr(args, "allow_tc_mismatch", False):
+        cfg.strict_tc = False
     return cfg
 
 
@@ -168,7 +191,7 @@ def cmd_run(args) -> int:
     return 0
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cheat_detection.analyze",
                                      description="Human-likeness diagnostic for the bot")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -178,7 +201,8 @@ def main(argv=None) -> int:
     prun.add_argument("--rating", type=int, nargs=2, required=True, metavar=("MIN", "MAX"))
     prun.add_argument("--perf", default="bullet", help="bullet/blitz/rapid/classical")
     prun.add_argument("--tc", help="exact time control for the bot fetch, e.g. 60+0 "
-                                   "(30+0 and 60+0 pacing differ ~2x; keep one clock)")
+                                   "(30+0 and 60+0 pacing differ ~2x; keep one clock). "
+                                   "Also sets the analysis initial_time if provided.")
     prun.add_argument("--baseline", required=True, help="baseline JSON (loaded if present, else built)")
     prun.add_argument("--corpus", help="human corpus PGN to build the baseline if it doesn't exist")
     prun.add_argument("--pgn", help="bot PGN (skip fetch; use this file instead)")
@@ -208,6 +232,10 @@ def main(argv=None) -> int:
     pb.add_argument("--max-games", type=int, help="cap games analysed (for speed)")
     _add_engine_args(pb)
     _add_filter_args(pb)
+    pb.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
     pb.set_defaults(func=cmd_baseline)
 
     pr = sub.add_parser("report", help="report bot vs. human baseline")
@@ -219,8 +247,17 @@ def main(argv=None) -> int:
     pr.add_argument("--max-games", type=int, help="cap games analysed")
     _add_engine_args(pr)
     _add_filter_args(pr)
+    pr.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
     pr.set_defaults(func=cmd_report)
 
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 

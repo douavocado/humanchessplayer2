@@ -48,13 +48,18 @@ import chess.engine
 
 from common.board_information import get_lucas_analytics
 from common.constants import PATH_TO_STOCKFISH
-from common.search_constants import EFF_MOB_TACTICAL_CUTOFF, STOCKFISH_HASH_MB, STOCKFISH_THREADS
+from common.search_constants import (
+    EFF_MOB_TACTICAL_CUTOFF,
+    STOCKFISH_HASH_MB,
+    STOCKFISH_THREADS,
+)
 
-from .bucket_diagnostic import BUCKETS, BUCKET_LABEL, bucket_of
-from .config import AnalysisConfig
+from .analyze import parse_tc_seconds
+from .bucket_diagnostic import BUCKET_LABEL, BUCKETS, bucket_of
+from .config import LONG_THINK_FRACTION, AnalysisConfig
 from .engine_analysis import EngineAnalyzer, open_cache_db
 from .features import MoveFeatures, extract_move_features
-from .pgn_loader import iter_games
+from .pgn_loader import check_time_control, iter_games
 from .pipeline import _sides_of_interest
 
 BANDS = [
@@ -102,6 +107,9 @@ def _collect_sequential(pgn_path: str, cfg: AnalysisConfig, max_games: Optional[
 
     with EngineAnalyzer(cfg) as analyzer:
         for gi, game in enumerate(iter_games(pgn_path, max_games=max_games)):
+            if not check_time_control(game, cfg.initial_time,
+                                      strict=getattr(cfg, "strict_tc", True)):
+                continue
             if gi_filter is not None and not gi_filter(gi):
                 continue
             for band in BANDS:
@@ -180,17 +188,13 @@ def collect(pgn_path: str, cfg: AnalysisConfig, max_games: Optional[int] = None)
     return by_band
 
 
-INSTANT_SECS = AnalysisConfig().instant_move_secs
-LONG_THINK_SECS = AnalysisConfig().long_think_secs
-
-
 def _median(xs: list[float]) -> float:
     s = sorted(xs)
     mid = len(s) // 2
     return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
 
 
-def _stats(mfeats: list[MoveFeatures]) -> dict[str, float]:
+def _stats(mfeats: list[MoveFeatures], cfg: AnalysisConfig) -> dict[str, float]:
     n = len(mfeats)
     if n == 0:
         return {"n": 0}
@@ -208,11 +212,11 @@ def _stats(mfeats: list[MoveFeatures]) -> dict[str, float]:
     if timed:
         out["movetime_mean"] = sum(timed) / len(timed)
         out["movetime_median"] = _median(timed)
-        out["instant_rate"] = sum(t < INSTANT_SECS for t in timed) / len(timed)
+        out["instant_rate"] = sum(t < cfg.instant_move_secs for t in timed) / len(timed)
         # The slow tail. Tracked alongside instant_rate because tuning against
         # the fast tail alone hid a larger divergence -- the bot long-thinks at
         # 42% of the human rate, and essentially never outside the midgame.
-        out["long_think_rate"] = sum(t > LONG_THINK_SECS for t in timed) / len(timed)
+        out["long_think_rate"] = sum(t > cfg.long_think_secs for t in timed) / len(timed)
     else:
         out["movetime_mean"] = out["movetime_median"] = None
         out["instant_rate"] = out["long_think_rate"] = None
@@ -239,20 +243,23 @@ def _row(band, s, min_n: int = 30) -> str:
             f"{s['mean_wc_loss']:.4f} | {s['acpl']:.1f} | {s['t1_rate']:.4f} | {timing} |")
 
 
-def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
+def render(by_band: dict[tuple[int, int], list[Unit]], cfg: AnalysisConfig, min_n: int = 30) -> str:
     lines = ["# Human mistake-profile progression across rating bands\n"]
     lines.append("Pooled at the move level (not per-player-unit) -- descriptive trend, "
                   "not a significance test; sample sizes are large enough per band that "
                   "this is a reasonable simplification.\n")
 
     lines.append("Timing columns cover only moves carrying a clock tag; `emt` is elapsed "
-                  f"move time in seconds and an \"instant\" move is emt < {INSTANT_SECS:g}s.\n")
+                  f"move time in seconds and an \"instant\" move is emt < {cfg.instant_move_secs:g}s.\n")
+    lines.append(f"Built at a {cfg.initial_time:g}s initial clock; a \"long "
+                 f"think\" is emt > {cfg.long_think_secs:g}s "
+                 f"(initial_time * {LONG_THINK_FRACTION:g}).\n")
 
     lines.append("## Overall (all positions)\n")
     lines.append(_HEADER)
     lines.append(_HEADER_SEP)
     for band in BANDS:
-        s = _stats([mf for mf, _ in by_band[band]])
+        s = _stats([mf for mf, _ in by_band[band]], cfg)
         lines.append(_row(band, s, min_n))
     lines.append("")
 
@@ -262,7 +269,7 @@ def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
         lines.append(_HEADER)
         lines.append(_HEADER_SEP)
         for band in BANDS:
-            s = _stats([mf for mf, _ in by_band[band] if bucket_of(mf) == b])
+            s = _stats([mf for mf, _ in by_band[band] if bucket_of(mf) == b], cfg)
             lines.append(_row(band, s, min_n))
         lines.append("")
 
@@ -274,7 +281,7 @@ def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
         lines.append(_HEADER)
         lines.append(_HEADER_SEP)
         for band in BANDS:
-            s = _stats([mf for mf, lu in by_band[band] if eff_mob_bucket(lu) == b])
+            s = _stats([mf for mf, lu in by_band[band] if eff_mob_bucket(lu) == b], cfg)
             lines.append(_row(band, s, min_n))
         lines.append("")
 
@@ -284,7 +291,7 @@ def render(by_band: dict[tuple[int, int], list[Unit]], min_n: int = 30) -> str:
         lines.append(_HEADER)
         lines.append(_HEADER_SEP)
         for band in BANDS:
-            s = _stats([mf for mf, _ in by_band[band] if mf.phase == phase])
+            s = _stats([mf for mf, _ in by_band[band] if mf.phase == phase], cfg)
             lines.append(_row(band, s, min_n))
         lines.append("")
 
@@ -330,15 +337,18 @@ def main():
     ap.add_argument("--max-games", type=int, default=None)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--out-md", default=None)
+    ap.add_argument("--tc", default="60+0",
+                    help="corpus time control, e.g. 180+0 (default 60+0)")
     args = ap.parse_args()
 
-    cfg = AnalysisConfig(workers=args.workers)
+    cfg = AnalysisConfig(workers=args.workers,
+                         initial_time=parse_tc_seconds(args.tc))
     print(f"Collecting mistake-profile data from {args.pgn} across bands {[band_label(b) for b in BANDS]} ...")
     by_band = collect(args.pgn, cfg, max_games=args.max_games)
     for band in BANDS:
         print(f"  {band_label(band)}: {len(by_band[band])} moves")
 
-    md = render(by_band)
+    md = render(by_band, cfg)
     if args.out_md:
         with open(args.out_md, "w", encoding="utf-8") as fh:
             fh.write(md)

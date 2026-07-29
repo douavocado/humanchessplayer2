@@ -12,7 +12,7 @@ from typing import Callable, Iterator, Optional
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer
 from .features import MoveFeatures, aggregate_features, extract_move_features
-from .pgn_loader import GameRecord, iter_games
+from .pgn_loader import GameRecord, check_time_control, iter_games
 
 
 @dataclass
@@ -117,6 +117,9 @@ def iter_units(
     flushed then, for crash-resumability). Pass None to stay silent.
     """
     for gi, game in enumerate(iter_games(pgn_path, max_games=max_games)):
+        if not check_time_control(game, cfg.initial_time,
+                                  strict=getattr(cfg, "strict_tc", True)):
+            continue
         yield from units_for_game(
             game, analyzer, cfg, player_filter, rating_band, min_moves,
             opponent_band, diff_range,

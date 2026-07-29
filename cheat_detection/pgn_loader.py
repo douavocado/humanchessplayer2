@@ -52,6 +52,37 @@ class GameRecord:
         return [m for m in self.moves if m.mover_name.lower() == low]
 
 
+class TimeControlMismatchError(Exception):
+    """A game's TimeControl header disagrees with the configured --tc."""
+
+
+def check_time_control(game: GameRecord, expected_secs: float, *,
+                       strict: bool = True) -> bool:
+    """Whether this game's clock matches the analysis configuration.
+
+    Returns True to analyse the game, False to skip it. Raises when the game
+    mismatches and `strict` -- the default, because a blended corpus produces
+    timing features that look plausible and mean nothing, which is worse than
+    a crash.
+
+    A game whose TimeControl is missing or unparseable (`base_secs is None`)
+    passes: it cannot be checked, and absence of evidence is not a mismatch.
+    """
+    if game.base_secs is None:
+        return True
+    if float(game.base_secs) == float(expected_secs):
+        return True
+    if strict:
+        raise TimeControlMismatchError(
+            f"game has TimeControl {game.time_control!r} "
+            f"({game.base_secs}s base) but the analysis is configured for "
+            f"{expected_secs:g}s. Pin one clock -- mixing them muddies every "
+            f"timing feature. Pass --tc {int(game.base_secs)}+0 to analyse "
+            f"this corpus, or --allow-tc-mismatch to skip off-control games."
+        )
+    return False
+
+
 def _parse_time_control(tc: str) -> tuple[Optional[int], Optional[int]]:
     if not tc or tc in ("-", "?"):
         return None, None

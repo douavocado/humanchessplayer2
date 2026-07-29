@@ -17,6 +17,21 @@ except Exception:  # pragma: no cover - only when run outside the repo
     _DEFAULT_SF = os.environ.get("STOCKFISH_PATH", "stockfish")
 
 
+# Fractions of the initial clock that define the two clock-dependent feature
+# thresholds. Both were chosen to reproduce the previously-hardcoded 60+0
+# constants EXACTLY -- 60/30 = 2.0s and 60/6 = 10.0s -- so parameterising them
+# leaves every existing bullet baseline, report and band table untouched.
+#
+# The /30 was already the documented intent. The /6 was derived backwards from
+# the shipped 10.0 and lands on it exactly, which is reasonable evidence that a
+# fraction is the right reading of "time pressure" rather than a coincidence.
+# Open question flagged in the spec: the scramble may be partly *absolute* --
+# 10s is roughly where humans stop calculating regardless of the starting clock
+# -- in which case the right form is max(10.0, initial_time/6).
+LONG_THINK_FRACTION = 1 / 30
+TIME_PRESSURE_FRACTION = 1 / 6
+
+
 @dataclass
 class AnalysisConfig:
     # --- Engine analysis ---
@@ -35,19 +50,20 @@ class AnalysisConfig:
     # --- Feature thresholds (ported from Irwin/Kaladin conventions) ---
     ambiguity_wc_window: float = 0.05   # moves within this win-prob of best are "equally good"
     instant_move_secs: float = 1.0      # emt below this counts as an "instant" move
-    # emt above this counts as a "long think": the slow tail of the move-time
-    # distribution, the counterpart to instant_move_secs. Set at
-    # initial_time/30, i.e. 2.0s for the 60+0 corpus this is calibrated on --
-    # a different time control needs this rescaled.
-    #
-    # Added because the bot was being tuned against the fast tail alone while
-    # the slow tail was the larger divergence: measured at 0.067 against a
-    # human 0.115, and near-zero outside the midgame (opening 0.002 vs 0.031,
-    # endgame 0.007 vs 0.044).
-    long_think_secs: float = 2.0
+    # Initial clock in seconds for the corpus under analysis -- 60.0 is one
+    # minute of bullet, the control everything in this repo was calibrated on.
+    # Set it from --tc; the two thresholds below derive from it.
+    initial_time: float = 60.0
+    # Set these only to override the derivation; None = derive from
+    # initial_time. They are properties rather than fields so that setting
+    # initial_time after construction re-derives them (analyze.py's
+    # _config_from_args mutates an already-built config).
+    long_think_secs_override: float | None = None
     blunder_wc_loss: float = 0.15       # win-prob drop that marks a blunder
-    time_pressure_secs: float = 10.0    # clock below this = "time pressure" for the
-                                        # degradation features (acpl/blunders in scramble)
+    time_pressure_secs_override: float | None = None
+    # False downgrades the TimeControl header check to a skip; see
+    # pgn_loader.check_time_control. Set from --allow-tc-mismatch.
+    strict_tc: bool = True
 
     # --- Phase boundaries ---
     opening_plies: int = 16             # first N plies = opening
@@ -74,6 +90,28 @@ class AnalysisConfig:
     flag_zscore: float = 2.0
     # Significance level for test_mode="welch".
     flag_pvalue: float = 0.05
+
+    @property
+    def long_think_secs(self) -> float:
+        """emt above this counts as a "long think": the slow tail of the
+        move-time distribution, the counterpart to instant_move_secs.
+
+        Tracked because tuning against the fast tail alone hid a larger
+        divergence -- the bot measured 0.067 against a human 0.115, and
+        near-zero outside the midgame (opening 0.002 vs 0.031, endgame 0.007
+        vs 0.044).
+        """
+        if self.long_think_secs_override is not None:
+            return self.long_think_secs_override
+        return self.initial_time * LONG_THINK_FRACTION
+
+    @property
+    def time_pressure_secs(self) -> float:
+        """Clock below this = "time pressure" for the degradation features
+        (acpl/blunders in the scramble)."""
+        if self.time_pressure_secs_override is not None:
+            return self.time_pressure_secs_override
+        return self.initial_time * TIME_PRESSURE_FRACTION
 
     def cache_path(self) -> str:
         os.makedirs(self.cache_dir, exist_ok=True)
