@@ -22,7 +22,7 @@ from typing import Callable, Optional
 
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer, open_cache_db
-from .pgn_loader import iter_games
+from .pgn_loader import check_time_control, iter_games
 from .pipeline import Unit, iter_units, units_for_game
 
 
@@ -42,6 +42,9 @@ def _worker(
     units: list[Unit] = []
     with EngineAnalyzer(cfg) as analyzer:
         for gi, game in enumerate(iter_games(pgn_path, max_games=max_games)):
+            if not check_time_control(game, cfg.initial_time,
+                                      strict=getattr(cfg, "strict_tc", True)):
+                continue
             if gi % nworkers != worker_id:
                 continue
             units.extend(units_for_game(
