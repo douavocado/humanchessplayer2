@@ -60,11 +60,6 @@ def _add_engine_args(p: argparse.ArgumentParser) -> None:
                         "(default), or a Welch two-sample t-test at --alpha")
     p.add_argument("--alpha", type=float, dest="flag_pvalue",
                    help="significance level for --test welch (default 0.05)")
-    p.add_argument("--tc", default="60+0",
-                   help="time control of the corpus, e.g. 180+0 (default "
-                        "60+0). Sets the initial clock that long-think and "
-                        "time-pressure thresholds derive from, and is checked "
-                        "against each game's TimeControl header.")
     p.add_argument("--allow-tc-mismatch", action="store_true",
                    help="downgrade the TimeControl header check to a warning. "
                         "Mixing clocks muddies every timing feature, so this "
@@ -203,6 +198,9 @@ def main(argv=None) -> int:
     prun.add_argument("--user", required=True, help="Lichess account of the bot")
     prun.add_argument("--rating", type=int, nargs=2, required=True, metavar=("MIN", "MAX"))
     prun.add_argument("--perf", default="bullet", help="bullet/blitz/rapid/classical")
+    prun.add_argument("--tc", help="exact time control for the bot fetch, e.g. 60+0 "
+                                   "(30+0 and 60+0 pacing differ ~2x; keep one clock). "
+                                   "Also sets the analysis initial_time if provided.")
     prun.add_argument("--baseline", required=True, help="baseline JSON (loaded if present, else built)")
     prun.add_argument("--corpus", help="human corpus PGN to build the baseline if it doesn't exist")
     prun.add_argument("--pgn", help="bot PGN (skip fetch; use this file instead)")
@@ -232,6 +230,10 @@ def main(argv=None) -> int:
     pb.add_argument("--max-games", type=int, help="cap games analysed (for speed)")
     _add_engine_args(pb)
     _add_filter_args(pb)
+    pb.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
     pb.set_defaults(func=cmd_baseline)
 
     pr = sub.add_parser("report", help="report bot vs. human baseline")
@@ -243,6 +245,10 @@ def main(argv=None) -> int:
     pr.add_argument("--max-games", type=int, help="cap games analysed")
     _add_engine_args(pr)
     _add_filter_args(pr)
+    pr.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
     pr.set_defaults(func=cmd_report)
 
     args = parser.parse_args(argv)

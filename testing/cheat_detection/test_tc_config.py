@@ -80,5 +80,48 @@ class TestParseTcSeconds(unittest.TestCase):
                 parse_tc_seconds(bad)
 
 
+class TestConfigFromArgs(unittest.TestCase):
+    """Verify _config_from_args preserves fetch behaviour when --tc is omitted."""
+
+    def test_config_without_tc_uses_default(self):
+        """When --tc is omitted or None, initial_time stays at the default 60.0.
+
+        This is critical for the 'run' command: args.tc must be None so that
+        fetch_user_games() streams all games unfiltered; meanwhile the config
+        uses the default initial_time for threshold derivation.
+        """
+        from cheat_detection.analyze import _config_from_args
+
+        class Args:
+            depth = None
+            multipv = None
+            threads = None
+            hash_mb = None
+            workers = None
+            flag_pvalue = None
+            test_mode = None
+            tc = None
+
+        cfg = _config_from_args(Args())
+        self.assertEqual(cfg.initial_time, 60.0)
+
+    def test_config_with_tc_parses_it(self):
+        """When --tc is provided, _config_from_args parses it to initial_time."""
+        from cheat_detection.analyze import _config_from_args
+
+        class Args:
+            depth = None
+            multipv = None
+            threads = None
+            hash_mb = None
+            workers = None
+            flag_pvalue = None
+            test_mode = None
+            tc = "180+0"
+
+        cfg = _config_from_args(Args())
+        self.assertEqual(cfg.initial_time, 180.0)
+
+
 if __name__ == "__main__":
     unittest.main()
