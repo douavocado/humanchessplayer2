@@ -117,6 +117,17 @@ def cmd_baseline(args) -> int:
 def cmd_report(args) -> int:
     cfg = _config_from_args(args)
     baseline = Baseline.from_json(args.baseline)
+    if baseline.initial_time is None:
+        print(f"WARNING: baseline {args.baseline!r} predates the initial_time "
+              f"field (legacy baseline); assuming it matches the configured "
+              f"{cfg.initial_time:g}s. Verify separately if unsure.",
+              file=sys.stderr)
+    elif float(baseline.initial_time) != float(cfg.initial_time):
+        print(f"WARNING: baseline {args.baseline!r} was built at "
+              f"{baseline.initial_time:g}s but this report is configured for "
+              f"{cfg.initial_time:g}s (--tc). Mixing clocks muddies every "
+              f"timing feature (long_think_secs/time_pressure_secs derive "
+              f"from initial_time).", file=sys.stderr)
     players = {p.lower() for p in args.player} if args.player else None
 
     bot_units = collect_units(
