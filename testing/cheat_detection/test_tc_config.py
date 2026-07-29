@@ -105,6 +105,23 @@ class TestConfigFromArgs(unittest.TestCase):
         cfg = _config_from_args(Args())
         self.assertEqual(cfg.initial_time, 60.0)
 
+    def test_run_subcommand_tc_has_no_default_in_the_real_parser(self):
+        """The actual regression: an earlier implementer removed 'run's
+        pre-existing `--tc` (no default) in favour of a shared one defaulting
+        to "60+0", silently changing `run`'s fetch behaviour from "fetch all
+        clocks" to "drop every non-60+0 game" (fetch_user_games treats
+        time_control=None as unfiltered). This drives the *real* argparse
+        parser, unlike the hand-built Args stub above, so it would catch a
+        re-addition of default="60+0" on `run`'s --tc.
+        """
+        from cheat_detection.analyze import build_parser
+
+        args = build_parser().parse_args([
+            "run", "--user", "someone", "--rating", "2300", "2600",
+            "--baseline", "baseline.json",
+        ])
+        self.assertIsNone(args.tc)
+
     def test_config_with_tc_parses_it(self):
         """When --tc is provided, _config_from_args parses it to initial_time."""
         from cheat_detection.analyze import _config_from_args

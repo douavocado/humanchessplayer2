@@ -191,7 +191,7 @@ def cmd_run(args) -> int:
     return 0
 
 
-def main(argv=None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cheat_detection.analyze",
                                      description="Human-likeness diagnostic for the bot")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -253,6 +253,11 @@ def main(argv=None) -> int:
                          "time-pressure thresholds derive from.")
     pr.set_defaults(func=cmd_report)
 
+    return parser
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)
 
