@@ -1,10 +1,54 @@
 # Extending strength calibration to longer time controls: measurement phase
 
 Date: 2026-07-29
-Status: **design approved, unimplemented.**
+Status: **Phase 0 shipped 2026-07-30** (merges `449c194`, `8acf8b6`); Phase 1
+in progress.
 Scope: Phase 0 (TC-parameterise the analyser) and Phase 1 (the 3+0 human band
 table) only. Bot-side work is deliberately out of scope — see *Why this stops
 at measurement*.
+
+## Implementation notes (added 2026-07-30)
+
+Phase 0 landed as planned, with the exactness guarantee verified end-to-end:
+every numeric leaf of a report generated at the branch point matched one
+generated at head — **0 of 990,068 differ**, including `long_think_rate` and
+`blunder_rate_timepressure`. Plan:
+`docs/superpowers/plans/2026-07-29-tc-parameterised-calibration.md`.
+
+Two defects that review caught, both worth remembering because both were
+reported as harmless:
+
+- The shared `--tc` default silently switched `analyze.py run`'s *fetch* from
+  all-clocks to 60+0-only, because `run`'s `--tc` also feeds
+  `fetch_lichess.fetch_user_games`, where `None` means unfiltered.
+- The corpus-clock guard shipped **inert on the parallel path** — wired into
+  `pipeline.iter_units` and `elo_progression._collect_sequential` but not
+  `parallel._worker`, so it enforced nothing at `--workers > 1`, the documented
+  normal usage. Behaviour that depends on `--workers` is worse than no guard.
+
+Three prerequisites the final review surfaced were done before Phase 1
+(`8acf8b6`): baselines now record `initial_time` and `cmd_report` warns on
+disagreement; `--tc` added to `player_dispersion`, `mistake_impact`,
+`bucket_diagnostic`, `emt_buckets`; `parse_tc_seconds` moved to `pgn_loader`.
+
+### Corpus feasibility: the top bands are the binding constraint
+
+The dump does not need downloading in full — `database.lichess.org` serves byte
+ranges, so a prefix can be streamed through `fetch_corpus` with nothing large
+landing on disk. But **download bandwidth is the constraint, not the quota**:
+measured ~64 KB/s with ~0.86% of games qualifying for 180+0/2300+, i.e. ~50
+kept games/min. The corpus is therefore sized by how long the fetch runs.
+
+More importantly, the *band distribution* is far more scarce at the top at 3+0
+than at bullet. A 40-game smoke slice gave 649 moves in 2100-2299 but only 41
+in 2700-2799 and 25 in 2800+ (below the `min_n` gate). Top-rated players play
+much more bullet than 3+0, so **the 2800+ band, not the corpus as a whole, sets
+the precision of read 1** — the mean-emt span is an endpoint comparison and its
+error bar is dominated by its thinnest end. Judge the span using the trend
+across all seven bands rather than the two endpoints alone, and if the result
+is marginal, say so and fetch longer rather than reading a 3-se difference as
+confirmation. This project has already retracted two conclusions built on
+error bars that were assumed rather than measured.
 
 Follows the 60+0 work in `2026-07-27-strength-dial-design.md` and
 `2026-07-28-instant-move-channel-design.md`. Everything those specs measured is
