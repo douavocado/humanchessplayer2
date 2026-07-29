@@ -35,9 +35,17 @@ disagreement; `--tc` added to `player_dispersion`, `mistake_impact`,
 
 The dump does not need downloading in full — `database.lichess.org` serves byte
 ranges, so a prefix can be streamed through `fetch_corpus` with nothing large
-landing on disk. But **download bandwidth is the constraint, not the quota**:
-measured ~64 KB/s with ~0.86% of games qualifying for 180+0/2300+, i.e. ~50
-kept games/min. The corpus is therefore sized by how long the fetch runs.
+landing on disk. On the 2026-05 dump, **0.88% of games qualify** for
+180+0/2300+ (40,000 kept from 4.57M scanned), and the full 40,000 quota filled
+in roughly 90 minutes from a ~5 GB range — a 119 MB corpus against bullet's
+78 MB / 30,000 games.
+
+⚠️ **Do not size the fetch from its opening minutes.** Throughput ramps by more
+than an order of magnitude after the first few minutes; an early reading of
+~64 KB/s projected 20 hours for what finished in 90. An intermediate plan to
+stop at 8,000 games was made on that bad extrapolation and was unnecessary.
+Also note `fetch_corpus` exits on quota and closes the pipe, so the pipeline
+reports `SIGPIPE` (141) on success.
 
 More importantly, the *band distribution* is far more scarce at the top at 3+0
 than at bullet. A 40-game smoke slice gave 649 moves in 2100-2299 but only 41
