@@ -93,6 +93,8 @@ def _config_from_args(args) -> AnalysisConfig:
         cfg.test_mode = args.test_mode.replace("-", "_")
     if getattr(args, "tc", None):
         cfg.initial_time = parse_tc_seconds(args.tc)
+    if getattr(args, "allow_tc_mismatch", False):
+        cfg.strict_tc = False
     return cfg
 
 

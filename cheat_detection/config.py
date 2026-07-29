@@ -61,6 +61,9 @@ class AnalysisConfig:
     long_think_secs_override: float | None = None
     blunder_wc_loss: float = 0.15       # win-prob drop that marks a blunder
     time_pressure_secs_override: float | None = None
+    # False downgrades the TimeControl header check to a skip; see
+    # pgn_loader.check_time_control. Set from --allow-tc-mismatch.
+    strict_tc: bool = True
 
     # --- Phase boundaries ---
     opening_plies: int = 16             # first N plies = opening

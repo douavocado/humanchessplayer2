@@ -54,7 +54,7 @@ from .bucket_diagnostic import BUCKETS, BUCKET_LABEL, bucket_of
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer, open_cache_db
 from .features import MoveFeatures, extract_move_features
-from .pgn_loader import iter_games
+from .pgn_loader import check_time_control, iter_games
 from .pipeline import _sides_of_interest
 
 BANDS = [
@@ -102,6 +102,9 @@ def _collect_sequential(pgn_path: str, cfg: AnalysisConfig, max_games: Optional[
 
     with EngineAnalyzer(cfg) as analyzer:
         for gi, game in enumerate(iter_games(pgn_path, max_games=max_games)):
+            if not check_time_control(game, cfg.initial_time,
+                                      strict=getattr(cfg, "strict_tc", True)):
+                continue
             if gi_filter is not None and not gi_filter(gi):
                 continue
             for band in BANDS:
