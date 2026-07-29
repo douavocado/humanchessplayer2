@@ -28,20 +28,32 @@ from collections import defaultdict
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer
 from .features import extract_move_features
-from .pgn_loader import iter_games
+from .pgn_loader import iter_games, parse_tc_seconds
 from .pipeline import _sides_of_interest
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pgn", required=True)
     ap.add_argument("--players", nargs="+", default=None)
     ap.add_argument("--rating", nargs=2, type=int, default=None)
     ap.add_argument("--max-games", type=int, default=None)
     ap.add_argument("--tp-secs", type=float, default=10.0)
-    args = ap.parse_args()
+    ap.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
+    ap.add_argument("--allow-tc-mismatch", action="store_true",
+                    help="downgrade the TimeControl header check to a "
+                         "warning/skip instead of raising.")
+    return ap
 
-    cfg = AnalysisConfig()
+
+def main():
+    args = build_parser().parse_args()
+
+    cfg = AnalysisConfig(initial_time=parse_tc_seconds(args.tc),
+                         strict_tc=not args.allow_tc_mismatch)
     player_filter = ({p.lower() for p in args.players}
                      if args.players else None)
     band = tuple(args.rating) if args.rating else None

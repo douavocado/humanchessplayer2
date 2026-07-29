@@ -38,11 +38,12 @@ import numpy as np
 
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer
+from .pgn_loader import parse_tc_seconds
 from .pipeline import iter_units
 
 
-def build(pgn, rating_band, min_units=20, max_games=None):
-    cfg = AnalysisConfig()
+def build(pgn, rating_band, min_units=20, max_games=None, cfg=None):
+    cfg = cfg if cfg is not None else AnalysisConfig()
     per_player = defaultdict(lambda: defaultdict(list))
     with EngineAnalyzer(cfg) as analyzer:
         def prog(n):
@@ -90,15 +91,28 @@ def build(pgn, rating_band, min_units=20, max_games=None):
     return out
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pgn", required=True)
     ap.add_argument("--rating", nargs=2, type=int, required=True)
     ap.add_argument("--min-units", type=int, default=20)
     ap.add_argument("--out", required=True)
     ap.add_argument("--max-games", type=int, default=None)
-    args = ap.parse_args()
-    out = build(args.pgn, tuple(args.rating), args.min_units, args.max_games)
+    ap.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
+    ap.add_argument("--allow-tc-mismatch", action="store_true",
+                    help="downgrade the TimeControl header check to a "
+                         "warning/skip instead of raising.")
+    return ap
+
+
+def main():
+    args = build_parser().parse_args()
+    cfg = AnalysisConfig(initial_time=parse_tc_seconds(args.tc),
+                         strict_tc=not args.allow_tc_mismatch)
+    out = build(args.pgn, tuple(args.rating), args.min_units, args.max_games, cfg=cfg)
     with open(args.out, "w") as fh:
         json.dump(out, fh, indent=1)
     print(f"wrote {args.out}", file=sys.stderr)

@@ -30,7 +30,7 @@ from typing import Optional
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer
 from .features import MoveFeatures, extract_move_features
-from .pgn_loader import iter_games
+from .pgn_loader import iter_games, parse_tc_seconds
 from .pipeline import _sides_of_interest
 
 SHARP_HI = 0.25
@@ -192,7 +192,7 @@ def _progress(label):
     return cb
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--bot-pgn", required=True)
     ap.add_argument("--bot-player", nargs="+", required=True)
@@ -203,9 +203,22 @@ def main():
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--out-md", default=None)
     ap.add_argument("--out-json", default=None)
-    args = ap.parse_args()
+    ap.add_argument("--tc", default="60+0",
+                    help="time control of the corpora, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
+    ap.add_argument("--allow-tc-mismatch", action="store_true",
+                    help="downgrade the TimeControl header check to a "
+                         "warning/skip instead of raising.")
+    return ap
 
-    cfg = AnalysisConfig(workers=args.workers)
+
+def main():
+    args = build_parser().parse_args()
+
+    cfg = AnalysisConfig(workers=args.workers,
+                         initial_time=parse_tc_seconds(args.tc),
+                         strict_tc=not args.allow_tc_mismatch)
 
     print(f"Collecting bot buckets from {args.bot_pgn} ...")
     bot_units = collect_bucket_units(
