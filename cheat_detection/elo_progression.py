@@ -54,12 +54,11 @@ from common.search_constants import (
     STOCKFISH_THREADS,
 )
 
-from .analyze import parse_tc_seconds
 from .bucket_diagnostic import BUCKET_LABEL, BUCKETS, bucket_of
 from .config import LONG_THINK_FRACTION, AnalysisConfig
 from .engine_analysis import EngineAnalyzer, open_cache_db
 from .features import MoveFeatures, extract_move_features
-from .pgn_loader import check_time_control, iter_games
+from .pgn_loader import check_time_control, iter_games, parse_tc_seconds
 from .pipeline import _sides_of_interest
 
 BANDS = [

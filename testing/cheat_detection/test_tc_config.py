@@ -58,6 +58,9 @@ class TestTimeControlDerivation(unittest.TestCase):
 
 
 class TestParseTcSeconds(unittest.TestCase):
+    """parse_tc_seconds lives in pgn_loader (the natural layering: a CLI
+    depends on the loader, not the reverse) and is re-exported from analyze
+    for backward compatibility. Both import paths must behave identically."""
 
     def test_parses_base_and_increment(self):
         from cheat_detection.analyze import parse_tc_seconds
@@ -78,6 +81,31 @@ class TestParseTcSeconds(unittest.TestCase):
         for bad in ("", "-", "?", "blitz", "3+0min"):
             with self.assertRaises(ValueError):
                 parse_tc_seconds(bad)
+
+    def test_importable_from_pgn_loader(self):
+        """The real home of the function post-move."""
+        from cheat_detection.pgn_loader import parse_tc_seconds
+        self.assertEqual(parse_tc_seconds("180+0"), 180.0)
+
+    def test_analyze_and_pgn_loader_export_the_same_function(self):
+        """analyze.parse_tc_seconds is a re-export, not a second definition
+        that could drift from pgn_loader's."""
+        from cheat_detection.analyze import parse_tc_seconds as from_analyze
+        from cheat_detection.pgn_loader import parse_tc_seconds as from_loader
+        self.assertIs(from_analyze, from_loader)
+
+    def test_elo_progression_imports_from_pgn_loader_not_analyze(self):
+        """Regression: elo_progression previously imported parse_tc_seconds
+        from .analyze, forcing it to pull in baseline/orchestrate/parallel/
+        report just to parse a string. It should depend on pgn_loader
+        directly now."""
+        import inspect
+
+        from cheat_detection import elo_progression
+        source = inspect.getsource(elo_progression)
+        self.assertNotIn("from .analyze import parse_tc_seconds", source)
+        self.assertIs(elo_progression.parse_tc_seconds,
+                      __import__("cheat_detection.pgn_loader", fromlist=["parse_tc_seconds"]).parse_tc_seconds)
 
 
 class TestConfigFromArgs(unittest.TestCase):

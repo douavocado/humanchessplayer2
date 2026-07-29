@@ -28,6 +28,9 @@ class Baseline:
     values: Optional[dict[str, list[float]]] = None
     # Provenance of extra unit filters (opponent_band / diff_range), if any.
     filters: Optional[dict] = None
+    # Initial clock (seconds) this baseline was built at (from cfg.initial_time).
+    # Optional: baselines built before this field exists load as None.
+    initial_time: Optional[float] = None
 
     def to_json(self, path: str) -> None:
         payload = {
@@ -39,6 +42,8 @@ class Baseline:
             payload["values"] = self.values
         if self.filters is not None:
             payload["filters"] = self.filters
+        if self.initial_time is not None:
+            payload["initial_time"] = self.initial_time
         # Atomic write: a concurrent report may be loading this baseline.
         import os
         tmp = f"{path}.{os.getpid()}.tmp"
@@ -56,6 +61,7 @@ class Baseline:
             stats=d["stats"],
             values=d.get("values"),
             filters=d.get("filters"),
+            initial_time=d.get("initial_time"),
         )
 
 
@@ -116,4 +122,5 @@ def build_baseline(
         stats=_summarize(units),
         values=collect_values(units),
         filters=filters,
+        initial_time=cfg.initial_time,
     )
