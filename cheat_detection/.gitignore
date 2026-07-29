@@ -28,3 +28,4 @@ runs/strength_dial/*
 runs/elo_progression/*
 !runs/elo_progression/report_timing.md
 !runs/elo_progression/report_longthink.md
+!runs/elo_progression/report_timing_180.md
