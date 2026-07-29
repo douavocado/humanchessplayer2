@@ -30,3 +30,4 @@ runs/elo_progression/*
 !runs/elo_progression/report_longthink.md
 !runs/elo_progression/report_timing_180.md
 !runs/elo_progression/run_band_table_180.py
+!runs/elo_progression/compare_bands.py
