@@ -56,7 +56,7 @@ from common.search_constants import (
 
 from .analyze import parse_tc_seconds
 from .bucket_diagnostic import BUCKET_LABEL, BUCKETS, bucket_of
-from .config import AnalysisConfig
+from .config import LONG_THINK_FRACTION, AnalysisConfig
 from .engine_analysis import EngineAnalyzer, open_cache_db
 from .features import MoveFeatures, extract_move_features
 from .pgn_loader import check_time_control, iter_games
@@ -253,7 +253,7 @@ def render(by_band: dict[tuple[int, int], list[Unit]], cfg: AnalysisConfig, min_
                   f"move time in seconds and an \"instant\" move is emt < {cfg.instant_move_secs:g}s.\n")
     lines.append(f"Built at a {cfg.initial_time:g}s initial clock; a \"long "
                  f"think\" is emt > {cfg.long_think_secs:g}s "
-                 f"(initial_time/30).\n")
+                 f"(initial_time * {LONG_THINK_FRACTION:g}).\n")
 
     lines.append("## Overall (all positions)\n")
     lines.append(_HEADER)
