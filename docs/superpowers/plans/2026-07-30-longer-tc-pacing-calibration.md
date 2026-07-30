@@ -1,5 +1,12 @@
 # Longer-TC Pacing Calibration Implementation Plan
 
+> **Halted 2026-07-30.** Tasks 1-3 were executed (the inert `tc_profiles`
+> table, wiring in `decision_logic`, and the 180+0 quickness sweep). Tasks 4-5
+> (refit `quickness`; fit the opening envelope) were cancelled after Task 3's
+> sweep showed the human mean-emt target is reachable only at ~2x the human
+> time-forfeit rate. See the spec's "Outcome: Part 1 falsified" section for
+> the arm table and numbers.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the bot pace 180+0 like a human — correct overall level via a refitted `quickness`, and a correct opening/midgame shape via a time-control-keyed envelope.

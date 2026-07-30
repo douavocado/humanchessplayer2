@@ -31,3 +31,10 @@ runs/elo_progression/*
 !runs/elo_progression/report_timing_180.md
 !runs/elo_progression/run_band_table_180.py
 !runs/elo_progression/compare_bands.py
+!runs/tc_envelope/
+runs/tc_envelope/*
+!runs/tc_envelope/*.py
+# The sweep result JSON is the falsification record for Part 1 of the halted
+# 180+0 pacing plan -- small, not reliably reproducible (the PGNs behind it
+# are ~4h of compute), kept for the same reason as elo_progression's tables.
+!runs/tc_envelope/quickness_sweep_180.json

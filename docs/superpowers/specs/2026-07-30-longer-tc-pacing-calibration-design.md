@@ -1,9 +1,40 @@
 # Pacing calibration for longer time controls
 
 Date: 2026-07-30
-Status: **design approved, unimplemented.**
+Status: **partly implemented, then halted by measurement.** Tasks 1-3 shipped:
+`common/tc_profiles.py` (inert — `TC_PROFILES` is empty, every control
+resolves to `LEGACY`) and `engine_components/decision_logic.py` reading it
+instead of hardcoding the envelopes; both parity-verified as no-ops. Task 3's
+sweep then falsified Part 1 (below), and Tasks 4-5 (refit `quickness`; fit the
+180+0 opening envelope) were cancelled — see "Outcome: Part 1 falsified" for
+the numbers.
 Scope: 180+0 only. Two orthogonal corrections — a global pace level and the
 opening envelope shape. Everything about 300+0 and 600+0 is explicitly out.
+
+## Outcome: Part 1 falsified (added after the halt)
+
+The Task 3 quickness sweep (`cheat_detection/runs/tc_envelope/quickness_sweep_180.json`,
+100 games/arm, 180+0, pure self-play):
+
+| quickness | mean emt | time forfeits |
+|---|---|---|
+| 2.0 | 2.276s | 16% |
+| 2.5 (shipped) | 2.574s | 20% |
+| 3.2 | 3.208s | 47% |
+| 4.0 | 3.348s | 41% |
+| humans (40k games) | — | **24.3%** |
+
+`quickness` only reaches the human mean emt (~3.14s per-move, see Finding 4 of
+the halt-review) at roughly double the human flag rate. The mechanism: the
+sweep's per-phase means show endgame think time barely responds to the knob
+(1.30/1.47/1.33/1.45s across the four arms) while midgame scales hard
+(2.98s → 4.27s) — raising the level overspends the midgame and leaves the
+endgame with no clock. Part 1's premise, that `quickness` is a clean global
+scale whose only job is the level, does not survive contact with the
+per-phase breakdown. The redesign this motivates targets within-game time
+*allocation* across phases, not a per-time-control multiplier, so Part 2 (the
+opening envelope, below) was never attempted — it would have been fitted
+against a level correction that itself doesn't work.
 
 Follows `2026-07-29-longer-time-control-calibration-design.md`, which
 parameterised the analyser and produced the 180+0 human band table this fits

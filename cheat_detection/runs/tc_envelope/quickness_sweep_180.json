@@ -1,0 +1,52 @@
+{
+  "tc": "180+0",
+  "games_per_arm": 100,
+  "human_mean_emt": 3.158,
+  "human_open_mid": 0.377,
+  "arms": [
+    {
+      "mean_emt": 2.2762688614540467,
+      "opening": 1.08375,
+      "middlegame": 2.978956999085087,
+      "endgame": 1.3039250990277278,
+      "open_mid": 0.3638018273955774,
+      "n_moves": 10935,
+      "forfeit_rate": 0.16,
+      "n_games": 100,
+      "quickness": 2.0
+    },
+    {
+      "mean_emt": 2.5736298030037057,
+      "opening": 1.0775,
+      "middlegame": 3.235581188997338,
+      "endgame": 1.473044397463002,
+      "open_mid": 0.33301590566296446,
+      "n_moves": 10254,
+      "forfeit_rate": 0.2,
+      "n_games": 100,
+      "quickness": 2.5
+    },
+    {
+      "mean_emt": 3.2084404455869753,
+      "opening": 1.22875,
+      "middlegame": 4.113854379619437,
+      "endgame": 1.327523602033406,
+      "open_mid": 0.2986858275993884,
+      "n_moves": 9336,
+      "forfeit_rate": 0.47,
+      "n_games": 100,
+      "quickness": 3.2
+    },
+    {
+      "mean_emt": 3.348021484160912,
+      "opening": 1.31875,
+      "middlegame": 4.269187449718423,
+      "endgame": 1.4533639143730888,
+      "open_mid": 0.3088995307729997,
+      "n_moves": 9123,
+      "forfeit_rate": 0.41,
+      "n_games": 100,
+      "quickness": 4.0
+    }
+  ]
+}
