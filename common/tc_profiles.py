@@ -48,7 +48,19 @@ LEGACY = TCProfile(
     label="legacy (pre-2026-07-30 inline envelopes)",
 )
 
-# Fitted rows, keyed by exact initial clock in seconds. Task 5 adds 180.0.
+# Fitted rows, keyed by exact initial clock in seconds.
+#
+# Empty, and likely to stay that way. The planned 180+0 fit (refit `quickness`,
+# then fit an opening envelope against the residual) was halted after the
+# quickness sweep (`cheat_detection/runs/tc_envelope/quickness_sweep_180.json`)
+# showed the human mean-emt target is reachable only at ~2x the human time-
+# forfeit rate (47% vs a human 24.3%) -- `quickness` overspends in the
+# midgame (2.98s -> 4.27s across the sweep) while the endgame barely moves
+# (1.30s -> 1.45s), so pushing the level up starves the endgame clock rather
+# than pacing it. The redesign targets within-game time allocation, not a
+# per-time-control phase multiplier, so this table may never gain a row. See
+# `docs/superpowers/specs/2026-07-30-longer-tc-pacing-calibration-design.md`
+# for the halt record.
 TC_PROFILES: dict[float, TCProfile] = {}
 
 
