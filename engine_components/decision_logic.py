@@ -470,6 +470,14 @@ def adjust_time_for_move_loss(engine, move_uci, time_take):
             wc_loss, stretch, time_take, new_time)
         print(f"[ENGINE] Hesitating before a mistake (wc loss {wc_loss:.3f}): {time_take:.2f}s -> {new_time:.2f}s")
         return new_time
+    if engine.opponent_just_blundered:
+        # A clean recapture of a just-hung piece will almost always read as
+        # near-zero wc_loss -- it IS the best move by construction -- so the
+        # snap condition below fires on nearly every startled recapture and
+        # cancels out the startle multiplier already baked into time_take.
+        # The startle reaction (mood_manager.check_opp_blunder) takes
+        # precedence: no snap discount this move.
+        return time_take
     if wc_loss <= MISTAKE_SNAP_WC_LOSS and np.random.random() < MISTAKE_SNAP_PROB:
         trim = np.random.uniform(*MISTAKE_SNAP_RANGE)
         new_time = time_take * trim
