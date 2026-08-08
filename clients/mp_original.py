@@ -11,13 +11,13 @@ import pyautogui
 import random
 import chess
 import ctypes
-import subprocess
 import time
 import datetime
 import cv2
 import numpy as np
 
 from common.custom_cursor import CustomCursor
+from common.platform_compat import is_capslock_on, play_sound
 
 from engine import Engine
 from common.constants import QUICKNESS, MOUSE_QUICKNESS, DIFFICULTY, RESOLUTION_SCALE
@@ -256,13 +256,6 @@ RESYNC_CONFIRM_MIN_TIME = 15
 
 
 
-#linux funciton to check capslock
-def is_capslock_on():
-    if subprocess.check_output('xset q | grep LED', shell=True)[65] == 48 :
-        return False
-    elif subprocess.check_output('xset q | grep LED', shell=True)[65] == 49 :
-        return True
-    
 
 def _movement_duration(distance):
     """One mouse-leg duration — formula shared with the simulator via
@@ -444,7 +437,7 @@ def await_new_game(timeout=60, expected_time=None):
         res = new_game_found(expected_time=expected_time)
         if res is not None:
             sound_file = "assets/audio/new_game_found.mp3"
-            os.system("mpg123 -q " + sound_file)
+            play_sound(sound_file)
             return res
 
     debug_files = save_debug_screenshot(
@@ -455,7 +448,7 @@ def await_new_game(timeout=60, expected_time=None):
     write_log()
 
     sound_file = "assets/audio/alert.mp3"
-    os.system("mpg123 -q " + sound_file)
+    play_sound(sound_file)
     return None
 
 def set_game(starting_time):

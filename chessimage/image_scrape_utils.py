@@ -6,7 +6,6 @@ Created on Thu Sep 19 11:52:37 2024
 @author: james
 """
 
-from fastgrab import screenshot
 import matplotlib.pyplot as plt
 import cv2
 import time
@@ -21,6 +20,10 @@ from pathlib import Path
 
 # Add auto_calibration to path
 sys.path.append(str(Path(__file__).parent.parent))
+
+# Imported after the path append so this module still works when it is loaded
+# directly rather than as part of the package from the repo root.
+from common.platform_compat import make_screen_capture
 
 try:
     from auto_calibration.config import get_config
@@ -76,7 +79,7 @@ def remove_background_colours(img, thresh=1.04):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     return (gray * mask).astype(np.uint8)
 
-SCREEN_CAPTURE = screenshot.Screenshot()
+SCREEN_CAPTURE = make_screen_capture()
 
 # Dynamic coordinate loading functions
 def get_coordinates():

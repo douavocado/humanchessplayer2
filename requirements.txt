@@ -14,9 +14,10 @@ matplotlib>=3.9.0
 pandas>=2.2.0
 mss>=9.0.0
 pyscreenshot>=3.1
-pyxdg>=0.27
+pyxdg>=0.27; sys_platform == "linux"
 tqdm>=4.65.0
 pytesseract>=0.3.13
-fastgrab>=0.0.1
+# X11-only C extension; Windows uses mss via common/platform_compat.py
+fastgrab>=0.0.1; sys_platform == "linux"
 cairosvg>=2.7.0
 humancursor>=0.0.1

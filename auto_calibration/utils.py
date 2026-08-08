@@ -25,8 +25,8 @@ def get_screen_capture():
     """Get the global screen capture instance."""
     global _screen_capture
     if _screen_capture is None:
-        from fastgrab import screenshot
-        _screen_capture = screenshot.Screenshot()
+        from common.platform_compat import make_screen_capture
+        _screen_capture = make_screen_capture()
     return _screen_capture
 
 

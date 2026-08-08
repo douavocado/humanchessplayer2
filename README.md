@@ -39,8 +39,15 @@ which site it was fitted against. See `docs/site-abstraction.md`.
 
 - Python 3.12 (the repo expects a virtualenv at `venv/`)
 - Stockfish, plus the Python dependencies in `requirements.txt`
-- Tesseract (`sudo apt install tesseract-ocr`) for clock and rating OCR
-- An X11 display — the bot drives a real cursor
+- Tesseract for clock and rating OCR (`sudo apt install tesseract-ocr`; on
+  Windows, the UB-Mannheim build, with `pytesseract.tesseract_cmd` pointed at it)
+- A desktop session — the bot drives a real cursor. Linux/X11 and Windows are
+  both supported; everything that differs between them lives in
+  `common/platform_compat.py`.
+
+On Windows, run with `PYTHONUTF8=1` (or `python -X utf8`): several modules print
+non-ASCII status characters and read PGN corpora that contain them, and the
+default cp1252 console encoding raises `UnicodeEncodeError` on both.
 
 ## Installation
 

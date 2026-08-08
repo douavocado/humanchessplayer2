@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import os
 import queue
-import signal
 import subprocess
 import sys
 import threading
@@ -26,9 +25,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import matplotlib
+
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
+
+from common.platform_compat import process_group_popen_kwargs, terminate_process_group
 
 from .analyze import parse_tc_seconds
 from .config import AnalysisConfig  # noqa: E402
@@ -399,7 +401,7 @@ class DiagnosticGUI:
         self.sim_proc = subprocess.Popen(
             argv, cwd=os.path.dirname(_HERE),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, start_new_session=True)
+            text=True, **process_group_popen_kwargs())
 
         def pump(proc):
             for line in proc.stdout:
@@ -411,7 +413,7 @@ class DiagnosticGUI:
     def _on_sim_stop(self):
         if self.sim_proc and self.sim_proc.poll() is None:
             # Kill the whole group: run.py spawns worker processes + Stockfish.
-            os.killpg(os.getpgid(self.sim_proc.pid), signal.SIGTERM)
+            terminate_process_group(self.sim_proc)
             self.q.put(("simlog", "[stopped by user]"))
 
     def _sim_to_diagnostic(self):

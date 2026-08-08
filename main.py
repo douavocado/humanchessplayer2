@@ -16,6 +16,12 @@ import argparse
 # Import only the constants module first, delay other imports
 import common.constants as constants
 from common.logging import init_logging, get_logger, LogLevel
+from common.platform_compat import init as init_platform, play_sound
+
+# Before anything reads a screen coordinate or captures a frame. On Windows
+# this declares DPI awareness; without it every click silently lands at the
+# display-scaling fraction of where it should. No-op on Linux.
+init_platform()
 
 parser = argparse.ArgumentParser(description="Setting game mode")
 parser.add_argument("-t", "--time", type=int, default=60,
@@ -160,7 +166,6 @@ def run_debug_mode(interval=2.0, offline=False, offline_dir="auto_calibration/of
         offline: If True, use offline screenshots instead of live capture
         offline_dir: Directory containing offline screenshots
     """
-    import os
     import cv2
     import numpy as np
     from datetime import datetime
@@ -731,7 +736,7 @@ def run_debug_mode(interval=2.0, offline=False, offline_dir="auto_calibration/of
                         # Play sound
                         try:
                             sound_file = "assets/audio/new_game_found.mp3"
-                            os.system("mpg123 -q " + sound_file)
+                            play_sound(sound_file)
                         except:
                             pass
                     else:
@@ -846,7 +851,7 @@ def run_debug_mode(interval=2.0, offline=False, offline_dir="auto_calibration/of
                     # Play sound
                     try:
                         sound_file = "assets/audio/new_game_found.mp3"
-                        os.system("mpg123 -q " + sound_file)
+                        play_sound(sound_file)
                     except:
                         pass
                 else:

@@ -6,8 +6,13 @@ Created on Tue Sep 10 13:33:26 2024
 """
 import math
 
-PATH_TO_STOCKFISH = "Engines/stockfish17-ubuntu"
-PATH_TO_PONDER_STOCKFISH = "Engines/stockfish16-ubuntu"
+from common.platform_compat import engine_path
+
+# Resolved per-platform out of Engines/ -- ELF `-ubuntu` builds on Linux,
+# `.exe` on Windows. See common/platform_compat.py:engine_path for the
+# candidate names each platform looks for.
+PATH_TO_STOCKFISH = engine_path("stockfish17")
+PATH_TO_PONDER_STOCKFISH = engine_path("stockfish16")
 
 # Small, hand-curated polyglot book of one account's real recurring opening
 # habits (see assets/data/Opening_books/build_repertoire.py), consulted
