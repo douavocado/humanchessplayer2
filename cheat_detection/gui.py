@@ -30,8 +30,10 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 
+from .analyze import parse_tc_seconds
 from .config import AnalysisConfig  # noqa: E402
 from .orchestrate import DiagnosticSpec, run_diagnostic, save_result  # noqa: E402
+from .pgn_loader import TimeControlMismatchError
 from .report import FEATURE_META  # noqa: E402
 
 _HERE = os.path.dirname(__file__)
@@ -429,6 +431,12 @@ class DiagnosticGUI:
         cfg.workers = int(self.v_workers.get() or 1)
         cfg.test_mode = "welch" if self.v_test.get() == "Welch t-test" else "effect_size"
         cfg.flag_pvalue = float(self.v_alpha.get())
+        # Without this, the GUI's own TC field (self.v_tc) only ever fed the
+        # fetch, so a non-bullet TC entered there got scored with bullet's
+        # hardcoded-equivalent 2.0s/10.0s thresholds. parse_tc_seconds raises
+        # ValueError on garbage; the caller (_on_run) catches it the same way
+        # it catches every other bad-input path.
+        cfg.initial_time = parse_tc_seconds(self.v_tc.get().strip() or "60+0")
         return cfg
 
     def _on_run(self):
@@ -463,7 +471,11 @@ class DiagnosticGUI:
         except ValueError as e:
             messagebox.showerror("Bad input", str(e))
             return
-        cfg = self._cfg()
+        try:
+            cfg = self._cfg()
+        except ValueError as e:
+            messagebox.showerror("Bad input", str(e))
+            return
         workdir = os.path.join(_HERE, "runs")
         self.run_btn.configure(state="disabled")
         self.log.delete("1.0", "end")
@@ -477,7 +489,12 @@ class DiagnosticGUI:
                     on_phase=lambda p: self.q.put(("phase", p)),
                 )
                 self.q.put(("done", result))
-            except Exception as e:  # surface any failure to the UI
+            except TimeControlMismatchError as e:
+                # A mixed-clock corpus, raised from inside collect_units
+                # (sequential or parallel). Report it as the actionable
+                # message it already is, not a bare exception name.
+                self.q.put(("error", str(e)))
+            except Exception as e:  # surface any other failure to the UI
                 self.q.put(("error", f"{type(e).__name__}: {e}"))
 
         self.worker = threading.Thread(target=work, daemon=True)

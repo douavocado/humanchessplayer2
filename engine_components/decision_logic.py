@@ -16,6 +16,7 @@ move (self -> engine), no interface redesign.
 import numpy as np
 
 from common.board_information import phase_of_game, king_danger
+from common.tc_profiles import apply_envelope, resolve_tc
 from common.search_constants import (
     BREADTH_TIME_BONUS_TIERS, EFF_MOB_TACTICAL_CUTOFF, EFF_MOB_FORCED_CUTOFF,
     KING_DANGER_THRESHOLD, KING_DANGER_BREADTH_BONUS, TACTICAL_MIDGAME_BREADTH_DELTA,
@@ -190,16 +191,15 @@ def get_time_taken(engine, obvious=False, human_filters=True):
         # we have used human probabilities calculation.
         # our main analysis is for this case
         game_phase = phase_of_game(engine.current_board)
-        # in the opening and endgame we spend less time on average than the mid game
-        if game_phase == "opening":
-            base_time = (base_time ** 0.2)/2
-        elif game_phase == "midgame":
-            if self_initial_time > 60:
-                base_time *= 1.7
-            else:
-                base_time *= 1.4
-        else:
-            base_time *=0.7
+        # Phase envelopes live in common/tc_profiles.py, keyed by initial
+        # clock: the 60+0 shape is wrong at longer controls because the
+        # opening form compresses toward a constant while the midgame scales.
+        # An unfitted control resolves to LEGACY, i.e. exactly this file's
+        # previous arithmetic.
+        _tc = resolve_tc(self_initial_time)
+        base_time = apply_envelope(_tc, base_time, game_phase, self_initial_time)
+        engine.log += "Phase envelope: {} profile ({}) \n".format(
+            game_phase, _tc.label)
 
         engine.log += "Base time after game phase analysis: {} \n".format(base_time)
 

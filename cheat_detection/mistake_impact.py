@@ -45,7 +45,7 @@ from simulation.adjudicate_result import adjudicate_game
 from .config import AnalysisConfig
 from .engine_analysis import EngineAnalyzer
 from .features import MoveFeatures, extract_move_features
-from .pgn_loader import parse_game
+from .pgn_loader import parse_game, parse_tc_seconds
 from .pipeline import _sides_of_interest
 
 PLY_THIRDS = ["first third", "middle third", "final third"]
@@ -168,7 +168,7 @@ def render(all_moves: list[MoveFeatures], worst_moves: list, cfg: AnalysisConfig
     return "\n".join(lines)
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pgn", required=True)
     ap.add_argument("--player", nargs="+", help="bot player name(s) to filter to (self-play PGNs)")
@@ -176,9 +176,22 @@ def main():
     ap.add_argument("--max-games", type=int, default=None)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--out-md", default=None)
-    args = ap.parse_args()
+    ap.add_argument("--tc", default="60+0",
+                    help="time control of the corpus, e.g. 180+0 (default "
+                         "60+0). Sets the initial clock that long-think and "
+                         "time-pressure thresholds derive from.")
+    ap.add_argument("--allow-tc-mismatch", action="store_true",
+                    help="downgrade the TimeControl header check to a "
+                         "warning/skip instead of raising.")
+    return ap
 
-    cfg = AnalysisConfig(workers=args.workers)
+
+def main():
+    args = build_parser().parse_args()
+
+    cfg = AnalysisConfig(workers=args.workers,
+                         initial_time=parse_tc_seconds(args.tc),
+                         strict_tc=not args.allow_tc_mismatch)
     player_filter = {p.lower() for p in args.player} if args.player else None
     rating_band = tuple(args.rating) if args.rating else None
     label = args.pgn if player_filter is None else f"{args.pgn} [{', '.join(args.player)}]"
