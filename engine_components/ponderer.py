@@ -31,7 +31,7 @@ import chess.engine
 
 from common.board_information import phase_of_game, calculate_threatened_levels
 from common.utils import extend_mate_score
-from common.search_constants import MAX_CALC_DEPTH_COEFF
+from common.search_constants import MAX_CALC_DEPTH_COEFF, REEVAL_ORDER
 
 
 def own_time_or_none(engine):
@@ -177,6 +177,37 @@ def recursive_ponder(engine, board, move_uci, no_root_moves, depth, prev_board=N
             return [ponder_results[move_uci][1], None]
 
 
+def reeval_sequence(engine, moves):
+    """ The order re_evaluate actually searches candidates in.
+
+        This is the order the budget is spent in, and running out mid-list
+        leaves the rest at depth_considered 0 and a ~60cp penalty, which
+        REEVAL_ORDER's own notes call effective disqualification. So the
+        order *is* the knob: callers hand the candidates over already sorted
+        the way reeval_order asked for (human plausibility, or eval), and
+        that sorting has to survive to here.
+
+        It used to not. re_evaluate opened with an unconditional
+        random.shuffle "to avoid bias", which put the disqualification draw
+        back on a uniform lottery and left reeval_order controlling only
+        which moves made the shortlist, never which of them got looked at
+        first. Seen live 2026-08-22: Nxa1 won the position's human prior at
+        p=0.888, was shortlisted first, shuffled to last, and ran out of
+        budget - it went into the comparison at depth 0 against a rival's
+        depth-4 eval and lost by the penalty, costing ~1.1 pawn.
+
+        "random" is the one setting that wants the lottery, so it still
+        shuffles; it is what that setting selects, not an accident.
+
+        Returns a new list - the caller's own ordering is left intact, so a
+        log line built before the call still describes what was searched.
+    """
+    ordered = list(moves)
+    if getattr(engine, "reeval_order", REEVAL_ORDER) == "random":
+        random.shuffle(ordered)
+    return ordered
+
+
 def re_evaluate(engine, board, re_evaluate_moves, no_root_moves, depth=0, prev_board=None, limit=None, use_ponder=False):
     """ Given a list of move_ucis, apply them to the current board and re_evaluate
         them using top human_moves only. This gives a non_accurate evaluation
@@ -184,8 +215,7 @@ def re_evaluate(engine, board, re_evaluate_moves, no_root_moves, depth=0, prev_b
 
         Returns a dictionary with key move_uci and value the evaluation (from our pov)
     """
-    # to avoid bias, scramble the moves
-    random.shuffle(re_evaluate_moves)
+    re_evaluate_moves = reeval_sequence(engine, re_evaluate_moves)
     return_dic = {}
     if limit is None:
         for move_uci in re_evaluate_moves:
@@ -340,7 +370,14 @@ def ponder(engine, board, time_allowed, search_width, time_per_position=0.1, pre
         game_phase = phase_of_game(dummy_board)
         top_human_move_dic = engine.get_human_probabilities(dummy_board, game_phase, log=False)
         if len(top_human_move_dic) <= 2:
+            # No usable plausibility ranking here, and this branch does not
+            # narrow to search_width either, so the tail of the list is the
+            # part the budget will disqualify. Legal-move generation order
+            # would hand that verdict to the board's square ordering, so
+            # draw for it instead - reeval_sequence can only preserve an
+            # ordering, it cannot invent one.
             top_human_moves = [move.uci() for move in dummy_board.legal_moves]
+            random.shuffle(top_human_moves)
         else:
             # top_human_move_dic = engine._alter_move_probabilties(top_human_move_dic, dummy_board, prev_board = board, prev_prev_board=prev_board, log= False)
             top_human_move_dic = engine._alter_move_prob_nn(top_human_move_dic, dummy_board, prev_board = board, prev_prev_board=prev_board, log= False)

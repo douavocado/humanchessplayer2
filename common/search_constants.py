@@ -331,5 +331,17 @@ STOCKFISH_HASH_MB = 128
 # The independent argument, which does not depend on any metric: uniformly
 # random sampling of which candidates to calculate was never a defensible
 # model of human thought. A player calculates the moves that look plausible.
+#
+# ⚠️ The t1 figures above are STALE for "human" and "eval", and understate
+# them. They were measured while ponderer.re_evaluate opened with an
+# unconditional random.shuffle, so the ordering computed here survived only
+# as far as the shortlist: which candidates were searched *first*, and hence
+# which ones the budget failed to reach, stayed a uniform draw. Fixed
+# 2026-08-22 (ponderer.reeval_sequence), after a live game where Nxa1 won
+# the position's human prior at p=0.888, was shortlisted first, shuffled
+# last, was never reached, and lost the comparison on the depth-0 penalty.
+# Re-run the four arms before quoting an effect size for this knob. Note the
+# direction of the correction is toward the bot playing better, which is the
+# axis "eval" was rejected on, so it wants measuring rather than assuming.
 REEVAL_ORDER = "human"
 REEVAL_ORDERS = ("random", "human", "eval")

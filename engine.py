@@ -409,6 +409,10 @@ class Engine:
         # of them (see REEVAL_ORDER). Missing out means depth_considered 0 and
         # a ~60cp penalty, which in a quiet position dwarfs the real eval
         # spread -- so this choice is effectively a disqualification draw.
+        # The list order matters as much as its membership: the budget is
+        # spent front to back and whatever it does not reach is disqualified.
+        # ponderer.reeval_sequence preserves this ordering (and re-draws it
+        # only under "random"), so the sort below is what actually decides.
         _k = min(re_evaluations, len(top_human_moves))
         if self.reeval_order == "eval":
             re_evaluate_moves = top_human_moves[:_k]
@@ -420,7 +424,10 @@ class Engine:
             re_evaluate_moves = random.sample(top_human_moves, _k)
         san_re_evaluate_moves = [self.current_board.san(chess.Move.from_uci(x)) for x in re_evaluate_moves]
         time_allowed = target_time - (reval_start - start)
-        self.log += "Re-evaluating moves: {} with depth {} with time allowed {} \n".format(san_re_evaluate_moves, depth, time_allowed)
+        # Search order, not just the shortlist -- except under "random",
+        # which re-draws it inside re_evaluate; there the executed order is
+        # the key order of the results line below.
+        self.log += "Re-evaluating moves: {} ({} order) with depth {} with time allowed {} \n".format(san_re_evaluate_moves, self.reeval_order, depth, time_allowed)
         # Targeted console output
         print(f"[ENGINE] Re-evaluating moves: {san_re_evaluate_moves} with depth {depth}")
         re_evaluations_dic = self._re_evaluate(self.current_board, re_evaluate_moves, no_root_moves, depth=depth, prev_board=prev_board, limit=[depth*no_root_moves, time_allowed])
