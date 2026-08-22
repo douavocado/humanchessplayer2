@@ -1134,21 +1134,68 @@ def is_white_turn_from_notation(white_notation_img):
     has_red = (colours[:,0] > 1.1*colours[:,2]).any()
     return not has_red
 
-def check_turn_from_last_moved(fen, board_img, bottom):
-    detected_moved = detect_last_move_from_img(board_img)
-    if len(detected_moved) == 0:
-        return chess.Board(fen).turn == chess.WHITE # didn't detect any new moves. Can only assume it's white turn from opening position
-    
-    board = chess.Board(fen)
+def _mover_colour_count(board, squares, bottom):
+    """
+    Signed tally of how many highlighted squares hold a piece of the side the
+    board says is to move. Negative means the pieces standing on the
+    highlights belong to the *other* side, i.e. the board's turn is right.
+    """
     test_turn = board.turn
     colour_count = 0
-    for square in detected_moved:
+    for square in squares:
         if bottom == "w":
             colour = board.color_at(chess.square_mirror(square))
         else:
             colour = board.color_at(chess.square_mirror(63-square))
         if colour is not None:
             colour_count += 2*((colour == test_turn)-0.5)
+    return colour_count
+
+
+def _turn_from_premove_marks(board, board_img, detected_moved, bottom):
+    """
+    Last-resort turn reading for when the last-move highlights say nothing.
+
+    A queued premove is painted over the last-move highlight, and on Lichess
+    the overlay is opaque enough to hide it completely. Since we almost always
+    premove with the piece we just moved, the square that goes missing is the
+    last move's *destination* - the only one of the pair that carries a piece,
+    and so the only one that says anything about whose turn it is. What is
+    left is a lone empty origin square, which tallies to nothing; that used to
+    be given up on as unreadable, and on Lichess it was the single largest
+    source of turn-detection failures.
+
+    Only reached once the plain highlights have come up blank, so this can
+    turn "no signal" into a signal but can never overturn one. The premove's
+    origin always holds a piece of ours, and a premove is only drawn while we
+    are waiting on the opponent, so the recovered square identifies the mover
+    correctly.
+
+    Returns the same tri-state as check_turn_from_last_moved: True if the
+    board's turn is already right, False if it must be flipped, None if the
+    premove marks say nothing either.
+    """
+    premove_squares = [s for s in detect_premove_squares(board_img)
+                       if s not in detected_moved]
+    if not premove_squares:
+        return None
+    colour_count = _mover_colour_count(
+        board, list(detected_moved) + premove_squares, bottom)
+    if colour_count < 0:
+        return True
+    elif colour_count > 0:
+        return False
+    return None
+
+
+def check_turn_from_last_moved(fen, board_img, bottom):
+    detected_moved = detect_last_move_from_img(board_img)
+    if len(detected_moved) == 0:
+        return chess.Board(fen).turn == chess.WHITE # didn't detect any new moves. Can only assume it's white turn from opening position
+
+    board = chess.Board(fen)
+    test_turn = board.turn
+    colour_count = _mover_colour_count(board, detected_moved, bottom)
     if colour_count == 0:
         if len(detected_moved) > 0:
             if len(detected_moved) % 2 == 0:
@@ -1163,11 +1210,12 @@ def check_turn_from_last_moved(fen, board_img, bottom):
                     return test_turn == chess.WHITE
                 else:
                     # there was an error, expected to be castle move but wasn't
-                    return None
+                    return _turn_from_premove_marks(board, board_img, detected_moved, bottom)
             else:
                 # then it must have been a move followed by an immediate premove with the same piece.
-                # in which case it may be impossible to work out whos turn it is.
-                return None
+                # in which case the piece-bearing square of the pair is hidden
+                # under the premove marking - recover it from there.
+                return _turn_from_premove_marks(board, board_img, detected_moved, bottom)
         # no detected moves, there was error, return None
         return None
     elif colour_count < 0:

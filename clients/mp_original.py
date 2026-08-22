@@ -1740,6 +1740,7 @@ def run_game(arena=False):
             veto_p = ENGINE.scramble_veto_p
             # we consider last 10 pondered moves here instead
             candidate_moves = [chess.Move.from_uci(x["move"]) for x in list(PONDER_DIC.values())[-10:] if chess.Move.from_uci(x["move"]) in dummy_board.legal_moves]
+            fired_scramble_move = False
             for move_obj in candidate_moves:
                 if check_safe_premove(last_board, move_obj.uci()) or \
                         (np.random.random() < prob and not (np.random.random() < veto_p and scramble_fire_veto(dummy_board, move_obj.uci()))):
@@ -1755,11 +1756,21 @@ def run_game(arena=False):
                     else:
                         # We try one more time, in case it was mouse slip
                         LOG += "Did not make pondered move successfully, trying once more. \n"
-                        successful = make_move(last_pondered_move_obj.uci())
+                        successful = make_move(move_obj.uci())
+                    fired_scramble_move = True
                     write_log()
                     break
-                    
-                
+            if fired_scramble_move:
+                # The move for this position has been played. Every other
+                # ponder fast path continues the outer loop here; falling
+                # through instead would ask the engine for a move off the
+                # now-superseded DYNAMIC_INFO and click that too, playing a
+                # second move chosen for a position that no longer exists --
+                # a blind premove that skips scramble_fire_veto and
+                # check_safe_premove entirely, fired at the worst possible
+                # moment (sub-10s clock, after an opponent deviation).
+                continue
+
         write_log()
         
         # form engine_input_dic

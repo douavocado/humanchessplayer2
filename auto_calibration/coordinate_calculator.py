@@ -37,14 +37,20 @@ class CoordinateCalculator:
     REF_CLOCK_WIDTH = 147
     REF_CLOCK_HEIGHT = 44
     REF_RESULT_WIDTH = 90
-    REF_RESULT_HEIGHT = 35
+    # Just the score line ("1-0" / "0-1" / "1/2-1/2"), not the termination
+    # sentence under it. That sentence says *how* the game ended ("White
+    # resigned", "White time out", "Checkmate"), so a crop tall enough to
+    # include it produces a different template for every ending and matches
+    # nothing: measured on 23 real Lichess endings, a 68px crop fragmented
+    # into 14 clusters, while this one separates cleanly into 1-0 / 0-1 /
+    # draw (within-cluster min 0.88, cross-cluster max 0.53).
+    REF_RESULT_HEIGHT = 12
     REF_RESIGN_BUTTON_SIZE = 40  # Resign button is approximately square
     
     # Offsets relative to clock X position at reference size (848px board)
     REF_NOTATION_X_OFFSET = 38  # From clock X
     REF_RATING_X_OFFSET = 180   # From clock X (rating is just right of player name)
     REF_CLOCK_GAP = 29          # Gap between board and clock
-    REF_RESULT_X_OFFSET = 155   # From clock X (result is in the right panel)
     
     # chess.com puts the player line above and below the *board*, not beside
     # the clock, and writes the rating inline after the username - "squishypup
@@ -157,7 +163,8 @@ class CoordinateCalculator:
             coordinates['rating'] = self._calculate_ratings(clock_x, self.clocks)
         
         # Calculate result region (for game end detection)
-        coordinates['result_region'] = self._calculate_result_region(clock_x, self.clocks)
+        coordinates['result_region'] = self._calculate_result_region(
+            coordinates['notation'], self.clocks)
         
         # Calculate resign button position (below notation panel)
         coordinates['resign_button'] = self._calculate_resign_button(coordinates['notation'])
@@ -305,25 +312,32 @@ class CoordinateCalculator:
             }
         }
     
-    def _calculate_result_region(self, clock_x: int, clock_detection: Optional[Dict]) -> Dict:
+    def _calculate_result_region(self, notation: Dict, clock_detection: Optional[Dict]) -> Dict:
         """
         Calculate result region position (scaled).
-        
+
         The result region shows "0-1", "1-0", or "½-½" when game ends.
         It appears between the two clocks in the right panel, roughly
         in the middle where the move notation usually is.
-        
+
+        The score line is *centred* in that panel, so the region is placed
+        from the notation panel's centre rather than offset from the clock's
+        left edge. The old clock-relative offset put the crop off the right
+        edge of the panel entirely, which is why result_template detection
+        never fired on Lichess and every game end fell through to the
+        clock-position fallback.
+
         Args:
-            clock_x: X position of clocks.
+            notation: Notation panel coordinates (the result shares its panel).
             clock_detection: Clock detection result.
-        
+
         Returns:
             Result region coordinates.
         """
-        result_x_offset = int(self.REF_RESULT_X_OFFSET * self.scale)
         result_width = int(self.REF_RESULT_WIDTH * self.scale)
         result_height = int(self.REF_RESULT_HEIGHT * self.scale)
-        
+        result_x = notation['x'] + notation['width'] // 2 - result_width // 2
+
         # Get clock Y positions to find the middle
         if clock_detection:
             top_clock = clock_detection.get('top_clock', {})
@@ -355,7 +369,7 @@ class CoordinateCalculator:
         result_y = top_clock_bottom + int(vertical_range * 0.2)
         
         return {
-            'x': clock_x + result_x_offset,
+            'x': result_x,
             'y': result_y,
             'width': result_width,
             'height': result_height
