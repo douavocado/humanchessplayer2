@@ -26,7 +26,7 @@ from common.move_timing import (MOVE_DELAY, DRAG_MOVE_DELAY, CLICK_MOVE_DELAY,
                                 click_settle_sleep, drag_probability,
                                 ponder_response_wait, scramble_response_wait,
                                 resign_pause)
-from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError, premove_render_placement
+from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError, premove_render_placement, highlights_contradict_move
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock, premove_is_pending,
@@ -863,10 +863,27 @@ def update_dynamic_info_from_fullimage():
         now_fen = DYNAMIC_INFO["fens"][-1]
         res = patch_fens(prev_fen, now_fen)
         if res is not None:
+            last_moves, changed_fens = res
+            # A link is the only route into the fen history that is adopted
+            # on a single frame, so cross-check it against the last-move
+            # highlights, which read the same frame independently. They
+            # disagree when the scrape caught a piece mid-slide over a
+            # square that happened to spell a legal move (see
+            # highlights_contradict_move). A settled board reproduces on the
+            # re-capture and is adopted anyway, so the cost of a false doubt
+            # is one confirmation, not a discarded position.
+            if (last_moves and not _under_time_pressure()
+                    and highlights_contradict_move(
+                        detect_last_move_from_img(board_img), last_moves[-1], bottom)
+                    and not _confirm_board_stable(chess.Board(now_fen).board_fen(), bottom)):
+                del DYNAMIC_INFO["fens"][-1]
+                LOG += ("Linked move {} disagrees with the last-move highlights, and the new board "
+                        "did not survive a confirmation re-capture. Discarding this scan as a "
+                        "transient frame. \n").format(last_moves[-1])
+                return
             LOG += "Able to find linking move(s) between {} and {}: {} \n".format(prev_fen, now_fen, res)
             # The premove has resolved one way or the other by now.
             PREMOVE_RENDER_PLACEMENT = None
-            last_moves, changed_fens = res
             del DYNAMIC_INFO["fens"][-2:]
             DYNAMIC_INFO["fens"].extend(changed_fens)
             DYNAMIC_INFO["fens"] = DYNAMIC_INFO["fens"][-FEN_NO_CAP:]
