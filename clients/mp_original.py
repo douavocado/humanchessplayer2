@@ -194,7 +194,11 @@ GAME_INFO = {"playing_side": None,
                   "self_initial_time": None,
                   "opp_initial_time": None,
                   "opp_rating": None,
-                  "self_rating": None} # these statistics don't change within a game
+                  "self_rating": None,
+                  # Wall-clock time the game was set up, used to sanity-check
+                  # clock readings against how long the game has actually been
+                  # running (see _detect_berserk).
+                  "game_start_wall": None} # these statistics don't change within a game
 
 CASTLING_RIGHTS_FEN = "KQkq"
 
@@ -253,6 +257,33 @@ PREMOVE_FRAME_LOGGED = False
 # for unlinkable scans and act on the first reading - a human under time
 # pressure is also prone to misreading the board.
 RESYNC_CONFIRM_MIN_TIME = 15
+
+# --- berserk auto-detect ---------------------------------------------------
+# Berserk halves a player's clock at the start of an arena game, and the only
+# evidence the client ever gets is the clock reading itself. A single clock
+# misread looks exactly the same, so the halving needs corroboration rather
+# than one sub-threshold reading.
+#
+# The trigger is proportional (initial/2), so the window a misread has to
+# land in grows with the clock: at 1+0 a misread must reach 30s, but at 3+0
+# it only has to reach 90s, which a "3:00" scanned as "1:00" clears easily.
+# That is exactly what happened in logs/sessions/2026-08-16_19-51-54, where
+# one bad frame on move 1 of a 3+0 game permanently halved self_initial_time
+# and mis-paced every remaining move of two games out of three.
+#
+# Number of consecutive readings of the same clock that must all sit below
+# half the initial time. A genuine berserk holds from the first move onward,
+# so it still registers within the move-5 window; a transient misread does
+# not survive the next scan.
+BERSERK_CONFIRM_SCANS = 2
+# A berserked clock starts at initial/2 and burns real time from there, so it
+# can never sit further below initial/2 than the game has actually been
+# running. The slack absorbs server-side lag, our own scan latency and the
+# clock's second-level rounding.
+BERSERK_WALL_SLACK = 10.0
+# Berserk only exists inside the move-5 window; past that a low clock is just
+# a low clock.
+BERSERK_MAX_FULLMOVE = 5
 
 
 
@@ -482,7 +513,8 @@ def set_game(starting_time):
     
     GAME_INFO["self_initial_time"] = starting_time
     GAME_INFO["opp_initial_time"] = starting_time
-    
+    GAME_INFO["game_start_wall"] = time.time()
+
     # find out our side
     # The board can still be rendering right after the game is found, so
     # retry for a few seconds before giving up
@@ -658,6 +690,49 @@ def _under_time_pressure():
         rather than spend time double-checking the board. """
     times = DYNAMIC_INFO["self_clock_times"]
     return bool(times) and times[-1] < RESYNC_CONFIRM_MIN_TIME
+
+
+def _detect_berserk(clock_times, initial_time, who):
+    """ Whether `clock_times` show a berserked (halved) clock rather than a
+        clock misread.
+
+        Halving the assumed initial time is permanent for the game and feeds
+        straight into move-time pacing, so it takes three things to agree
+        (see the BERSERK_* constants):
+
+          - the site has berserk at all. chess.com does not, so no reading
+            there can mean anything but a misread;
+          - BERSERK_CONFIRM_SCANS consecutive readings of that clock sit
+            below half the initial time, so one bad frame cannot do it;
+          - the reading is reachable from a halved clock in the wall-clock
+            time the game has actually been running.
+
+        Returns True if the clock should be treated as berserked.
+    """
+    global LOG
+    if not SITE.supports_berserk:
+        return False
+    if not initial_time:
+        return False
+
+    threshold = initial_time / 2
+    recent = clock_times[-BERSERK_CONFIRM_SCANS:]
+    if len(recent) < BERSERK_CONFIRM_SCANS:
+        return False
+    if any(t is None or t >= threshold for t in recent):
+        return False
+
+    started = GAME_INFO.get("game_start_wall")
+    if started is not None:
+        elapsed = time.time() - started
+        if recent[-1] < threshold - elapsed - BERSERK_WALL_SLACK:
+            LOG += ("{} clock read {}s, under half of {}s, but only {:.1f}s of the game "
+                    "have elapsed - too little for a berserked clock to have burnt that "
+                    "much. Treating as a clock misread, not a berserk. \n").format(
+                        who, recent[-1], initial_time, elapsed)
+            return False
+
+    return True
 
 
 def _confirm_board_stable(board_fen, bottom, delay=0.15):
@@ -956,11 +1031,11 @@ def update_dynamic_info_from_fullimage():
         DYNAMIC_INFO["opp_clock_times"].append(opp_time)
         DYNAMIC_INFO["opp_clock_times"] = DYNAMIC_INFO["opp_clock_times"][-FEN_NO_CAP:]
         
-        # check if opponent has beserked
-        # we check this if opponent current time is under half the original initial time AND
-        # current move of board is < 5
+        # check if opponent has beserked - see _detect_berserk for why one
+        # sub-threshold reading is not enough to act on
         curr_move_no = chess.Board(DYNAMIC_INFO["fens"][-1]).fullmove_number
-        if curr_move_no < 5 and opp_time < GAME_INFO["opp_initial_time"]/2:
+        if curr_move_no < BERSERK_MAX_FULLMOVE and _detect_berserk(
+                DYNAMIC_INFO["opp_clock_times"], GAME_INFO["opp_initial_time"], "Opponent"):
             # correct opp initial time
             LOG += "Opponent detected to have BESERKED, reducting opp initial time from {} to {} \n".format(GAME_INFO["opp_initial_time"], GAME_INFO["opp_initial_time"]/2)
             print("Opponent detected to have BESERKED, reducting opp initial time from {} to {} \n".format(GAME_INFO["opp_initial_time"], GAME_INFO["opp_initial_time"]/2))
@@ -1005,11 +1080,11 @@ def update_dynamic_info_from_fullimage():
                 MOVE_TIMING["move_decision_time"] = None
                 MOVE_TIMING["clock_before_move"] = None
         
-        # check if we have beserked
-        # we check this if our current time is under half the original initial time AND
-        # current move of board is < 5
+        # check if we have beserked - see _detect_berserk for why one
+        # sub-threshold reading is not enough to act on
         curr_move_no = chess.Board(DYNAMIC_INFO["fens"][-1]).fullmove_number
-        if curr_move_no < 5 and our_time < GAME_INFO["self_initial_time"]/2:
+        if curr_move_no < BERSERK_MAX_FULLMOVE and _detect_berserk(
+                DYNAMIC_INFO["self_clock_times"], GAME_INFO["self_initial_time"], "Own"):
             # correct opp initial time
             LOG += "Detected to have BESERKED, reducting self initial time from {} to {} \n".format(GAME_INFO["self_initial_time"], GAME_INFO["self_initial_time"]/2)
             print("Detected to have BESERKED, reducting self initial time from {} to {} \n".format(GAME_INFO["self_initial_time"], GAME_INFO["self_initial_time"]/2))
@@ -1844,6 +1919,16 @@ def run_game(arena=False):
                 time.sleep(resign_pause())
                 successful = resign()
                 if successful == True:
+                    # The caller seeks a new game right after this returns.
+                    # Right after the resign click, the game-over overlay
+                    # hasn't rendered yet but the in-game clock is still
+                    # readable, so new_game()'s live_game_on_screen guard
+                    # sees what looks like a running game and refuses to
+                    # seek - wasting a full await_new_game timeout. Wait for
+                    # the overlay to actually appear first.
+                    wait_start = time.time()
+                    while time.time() - wait_start < 5 and not SITE.game_over_screen_visible():
+                        time.sleep(0.2)
                     return
                 else:
                     # was not able to resign, keep playing I guess
