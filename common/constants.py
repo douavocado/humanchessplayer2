@@ -52,6 +52,41 @@ TAKEBACK_SF = 2.6469
 # made the 8-move root set and g3 was played instead. Applied with the
 # visibility floor, like takebacks/strengthening moves.
 PROMOTION_STOP_SF = 3.5
+# Boost for moves that blockade or newly attack a square on the promotion
+# path of an opponent passed pawn that has already reached the 6th rank (3rd
+# for a black pawn) -- a serious long-range threat well before it's one push
+# from queening (PROMOTION_STOP_SF above only fires that late). A live game
+# (2026-08-02) played Rxb2 -- grabbing a free pawn -- against a monster a6
+# passer while Ra8 (blockading a8) and Nb6 (covering a8) sat at NN policy
+# ranks #18 and #4 and never got root-evaluated at all. Smaller than
+# PROMOTION_STOP_SF: the pawn still needs two pushes, not one, so it's a
+# real concern rather than the loudest thing on the board.
+ADVANCED_PASSED_PAWN_DEFENCE_SF = 2.2
+
+# Least material a double attack must win before board_information counts it
+# as a fork at all. Below roughly an exchange it isn't the kind of threat a
+# human reorganises their move around, and counting it would fire the boost
+# below on near-every position.
+FORK_MIN_GAIN = 1.5
+
+# Boost for moves that answer an opponent fork threat by moving the forked
+# piece out of the double attack or covering the square the fork lands on
+# (common.board_information.defends_against_fork). Applied to every defence,
+# including ones the net already ranks highly: an earlier version skipped
+# those, which made it impossible to promote a genuine defence past a
+# higher-ranked non-defence -- see the block in
+# models/alter_move_prob_nn.py. Diagnosed from a live game (2026-08-02) that
+# met Nb5 with Nc6 and lost the exchange to Nc7+, while Na6 -- covering c7 --
+# sat at NN policy rank #10 on 0.35%. At this value that position plays Na6
+# in 9 of 10 seeds (mean eval -277 -> -104); 3.5 measured identically, so
+# this is the low end of the plateau rather than the edge of an effect.
+#
+# Human-likeness caveat: forks are exactly what human players miss, so this
+# is a strength-increasing knob. What keeps the bot fallible is the narrow
+# defence definition (blocking the forker's route, defending the second
+# target and counter-threats are all missed by design), not this constant.
+# Not calibrated against cheat_detection yet.
+FORK_DEFENCE_SF = 2.5
 NEW_THREATENED_SF_DIC = {"confident":1.6287,
                         "cocky": 1.3,
                         "cautious": 1.8,
@@ -316,6 +351,49 @@ FLAG_RACE_BLIND_P_MAX = 0.10
 # 1.41x). Mostly-on with mild skill leak is the calibrated middle.
 SCRAMBLE_VETO_P_BASE = 0.75
 SCRAMBLE_VETO_P_RANGE = 0.25
+# Conversion progress in the scramble move-appeal formula
+# (stockfish_move_logic.get_stockfish_move, via
+# board_information.move_progress_score). In a decided position the eval
+# term of that formula carries almost no information: every candidate is
+# "winning", so the spread across all legal moves collapses (measured on a
+# rook-up 7-piece ending: 0.31 appeal points uncapped, exactly 0.00 once
+# the flag-race cap bites, and a deeper scan doesn't help -- even depth 16
+# spreads those moves by under 100cp because no single move converts).
+# Hand distance spreads ~3.0 over the same moves, so the ranking became
+# "shortest mouse travel", and since re-moving the piece you just moved
+# costs zero linkage distance, the cheapest legal option is to put it
+# straight back -- a shuffle attractor. Real humans scrambling in a won
+# ending are fast and error-prone but *directional*: they push the passer,
+# eat the pawn. These terms restore that direction without touching the
+# flag-race catastrophe tail (they apply on blind moves too -- a human
+# following a memorised plan without checking it is safe is exactly how a
+# won ending gets thrown).
+#
+# MEASURED_PLACEHOLDER
+#
+# Only applied when clearly winning (the best candidate is at least
+# PROGRESS_MIN_EVAL): repeating and shuffling are legitimate human play
+# when holding a worse position or angling for a draw.
+PROGRESS_MIN_EVAL = 150
+# How far below the best *perceived* eval (i.e. after the flag-race cap, or
+# nothing at all on a blind move) a move may sit and still be offered the
+# plan bonus. Keeps the plan a tie-breaker among moves that all read as
+# winning rather than something that overrules a visible drop.
+PROGRESS_EVAL_TOLERANCE = 100
+# Sized against that ~3.0 hand-distance spread: penalties have to be able
+# to outweigh it outright, bonuses only have to break ties among moves of
+# similar travel cost.
+PROGRESS_REPEAT_PENALTY = 4.0
+PROGRESS_UNDO_PENALTY = 2.5
+# Captures scale with what is taken (pawn 0.4, knight 1.2, rook 2.0).
+PROGRESS_CAPTURE_BONUS = 2.0
+PROGRESS_PAWN_PUSH_BONUS = 1.5
+PROGRESS_PASSED_PAWN_BONUS = 1.5
+PROGRESS_PROMOTION_BONUS = 5.0
+# Per rank beyond the 4th that the pushed pawn ends on.
+PROGRESS_PAWN_ADVANCE_COEFF = 0.4
+# No king-march term: measured and rejected, see move_progress_score's
+# docstring in common/board_information.py.
 DIFFICULTY = 3 # engine difficulty
 MOUSE_QUICKNESS = 4 # number between 0 and 10. Bigger the number the slower we are with mouse movements
 RESOLUTION_SCALE = 2.0  # Set to 2.0 for 4K, 1.0 for 1080p - adjusts mouse curve point density

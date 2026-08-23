@@ -18,9 +18,11 @@ import numpy as np
 import chess
 
 from common.utils import extend_mate_score
+from common.board_information import move_progress_score, seen_position_keys
 from common.constants import (
     FLAG_RACE_TIME, FLAG_RACE_EVAL_CAP,
     FLAG_RACE_CAP_MIN, FLAG_RACE_CAP_MAX, FLAG_RACE_BLIND_P_MAX,
+    PROGRESS_MIN_EVAL, PROGRESS_EVAL_TOLERANCE,
 )
 
 
@@ -94,6 +96,28 @@ def get_stockfish_move(engine, board=None, analysis=None, last_move_uci=None, lo
 
     if log:
         engine.log += "Evaluated the moves square distance to move: {} \n".format(move_distance_dic)
+
+    # Conversion progress. In a decided position every candidate's eval reads
+    # "winning", so the eval term below goes flat and the ranking collapses
+    # onto hand distance -- whose cheapest option is putting the piece we
+    # just moved straight back. See PROGRESS_* in constants for the measured
+    # numbers. Only when we are clearly winning: shuffling and repeating are
+    # perfectly human when we are worse.
+    progress_scores = {}
+    if max(move_eval_dic.values()) >= PROGRESS_MIN_EVAL:
+        # board.turn is our side at both call sites (live position, and the
+        # premove path's board-after-our-move-and-their-reply), so the move
+        # two plies back on the stack is our own last move -- unlike the
+        # last_move_uci argument, which the premove path fills with the
+        # *opponent's* predicted move for hand-distance purposes.
+        own_last_move = board.move_stack[-2] if len(board.move_stack) >= 2 else None
+        seen_keys = seen_position_keys(board)
+        progress_scores = {
+            move_uci: move_progress_score(board, chess.Move.from_uci(move_uci),
+                                          seen_keys=seen_keys, own_last_move=own_last_move)
+            for move_uci in move_eval_dic.keys()
+        }
+
     own_time = max(engine.input_info["self_clock_times"][-1],1)
     # Flag-race autopilot: in a deep scramble a human reads "+mate" and
     # "+800" both as "winning" and picks on instinct (distance + noise),
@@ -124,7 +148,30 @@ def get_stockfish_move(engine, board=None, analysis=None, last_move_uci=None, lo
                     eval_cap, "unsampled" if skill is None else "{:.2f}".format(skill))
     else:
         appeal_eval_dic = move_eval_dic
-    move_appealing_dic = {move_uci : 10 + appeal_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] for move_uci in move_eval_dic.keys()}
+
+    # Net the progress terms against the evals we can actually perceive.
+    # The shuffle penalty is unconditional; the plan bonus is only offered
+    # to moves that still look best under this scramble's own perception
+    # (the capped evals above, or none at all on a blind move), so "push the
+    # pawn" can break a tie between moves that all read as winning but can't
+    # override a drop the player can see. Without that gate the plan bonus
+    # cost real games -- an A/B over 30 endgame scrambles per arm doubled
+    # the median eval loss in pawn endings, because the bot pushed pawns it
+    # could see were losing. On a blind move every eval is 0, so every move
+    # is "still best" and the plan runs unchecked -- which is exactly how a
+    # human throws a won ending on autopilot.
+    move_progress_dic = {move_uci: 0.0 for move_uci in move_eval_dic.keys()}
+    if progress_scores:
+        best_appeal_eval = max(appeal_eval_dic.values())
+        for move_uci, (bonus, penalty) in progress_scores.items():
+            if appeal_eval_dic[move_uci] < best_appeal_eval - PROGRESS_EVAL_TOLERANCE:
+                bonus = 0.0
+            move_progress_dic[move_uci] = bonus - penalty
+        if log:
+            engine.log += "Winning position, scoring conversion progress per move: {} \n".format(
+                {m: round(v, 2) for m, v in move_progress_dic.items() if v != 0.0})
+
+    move_appealing_dic = {move_uci : 10 + appeal_eval_dic[move_uci]*(own_time+5)/2000 - move_distance_dic[move_uci] + move_progress_dic[move_uci] for move_uci in move_eval_dic.keys()}
     if log:
         engine.log += "Combining both the dictionary preferences, we have their move preferences: {} \n".format(move_appealing_dic)
     # Add noise to introduce randomness. The lower our time, the more the noise
