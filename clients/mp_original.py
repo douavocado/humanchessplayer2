@@ -32,7 +32,7 @@ from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock, premove_is_pending,
                                            capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
-                                           capture_rating)
+                                           capture_rating_agreed)
 
 # Site behaviour (game lifecycle) is chosen by the active calibration
 # profile's "site" field, so which site we are playing on is separate from
@@ -469,15 +469,13 @@ def set_game(starting_time):
     # getting game information, including the side the player is playing and the initial time
     board_img = capture_board()
 
-    # get ratings of both players
-    opp_rating = capture_rating(side="opp", position="start")
-    if opp_rating is None:
-        # try again with playing position
-        opp_rating = capture_rating(side="opp", position="playing")
-    own_rating = capture_rating(side="own", position="start")
-    if own_rating is None:
-        # try again with start position
-        own_rating = capture_rating(side="own", position="playing")
+    # Ratings are read once here and cached for the whole game, so a single
+    # misread frame biases every move time until the game ends (2026-08-23:
+    # "(1803)" read as "(1203)" and the game was paced against a rating gap
+    # that did not exist). capture_rating_agreed re-reads until the frames
+    # agree, and returns None rather than a value it cannot corroborate.
+    opp_rating = capture_rating_agreed(side="opp")
+    own_rating = capture_rating_agreed(side="own")
     GAME_INFO["opp_rating"] = opp_rating
     GAME_INFO["self_rating"] = own_rating
     LOG += "Detected ratings: Opponent: {}, Self: {} \n".format(opp_rating, own_rating)
