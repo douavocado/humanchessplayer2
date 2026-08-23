@@ -80,6 +80,17 @@ ENDGAME_BREADTH_BONUS = 5
 # moves: slightly narrower than base, since any sensible move is fine.
 STANDARD_BREADTH_DELTA = -1
 
+# Floor for the same "plenty of good moves" branch. At DIFFICULTY=3 this
+# branch (base_no + STANDARD_BREADTH_DELTA) already lands at 2, but a lower
+# DIFFICULTY or a future negative per-phase/strength adjustment could push it
+# to 1 -- collapsing root_moves to a single NN candidate with nothing to
+# compare it against before it's played. Unlike the tactical/forced branches
+# above (which floor at 1 deliberately -- tunnel vision on a near-forced
+# move is realistic), a quiet/flat position with "plenty of good moves" is
+# exactly the case where a human would glance at a second candidate, so this
+# branch keeps a wider floor.
+STANDARD_BREADTH_FLOOR = 2
+
 # ---------------------------------------------------------------------------
 # 3. Search breadth: mood adjustments
 # ---------------------------------------------------------------------------
@@ -280,6 +291,33 @@ OPENING_BOOK_TOP_N = 5
 # benefit rather than help further, so this isn't scaled up aggressively.
 STOCKFISH_THREADS = 2
 STOCKFISH_HASH_MB = 128
+
+
+# ---------------------------------------------------------------------------
+# 7b. Endgame quick-scan depth -- MEASURED AND REJECTED (2026-08-05)
+# ---------------------------------------------------------------------------
+# Don't re-add this: giving low-piece positions a deeper quick scan
+# (depth 14 / 120ms instead of depth 10 under a 20ms cap, once total
+# material drops to ~12 pieces) is *more accurate and plays worse*. Isolated
+# as its own arm over 75 endgame scrambles it nearly doubled thrown won
+# games (18 -> 33) while moving no human-likeness metric at all: repeat rate
+# 0.035 -> 0.032, undo rate 0.109 -> 0.099.
+#
+# The reason is the flag-race autopilot downstream (FLAG_RACE_* in
+# common/constants.py). Under 10s the bot is deliberately not allowed to
+# tell "winning by a lot" from "forced mate" -- both are capped to the same
+# perceived value, which is what produces the human catastrophe tail. A
+# deeper scan finds mate for most candidates in a won ending, and
+# extend_mate_score then amplifies mate distance by 100cp per move, so the
+# whole candidate set saturates that cap and goes flat -- destroying the
+# genuine centipawn spread the shallow scan happened to preserve. The
+# accuracy is thrown away by the blindfold and takes real information with
+# it. Any future attempt needs the cap logic reworked in the same change.
+#
+# (Aimless shuffling in a decided ending is a separate problem that depth
+# never addressed anyway -- a rook-up position spreads under 100cp across
+# every legal move even at depth 16. That is what the PROGRESS_* terms in
+# common/constants.py are for.)
 
 
 # ---------------------------------------------------------------------------

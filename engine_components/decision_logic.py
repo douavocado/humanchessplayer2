@@ -22,7 +22,8 @@ from common.search_constants import (
     KING_DANGER_THRESHOLD, KING_DANGER_BREADTH_BONUS, TACTICAL_MIDGAME_BREADTH_DELTA,
     ENDGAME_LOW_MOB_BREADTH_FLOOR, ENDGAME_LOW_MOB_BREADTH_BONUS,
     ENDGAME_BREADTH_FLOOR, ENDGAME_BREADTH_BONUS, STANDARD_BREADTH_DELTA,
-    MOOD_BREADTH_DELTAS, MODERATE_SHARPNESS_LO, MODERATE_SHARPNESS_HI,
+    STANDARD_BREADTH_FLOOR, MOOD_BREADTH_DELTAS, MODERATE_SHARPNESS_LO,
+    MODERATE_SHARPNESS_HI,
 )
 from common.constants import (
     MISTAKE_HESITATION_WC_LOSS, MISTAKE_HESITATION_PROB,
@@ -45,6 +46,18 @@ def decide_breadth(engine, total_time=None):
             if total_time > time_threshold:
                 base_no += bonus
                 break
+
+    # Floor applied at the very end, after the sharpness/phase/mood
+    # adjustments below. Defaults to 1 (tactical/forced branches are allowed
+    # to narrow all the way down -- tunnel vision on a near-forced move is
+    # realistic, and a careless mood stacking on top of that is too). Only
+    # the "plenty of good moves" branch raises it: a flat, non-critical
+    # position is exactly the case where a human still glances at a second
+    # candidate, and that shouldn't be undoable by mood alone -- a `cocky`
+    # read (which can fire on a big time cushion alone, independent of
+    # whether the position is actually good) was observed collapsing this
+    # branch's floor-2 back down to a single, uncompared root move.
+    floor = 1
 
     game_phase = phase_of_game(engine.current_board)
     king_dang = king_danger(engine.current_board, engine.input_info["side"], game_phase)
@@ -71,7 +84,8 @@ def decide_breadth(engine, total_time=None):
             no_moves = base_no + KING_DANGER_BREADTH_BONUS
         else:
             # not in the endgame, lots of good moves
-            no_moves = max(base_no + STANDARD_BREADTH_DELTA, 1)
+            no_moves = max(base_no + STANDARD_BREADTH_DELTA, STANDARD_BREADTH_FLOOR)
+            floor = STANDARD_BREADTH_FLOOR
 
     # Real eval-stakes but no single forced answer: neither the quiet-position
     # time cut nor the sharp-position king-danger/tactical/intuition-gate
@@ -103,7 +117,7 @@ def decide_breadth(engine, total_time=None):
                 engine.midgame_breadth_strength_bonus)
 
     # Now for mood dependent logic
-    no_moves = max(no_moves + MOOD_BREADTH_DELTAS.get(engine.mood, 0), 1)
+    no_moves = max(no_moves + MOOD_BREADTH_DELTAS.get(engine.mood, 0), floor)
 
     engine.log += "Calculated number of root moves in current position: {} \n".format(no_moves)
     return no_moves
