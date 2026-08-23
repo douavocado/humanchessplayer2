@@ -181,9 +181,24 @@ def check_opp_blunder(engine):
             worst_val, worst_sq = val, sq
 
     if worst_val < OPP_BLUNDER_EN_PRIS_MIN_VALUE:
-        engine.log += "Eval swung but nothing is clearly hanging (worst en pris value {}). Not acting startled. \n".format(worst_val)
-        return
-    engine.log += "Opponent has a piece en pris on {} worth {} in an exchange. \n".format(chess.square_name(worst_sq), worst_val)
+        # No hung material -- but the eval swing that got us this far could
+        # instead be the opponent's move handing us a mate in 1 that wasn't
+        # there the move before. The en-pris scan above can never see this:
+        # nothing is materially en pris, the thing newly hanging is the
+        # king. A human notices a suddenly-appeared forced mate with the
+        # same startled "wait, that's real?" reaction as a hung piece --
+        # mechanically snapping it in <0.3s (the intuition-gate/decisive-
+        # snap combo an objectively clean, high-sharpness move gets by
+        # default) reads like the opponent's collapse was expected.
+        curr_mate_in = engine.stockfish_analysis[0]["score"].pov(engine.input_info["side"]).mate()
+        prev_mate_in = prev_analysis["score"].pov(engine.input_info["side"]).mate()
+        if curr_mate_in == 1 and (prev_mate_in is None or prev_mate_in < 1):
+            engine.log += "Opponent's move allowed a mate in 1 that wasn't on the board before (previous mate: {}). \n".format(prev_mate_in)
+        else:
+            engine.log += "Eval swung but nothing is clearly hanging (worst en pris value {}). Not acting startled. \n".format(worst_val)
+            return
+    else:
+        engine.log += "Opponent has a piece en pris on {} worth {} in an exchange. \n".format(chess.square_name(worst_sq), worst_val)
 
     # Unexpectedness: only react startled when we couldn't already have
     # seen this coming -- not their only legal move, and not what a quick
