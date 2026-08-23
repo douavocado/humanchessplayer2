@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import tkinter as tk
@@ -1153,9 +1154,36 @@ class ChessGUI:
     def on_canvas_resize(self, event):
         self.render_board()
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Chess Move Scorer GUI")
+    parser.add_argument("--fen", default=None, help="FEN to open immediately, skipping manual entry")
+    parser.add_argument("--weight-type", dest="weight_type", default=None,
+                         choices=["opening", "midgame", "endgame", "defensive_tactics", "automatic"],
+                         help="Model weights to use (default: whatever the GUI defaults to, midgame)")
+    parser.add_argument("--mood", default=None,
+                         choices=["confident", "cocky", "cautious", "tilted", "hurry", "flagging", "NN"],
+                         help="Mood used for probability alteration; NN runs the live production "
+                              "AlterMoveProbNN model instead of the GUI's separate reference heuristics")
+    parser.add_argument("--alter", action="store_true",
+                         help="Tick 'Alter Move Probabilities' before analysing")
+    args = parser.parse_args(argv)
+
     root = tk.Tk()
     app = ChessGUI(root)
+
+    if args.weight_type:
+        app.current_weight_type.set(args.weight_type)
+        app.load_model()
+    if args.mood:
+        app.current_mood.set(args.mood)
+        if args.mood == "NN" and app.alter_nn_model is None:
+            app.load_alter_nn_model()
+    if args.alter:
+        app.alter_probs.set(True)
+    if args.fen:
+        app.fen_var.set(args.fen)
+        app.on_submit_fen()
+
     root.mainloop()
 
 if __name__ == "__main__":
