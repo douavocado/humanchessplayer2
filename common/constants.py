@@ -308,6 +308,28 @@ OPP_BLUNDER_EN_PRIS_MIN_VALUE = 3
 OPP_BLUNDER_STARTLE_MULTIPLIER = 2.0
 OPP_BLUNDER_STARTLE_MULTIPLIER_LOW_TIME = 1.5
 OPP_BLUNDER_STARTLE_LOW_TIME_THRESHOLD = 10
+# Per-move clock budget (decision_logic.move_time_budget / move_time_cap).
+# The only ceiling on think time used to be `own_time*0.7 + 1`, which with a
+# full 3+0 clock permits a 127-second move: every multiplier downstream of the
+# phase envelope (the mood long-think tail, reflective pacing, the rating
+# factor) could compound unchecked and the clamp never bound until the clock
+# was nearly gone. The budget is instead the even share of the remaining clock
+# over the moves we still expect to play, and one move may overspend it by
+# BUDGET_MAX_MULTIPLE. A long think is still a long think; it just cannot eat
+# a whole phase of the game. TOTAL_MOVES is the assumed game length in full
+# moves (the 180+0 self-play arm averaged 98.6 plies), and MIN_MOVES_LEFT
+# keeps the budget from collapsing once a game runs past it. The same budget
+# gates the reflective-pacing blend: matching a slow opponent's tempo is a
+# luxury only affordable while we are inside it.
+#
+# MAX_MULTIPLE is set so the cap touches the extreme tail only. Replayed over
+# every decided time in logs/sessions (909 moves at 60+0, 868 at 180+0), 4.0
+# leaves p95 move time unmoved at both controls (3.1s -> 2.9s and 8.9s ->
+# 8.9s) and costs 6% / 4% of mean emt, while the single worst move falls from
+# 38.8s to 19.3s and the worst game gives back 55s of clock over 18 moves.
+CLOCK_BUDGET_TOTAL_MOVES = 50
+CLOCK_BUDGET_MIN_MOVES_LEFT = 15
+CLOCK_BUDGET_MAX_MULTIPLE = 4.0
 # Flag-race autopilot (engine.py:get_stockfish_move): in a deep scramble a
 # human does not distinguish "+mate" from "+800" -- both read as "winning" --
 # and plays on instinct: shuffling, missing mates, occasionally stalemating

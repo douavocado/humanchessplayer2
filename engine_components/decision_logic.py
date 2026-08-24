@@ -5,7 +5,9 @@ get_time_taken decide how long to spend on the move (the sharpness-driven
 "complicated position" envelope, the intuition gate, per-game pace/mood
 scaling, and reflective/rating-based pacing); chosen_move_wc_loss and
 adjust_time_for_move_loss are the hesitation-before-the-mistake /
-decisive-snap pass applied after the move is chosen.
+decisive-snap pass applied after the move is chosen. move_time_budget and
+move_time_cap sit under all of it: whatever the multipliers ask for, one move
+may not spend more than a few times its even share of the remaining clock.
 
 Sixth slice of the engine.py strangler-fig extraction (see
 testing/engine_parity/ for the regression harness) -- the single biggest
@@ -31,6 +33,8 @@ from common.constants import (
     MISTAKE_SNAP_WC_LOSS, MISTAKE_SNAP_PROB, MISTAKE_SNAP_RANGE,
     OPP_BLUNDER_STARTLE_MULTIPLIER, OPP_BLUNDER_STARTLE_MULTIPLIER_LOW_TIME,
     OPP_BLUNDER_STARTLE_LOW_TIME_THRESHOLD,
+    CLOCK_BUDGET_TOTAL_MOVES, CLOCK_BUDGET_MIN_MOVES_LEFT,
+    CLOCK_BUDGET_MAX_MULTIPLE,
 )
 
 
@@ -121,6 +125,42 @@ def decide_breadth(engine, total_time=None):
 
     engine.log += "Calculated number of root moves in current position: {} \n".format(no_moves)
     return no_moves
+
+
+def move_time_budget(engine):
+    """ The even share of our remaining clock for a single move, in seconds.
+
+        The game is assumed to last CLOCK_BUDGET_TOTAL_MOVES full moves, with
+        never fewer than CLOCK_BUDGET_MIN_MOVES_LEFT still to play, so the
+        budget keeps shrinking as the clock drains but cannot collapse to
+        nothing in a long game.
+
+        Returns a positive float.
+    """
+    own_time = max(engine.input_info["self_clock_times"][-1], 1)
+    moves_played = engine.current_board.fullmove_number
+    moves_left = max(CLOCK_BUDGET_MIN_MOVES_LEFT,
+                     CLOCK_BUDGET_TOTAL_MOVES - moves_played)
+    return own_time / moves_left
+
+
+def move_time_cap(engine):
+    """ The most time a single move may take, in seconds.
+
+        Two ceilings, whichever is tighter. The absolute one (never spend
+        more than 70% of what is on the clock) is the original clamp; on its
+        own it is far too loose at anything longer than bullet, since with a
+        full 3+0 clock it permits a 127-second move and so never binds until
+        the game is already lost on time. The second is the per-move budget,
+        overspendable by CLOCK_BUDGET_MAX_MULTIPLE: a long think stays a long
+        think, but one move cannot eat a whole phase of the game.
+
+        Every path that decides a think time goes through here, including the
+        hesitation stretch applied after the move is chosen.
+    """
+    own_time = max(engine.input_info["self_clock_times"][-1], 1)
+    absolute = own_time * 0.7 + 1
+    return min(absolute, move_time_budget(engine) * CLOCK_BUDGET_MAX_MULTIPLE)
 
 
 def set_target_time(engine, total_time):
@@ -384,7 +424,15 @@ def get_time_taken(engine, obvious=False, human_filters=True):
 
         # sometimes we don't use this
         if np.random.random() < 0.3:
-            time_taken = 0.8*target_time_spent + time_taken * 0.2
+            blended = 0.8*target_time_spent + time_taken * 0.2
+            # Blending towards the opponent's tempo may always speed us up,
+            # but may only slow us down while we are still inside the
+            # per-move budget. Matching a slow opponent move for move is how
+            # their long think becomes our time trouble, and on the worst
+            # move of the 2026-08-23 3+0 session this was the second-largest
+            # multiplier in the chain (18.9s -> 24.9s on a flat position).
+            if blended <= time_taken or time_taken < move_time_budget(engine):
+                time_taken = blended
     engine.log += "Decided time taken after opponent speed consideration: {} \n".format(time_taken)
 
     # we also change the time taken based on the opponent's rating.
@@ -399,10 +447,13 @@ def get_time_taken(engine, obvious=False, human_filters=True):
     else:
         engine.log += "No rating information available. Not considering rating factor. \n"
 
-    # make sure we are not taking time that we do not have
-    if time_taken > own_time*0.7+1:
-        time_taken = own_time*0.7 + 1
-        engine.log += "We do not have enough time to take this much time. Reducing time taken to {} \n".format(time_taken)
+    # make sure we are not taking time that we do not have, and that this one
+    # move does not swallow the clock the rest of the game needs
+    cap = move_time_cap(engine)
+    if time_taken > cap:
+        time_taken = cap
+        engine.log += "Move time exceeds its share of the clock ({:.2f}s budget x{}). Reducing time taken to {} \n".format(
+            move_time_budget(engine), CLOCK_BUDGET_MAX_MULTIPLE, time_taken)
     time_taken = max(time_taken, 0.1)
     engine.log += "Decided time taken for move: {} \n".format(time_taken)
     # Targeted console output
@@ -479,7 +530,7 @@ def adjust_time_for_move_loss(engine, move_uci, time_take):
             engine.log += "Chosen move loses {:.3f} win prob but snapping it anyway (no hesitation). \n".format(wc_loss)
             return time_take
         stretch = np.random.uniform(*MISTAKE_HESITATION_RANGE)
-        new_time = min(time_take * stretch, own_time*0.7 + 1)
+        new_time = min(time_take * stretch, move_time_cap(engine))
         engine.log += "Chosen move loses {:.3f} win prob; hesitating before the mistake (x{:.2f}: {:.2f}s -> {:.2f}s). \n".format(
             wc_loss, stretch, time_take, new_time)
         print(f"[ENGINE] Hesitating before a mistake (wc loss {wc_loss:.3f}): {time_take:.2f}s -> {new_time:.2f}s")
