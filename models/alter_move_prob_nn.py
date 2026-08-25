@@ -414,25 +414,28 @@ class AlterMoveProbNN(nn.Module):
     def get_parameters_dict(self):
         """
         Returns a dictionary of all trainable parameters.
+
+        Enumerated from named_parameters() rather than hand-listed. The
+        hand-written version omitted three of the nineteen -- solo_factor_sf,
+        threatened_lvl_diff_sf and interesting_move_threshold -- and because
+        forward_numpy reads this dict with `.get(name, <default>)`, the live
+        engine silently ran those three at their *untrained* defaults from the
+        day the numpy path was introduced: the interesting-move threshold
+        3.06x too high (exp(0.0) vs exp(-1.118)), the threat-block exponent
+        2.24x too strong (1.0 vs 0.446), and the solo-threat magnifier at 1.0
+        vs 1.372. Measured over 7779 held-out 2300+ bullet positions, that
+        cost 1.70pp of top-1 human-move agreement (34.77% vs forward's
+        36.47%) and made the two implementations pick a different top move in
+        21.5% of positions. With all nineteen present they agree 100% wherever
+        the three forward_numpy-only rules (PROMOTION_STOP_SF,
+        ADVANCED_PASSED_PAWN_DEFENCE_SF, FORK_DEFENCE_SF) stay silent.
+
+        Deriving the dict from the parameter list is the point: a hand-written
+        one cannot be kept in step with __init__, and the `.get` defaults in
+        forward_numpy turn any omission into a silent wrong answer rather than
+        a KeyError.
         """
-        return {
-            "weird_move_sd_opening": float(self.weird_move_sd_opening),
-            "weird_move_sd_midgame": float(self.weird_move_sd_midgame),
-            "weird_move_sd_endgame": float(self.weird_move_sd_endgame),
-            "protect_king_sf": float(self.protect_king_sf),
-            "capture_en_pris_sf": float(self.capture_en_pris_sf),
-            "break_pin_sf": float(self.break_pin_sf),
-            "capture_sf": float(self.capture_sf),
-            "capture_sf_king_danger": float(self.capture_sf_king_danger),
-            "capturable_sf": float(self.capturable_sf),
-            "check_sf": float(self.check_sf),
-            "takeback_sf": float(self.takeback_sf),
-            "new_threatened_sf": float(self.new_threatened_sf),
-            "exchange_sf": float(self.exchange_sf),
-            "exchange_k_danger_sf": float(self.exchange_k_danger_sf),
-            "passed_pawn_end_sf": float(self.passed_pawn_end_sf),
-            "repeat_sf": float(self.repeat_sf),
-        }
+        return {name: float(param) for name, param in self.named_parameters()}
 
     def load_params_dict(self, params_dict=None):
         """

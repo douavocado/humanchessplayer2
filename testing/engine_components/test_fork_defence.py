@@ -175,27 +175,36 @@ class TestForkDefenceBoost(unittest.TestCase):
         return {board.san(chess.Move.from_uci(u)): p for u, p in altered.items()}
 
     def test_defence_is_promoted_past_a_higher_ranked_non_defence(self):
-        """Ke7 must end up top of the list, and Bg7 must not.
+        """Ke7 must end up top of the list, and the boost must widen its lead.
 
-        The whole 2026-08-22 loss in one assertion. Without the boost the
-        alteration puts Bg7 top at 0.225 with Ke7 second at 0.112, and search
-        breadth was 1 -- so the single root move handed to Stockfish was the
-        one move that drops the exchange. A defence above the interesting-move
-        threshold used to be skipped by the boost, which made this ordering
-        unreachable however large FORK_DEFENCE_SF got.
+        The 2026-08-22 loss: search breadth was 1, so the single root move
+        handed to Stockfish was Bg7, the one move that drops the exchange
+        (Ke7 and Ke8 are worth +409 and +421 against Bg7's -311).
 
-        Ke8 is boosted too but stays behind Bg7 (0.115 vs 0.136): Bg7 collects
-        its own multipliers for moving an attacked piece. Only the argmax
-        matters at breadth 1, and Ke7 and Ke8 are worth +409 and +421 against
-        Bg7's -311, so either would have done.
+        This test used to assert that Bg7 led whenever FORK_DEFENCE_SF was
+        neutralised, pinning the alteration's output at Bg7 0.225 / Ke7 0.112
+        / Rh7 0.102 / Be6 0.085. Those were the numbers of a *bug*, not of the
+        model: get_parameters_dict omitted solo_factor_sf,
+        threatened_lvl_diff_sf and interesting_move_threshold, so forward_numpy
+        read all three from its `.get` defaults and the live engine ran with
+        the interesting-move threshold 3.06x too high and the threat-block
+        exponent 2.24x too strong. With the parameters actually loaded, the
+        neutral arm already puts Ke7 top at 0.149, so the fork boost was added
+        to compensate for a blunder the plumbing had caused.
+
+        The boost still earns its place -- it takes Ke7 from 0.149 to 0.208 and
+        pushes the non-defences further down -- so what is pinned now is that
+        it strictly widens Ke7's margin over Bg7 rather than that it rescues an
+        ordering nothing else could reach.
         """
         boosted = self._altered(NXF7_FEN, NXF7_NN_PROBS, NXF7_PREV, NXF7_PREV_PREV)
         neutral = self._altered(NXF7_FEN, NXF7_NN_PROBS, NXF7_PREV, NXF7_PREV_PREV,
                                 fork_sf=1.0)
-        self.assertEqual(max(neutral, key=neutral.get), "Bg7")
         self.assertEqual(max(boosted, key=boosted.get), "Ke7")
         self.assertGreater(boosted["Ke7"], neutral["Ke7"])
         self.assertGreater(boosted["Ke8"], neutral["Ke8"])
+        self.assertGreater(boosted["Ke7"] - boosted["Bg7"],
+                           neutral["Ke7"] - neutral["Bg7"])
 
     def test_buried_defence_still_reached(self):
         """Na6 -- the 2026-08-05 case the threshold gate was added for.
