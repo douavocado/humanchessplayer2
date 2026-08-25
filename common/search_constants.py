@@ -383,3 +383,37 @@ STOCKFISH_HASH_MB = 128
 # axis "eval" was rejected on, so it wants measuring rather than assuming.
 REEVAL_ORDER = "human"
 REEVAL_ORDERS = ("random", "human", "eval")
+
+# Minimum number of our own candidate moves the ponder shortlists for a
+# position it is preparing a reply to (ponderer.ponder). The shortlist is
+# `[:search_width]` off the altered NN ranking and is then handed to
+# re_evaluate, so at search_width 1 the engine never gets a choice: the single
+# shortlisted move is the argmax by construction, Stockfish is asked "which of
+# these one moves is best", and the NN's top pick is cached and played
+# instantly on the opponent's next move -- skipping check_obvious_move and any
+# re-evaluation, because a cached reply is played the moment the position is
+# recognised.
+#
+# Two logged losses came through that path. 2026-08-24, after Nxe4+ dxe4:
+# Rd2+ was cached (NN p=0.977) and played in one second, vacating the c-file
+# and turning +380 into -432; Rxc8 won a rook outright. 2026-08-25, after
+# dxc6+ bxc6: Bxc6+ was cached and played, +569 -> +233, a bishop for a pawn.
+# In the second case the raw net had it right (Bd3 0.2276 ahead of Bxc6+
+# 0.1505) and the alteration's capture (x1.173) and check (x1.231) multipliers
+# flipped the order -- so the shortlist was wrong even though the policy was
+# not, which is exactly the case a second opinion is for. Replaying that
+# position with the ponder's own 20ms budget, root_moves ['Bxc6+'] returns
+# Bxc6+ at +227 and ['Bxc6+', 'Bd3'] returns Bd3 at +615.
+#
+# Costs no wall clock: the ponder's per-position budget is a fixed
+# chess.engine.Limit, so a second candidate splits the same time rather than
+# adding to it.
+#
+# ⚠️ Scoped to the ponder's shortlist of OUR moves only. It deliberately does
+# NOT touch ponder_moves' `[:search_width]` slice, which narrows the
+# OPPONENT's replies when scoring one of our candidates -- that narrowing is
+# load-bearing ("simulates human foresight not being exhaustive", see
+# re_evaluate) and is shared with the live move path, so widening it is a
+# separate decision with its own strength implications. Nor does it floor
+# decide_breadth, which is the calibrated strength knob.
+PONDER_MIN_ROOT_MOVES = 2

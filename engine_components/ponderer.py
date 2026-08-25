@@ -31,7 +31,9 @@ import chess.engine
 
 from common.board_information import phase_of_game, calculate_threatened_levels
 from common.utils import extend_mate_score
-from common.search_constants import MAX_CALC_DEPTH_COEFF, REEVAL_ORDER
+from common.search_constants import (
+    MAX_CALC_DEPTH_COEFF, REEVAL_ORDER, PONDER_MIN_ROOT_MOVES,
+)
 
 
 def own_time_or_none(engine):
@@ -329,6 +331,7 @@ def ponder(engine, board, time_allowed, search_width, time_per_position=0.1, pre
         ponder_depth = round(variations_allowed / (ponder_width * search_width))
 
     ponder_depth = min(ponder_depth, max_depth)
+    root_width = max(PONDER_MIN_ROOT_MOVES, search_width)
 
     if use_ponder:
 
@@ -381,9 +384,18 @@ def ponder(engine, board, time_allowed, search_width, time_per_position=0.1, pre
         else:
             # top_human_move_dic = engine._alter_move_probabilties(top_human_move_dic, dummy_board, prev_board = board, prev_prev_board=prev_board, log= False)
             top_human_move_dic = engine._alter_move_prob_nn(top_human_move_dic, dummy_board, prev_board = board, prev_prev_board=prev_board, log= False)
-            top_human_moves = sorted(top_human_move_dic.keys(), key=lambda x: top_human_move_dic[x], reverse=True)[:search_width]
+            # Never shortlist a single move: with one candidate the argmax is
+            # that candidate, so re_evaluate's Stockfish call can only hand it
+            # straight back and the cached reply is the NN's top pick with no
+            # second opinion at all. See PONDER_MIN_ROOT_MOVES for the two
+            # logged losses this caused. The floor applies to OUR candidates
+            # only -- search_width still goes to re_evaluate as no_root_moves,
+            # which narrows the opponent's replies and is deliberate.
+            top_human_moves = sorted(top_human_move_dic.keys(), key=lambda x: top_human_move_dic[x], reverse=True)[:root_width]
 
-        re_evaluate_dic = engine._re_evaluate(dummy_board, top_human_moves, search_width, depth=ponder_depth, prev_board = board.copy(), limit=[ponder_depth*search_width, time_allowed/2], use_ponder=use_ponder)
+        # Re-evaluation budget counts our candidates, so it tracks root_width
+        # rather than search_width or the extra candidate cannot be reached.
+        re_evaluate_dic = engine._re_evaluate(dummy_board, top_human_moves, search_width, depth=ponder_depth, prev_board = board.copy(), limit=[ponder_depth*root_width, time_allowed/2], use_ponder=use_ponder)
         # adding noise
         noise_phase = noise_dic[game_phase]
         for move_uci in re_evaluate_dic.keys():
