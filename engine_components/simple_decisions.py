@@ -85,6 +85,9 @@ def check_obvious_move(engine):
     # 1. Only moves
     # 2. Takebacks
     # 3. Forced mate in ones
+    # This is the once-per-make_move reset of the shared "act startled"
+    # flag; engine.py calls mood_manager.check_opp_blunder() right after
+    # this and it only ever ORs a True on top, so this reset must run first.
     engine.opponent_just_blundered = False
 
     # Check for only legal moves

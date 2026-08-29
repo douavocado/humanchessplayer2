@@ -11,7 +11,12 @@ import math
 import sys
 import os
 
-from common.constants import PATH_TO_STOCKFISH
+from common.constants import (
+    PATH_TO_STOCKFISH, FORK_MIN_GAIN,
+    PROGRESS_REPEAT_PENALTY, PROGRESS_UNDO_PENALTY, PROGRESS_CAPTURE_BONUS,
+    PROGRESS_PAWN_PUSH_BONUS, PROGRESS_PASSED_PAWN_BONUS, PROGRESS_PROMOTION_BONUS,
+    PROGRESS_PAWN_ADVANCE_COEFF,
+)
 
 PIECE_VALS = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3.5, chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 1000}
 
@@ -793,3 +798,323 @@ def stops_opponent_promotion(board: chess.Board, move_uci: str):
             # a promoted piece survives on this square
             return False
     return True
+
+
+def is_passed_pawn(board: chess.Board, square: chess.Square) -> bool:
+    """ True if the pawn on `square` is passed: no enemy pawn on its own
+        file or an adjacent file sits level with or ahead of it (i.e. none
+        can ever block or capture it as it advances). """
+    piece = board.piece_at(square)
+    if piece is None or piece.piece_type != chess.PAWN:
+        return False
+    color = piece.color
+    file = chess.square_file(square)
+    rank = chess.square_rank(square)
+    for f in (file - 1, file, file + 1):
+        if f < 0 or f > 7:
+            continue
+        for r in range(8):
+            if color == chess.WHITE:
+                if r <= rank:
+                    continue
+            else:
+                if r >= rank:
+                    continue
+            sq = chess.square(f, r)
+            other = board.piece_at(sq)
+            if other is not None and other.piece_type == chess.PAWN and other.color != color:
+                return False
+    return True
+
+
+def opponent_advanced_passed_pawn_path_squares(board: chess.Board) -> set:
+    """ Union of promotion-path squares (own file, from the pawn's next
+        square up to and including the promotion square) for every passed
+        pawn belonging to the side NOT to move that has reached at least
+        the 6th rank (3rd rank for a black pawn) -- i.e. an advanced passer,
+        not merely a passed one. A blockade/coverage target set for
+        alter_move_prob_nn's advanced-passed-pawn boost: a monster passer
+        two pushes from queening is a serious threat well before
+        opponent_can_promote/stops_opponent_promotion above ever fire (those
+        only trigger one push away). Empty set if the opponent has no such
+        pawn. """
+    opp_color = not board.turn
+    path_squares = set()
+    for pawn_square in board.pieces(chess.PAWN, opp_color):
+        rank = chess.square_rank(pawn_square)
+        if opp_color == chess.WHITE:
+            if rank < 5:  # not yet reached the 6th rank
+                continue
+        else:
+            if rank > 2:  # not yet reached the 3rd rank
+                continue
+        if not is_passed_pawn(board, pawn_square):
+            continue
+        file = chess.square_file(pawn_square)
+        if opp_color == chess.WHITE:
+            path_squares.update(chess.square(file, r) for r in range(rank + 1, 8))
+        else:
+            path_squares.update(chess.square(file, r) for r in range(rank - 1, -1, -1))
+    return path_squares
+
+
+def seen_position_keys(board: chess.Board) -> set:
+    """ EPD keys of every position that has already occurred on `board`'s
+        move stack (the current position included).
+
+        Used by move_progress_score to spot a move that walks back into a
+        position we have already been in. The stack is only as deep as the
+        history the client hands the engine (8 fens, so ~7 plies), which
+        catches the A-B-A shuffle that dominates aimless scramble play but
+        not longer cycles -- which is about as far back as a human notices
+        under a flag race anyway. """
+    keys = {board.epd()}
+    walker = board.copy()
+    while walker.move_stack:
+        walker.pop()
+        keys.add(walker.epd())
+    return keys
+
+
+def move_progress_score(board: chess.Board, move: chess.Move, seen_keys: set = frozenset(),
+                        own_last_move: chess.Move = None):
+    """ How much progress `move` makes towards actually converting a won
+        position. Returns (bonus, penalty), both non-negative: bonus for
+        moves that advance the plan, penalty for moves that shuffle.
+
+        They are returned separately because the caller applies them
+        differently -- the penalty is unconditional (repeating is aimless
+        whatever the move is worth) while the bonus is only offered to moves
+        that still look best, so that "push the pawn" can't outrank a drop
+        the player can actually see. Caller also decides whether we are
+        winning enough for any of this to apply -- see PROGRESS_MIN_EVAL and
+        the comment block beside it in common/constants.py for why this
+        exists at all.
+
+        Deliberately shallow: no search, only things a human sees at a
+        glance under a flag race -- am I repeating, am I undoing my own last
+        move, am I taking something, am I pushing a pawn.
+
+        A king-march term ("step towards your passer's queening square, the
+        enemy pawn you need to win, or the bare enemy king") was measured
+        here and rejected: over 75 endgame scrambles it added 0.008 to the
+        progress rate and turned 28 thrown won games into 33, because in
+        exactly the positions where it was the only term that could fire --
+        no pawns to push, nothing to take -- the flag-race eval cap flattens
+        every candidate, so nothing was left to stop the king walking off
+        while the rook dropped. Reinstating it needs the piece it abandons
+        to be accounted for, not just the square it walks to. """
+    penalty = 0.0
+    score = 0.0
+    after = board.copy(stack=False)
+    after.push(move)
+
+    # Shuffling penalties.
+    if own_last_move is not None:
+        if move.from_square == own_last_move.to_square and move.to_square == own_last_move.from_square:
+            penalty += PROGRESS_UNDO_PENALTY
+    if seen_keys and after.epd() in seen_keys:
+        penalty += PROGRESS_REPEAT_PENALTY
+
+    # Progress bonuses. A pawn capture earns both -- it is doubly progress.
+    if board.is_capture(move):
+        captured = board.piece_type_at(move.to_square)
+        captured_value = PIECE_VALS[captured] if captured is not None else 1  # None: en passant
+        score += PROGRESS_CAPTURE_BONUS * min(captured_value, 5) / 5
+
+    side = board.turn
+    piece_type = board.piece_type_at(move.from_square)
+    if piece_type == chess.PAWN:
+        score += PROGRESS_PAWN_PUSH_BONUS
+        if move.promotion is not None:
+            score += PROGRESS_PROMOTION_BONUS
+        elif is_passed_pawn(board, move.from_square):
+            score += PROGRESS_PASSED_PAWN_BONUS
+        landing_rank = chess.square_rank(move.to_square)
+        if side == chess.BLACK:
+            landing_rank = 7 - landing_rank
+        score += PROGRESS_PAWN_ADVANCE_COEFF * max(landing_rank - 3, 0)
+
+    # A plan a human would abandon on sight isn't progress: pushing a pawn
+    # that just hangs, or walking the king off while a piece drops, is how
+    # following the plan turns into losing the game rather than winning it.
+    # Only paid for when a bonus is actually on the table, which keeps the
+    # exchange evaluations off the majority of candidates.
+    if score > 0 and _hangs_material(after, side):
+        score = 0.0
+
+    return score, penalty
+
+
+def _hangs_material(board: chess.Board, side: bool) -> bool:
+    """ True if any of `side`'s non-king pieces would be lost in an exchange
+        on the square it stands on. Cheap glance, not a search: the same
+        exchange evaluation the takeback and premove checks use. """
+    for piece_type in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+        for square in board.pieces(piece_type, side):
+            if calculate_threatened_levels(square, board) > 0:
+                return True
+    return False
+
+
+def evaluate_fork(board: chess.Board, move: chess.Move, min_gain: float = FORK_MIN_GAIN):
+    """ Material `move` wins by forking, plus the geometry behind it.
+
+        Returns (value, fork_square, target_squares). value is 0.0 (and the
+        rest None/()) when `move` is not a real fork. board.turn must be the
+        side making the move. Piece-agnostic -- knight, queen, pawn and
+        bishop forks all qualify -- but deliberately blind to discovered
+        double attacks, where the second attacker is not the piece that
+        moved.
+
+        Ordered cheapest-test-first: the two-target popcount rejects the vast
+        majority of moves on bitboards alone, before any exchange evaluation
+        runs.
+    """
+    board.push(move)
+    try:
+        them = board.turn                      # the side being forked
+        to_sq = move.to_square
+        attacked = int(board.attacks(to_sq)) & board.occupied_co[them]
+        if chess.popcount(attacked) < 2:
+            return 0.0, None, ()
+
+        # The forking piece has to survive where it lands, or there is no
+        # fork -- and in the check case this is also what stops us counting
+        # forks the opponent answers simply by capturing the checker.
+        # Two separate tests are needed because calculate_threatened_levels
+        # returns 0 both for "not attacked at all" and for "captured in an
+        # even trade":
+        #   (1) it isn't outright winnable on that square, and
+        if calculate_threatened_levels(to_sq, board) > 0:
+            return 0.0, None, ()
+        #   (2) no defender worth no more than it can take it. An even trade
+        #       is not a fork either -- they just swap the forker off and the
+        #       double attack evaporates.
+        forker_val = PIECE_VALS[board.piece_type_at(to_sq)]
+        for attacker_sq in board.attackers(them, to_sq):
+            if PIECE_VALS[board.piece_type_at(attacker_sq)] <= forker_val and \
+                    chess.Move(attacker_sq, to_sq) in board.legal_moves:
+                return 0.0, None, ()
+
+        check = board.is_check()
+        gains, targets = [], []
+        for sq in chess.scan_forward(attacked):
+            if board.piece_type_at(sq) == chess.KING:
+                targets.append(sq)
+                continue
+            gain = calculate_threatened_levels(sq, board)
+            if gain > 0:
+                gains.append(gain)
+                targets.append(sq)
+        if not gains:
+            return 0.0, None, ()
+        gains.sort(reverse=True)
+        if check:
+            # they must answer the check, so they get no free tempo with
+            # which to save the other target
+            net = gains[0]
+        else:
+            if len(gains) < 2:
+                return 0.0, None, ()
+            # they rescue the most valuable one; we collect the next
+            net = gains[1]
+        if net < min_gain:
+            return 0.0, None, ()
+        return net, to_sq, tuple(targets)
+    finally:
+        board.pop()
+
+
+def is_move_fork(board: chess.Board, move: chess.Move, min_gain: float = FORK_MIN_GAIN) -> bool:
+    """ True if `move` forks: see evaluate_fork for the full definition. """
+    return evaluate_fork(board, move, min_gain)[0] > 0
+
+
+def opponent_fork_threat(board: chess.Board, min_gain: float = FORK_MIN_GAIN):
+    """ The best fork available to the side NOT to move, as if it were their
+        turn -- the gate for the fork-defence boost in the move-probability
+        alteration, mirroring opponent_can_promote's role for
+        stops_opponent_promotion.
+
+        Returns None when they have no fork worth min_gain, otherwise a dict
+        of the geometry defends_against_fork needs.
+    """
+    null_board = board.copy()
+    null_board.turn = not board.turn
+    null_board.clear_stack()
+    best = None
+    for mv in null_board.legal_moves:
+        value, fork_sq, targets = evaluate_fork(null_board, mv, min_gain)
+        if best is None or value > best["value"]:
+            if value > 0:
+                best = {"value": value,
+                        "move": mv,
+                        "square": fork_sq,
+                        "targets": targets,
+                        "forker_value": PIECE_VALS[null_board.piece_type_at(mv.from_square)]}
+    return best
+
+
+def defends_against_fork(board: chess.Board, move_uci: str, threat: dict,
+                         min_gain: float = FORK_MIN_GAIN) -> bool:
+    """ True if our move_uci answers `threat` (from opponent_fork_threat) the
+        way a human spots it over the board: get the forked piece out of the
+        double attack, or cover the square the fork lands on.
+
+        Two stages. First a *shape* gate -- is this even one of the two
+        defences being modelled? Deliberately narrow: blocking the forker's
+        route, capturing the forker, defending the second target and
+        counter-threats all genuinely stop forks and are all missed here, so
+        the bot stays capable of walking into a fork it could have parried by
+        a less obvious route, which is what a human does.
+
+        Then the verdict, which is one question and not three: after our
+        move, is the opponent's fork still a fork? That is exactly what
+        evaluate_fork answers, so ask it rather than re-deriving the geometry
+        with a separate set of tests. The hand-rolled tests this replaced got
+        two whole classes of defence wrong:
+
+        - A king could never *cover* the fork square, because the test was
+          `PIECE_VALS[defender] <= forker_value` and PIECE_VALS[KING] is
+          1000. That comparison is a proxy for "the exchange on the fork
+          square is not losing for us", which is the one case a king always
+          wins: evaluate_fork has already established the forker lands
+          undefended, so a king covering it simply takes it.
+        - The escape test counted how many of our pieces the forker still
+          attacked afterwards and called it a fork if two remained. That is
+          blind to whether the fork still *works*: it ignores that the check
+          is gone once the king steps aside (which is what denied us the
+          tempo to save the second target in the first place), and it counts
+          incidental pieces that happen to sit in the forker's radius. Both
+          misfire together whenever a king is forked alongside two other
+          pieces -- e.g. r1bk3r/ppp2p2/5npb/2n1N3/2P1P3/2N5/PP3PP1/R3KB1R b,
+          where Nxf7+ forks Kd8, Rh8 and Bh6, and neither Ke7 nor Ke8 was
+          recognised as a defence even though both leave the knight hanging
+          to the king.
+
+        Callers should gate on opponent_fork_threat(board) first.
+    """
+    fork_sq = threat["square"]
+    move = chess.Move.from_uci(move_uci)
+
+    after = board.copy()
+    after.push(move)
+
+    # Shape gate. "Cover it" means a defender of the fork square that was not
+    # there before -- a pre-existing one cannot be the point of this move, and
+    # by evaluate_fork's own survival test could not have been taking the
+    # forker profitably anyway.
+    stands_on_it = move.to_square == fork_sq
+    covers_it = bool(chess.SquareSet(after.attackers(board.turn, fork_sq)) -
+                     chess.SquareSet(board.attackers(board.turn, fork_sq)))
+    moves_a_target = move.from_square in threat["targets"]
+    if not (stands_on_it or covers_it or moves_a_target):
+        return False
+
+    fork_move = threat["move"]
+    if fork_move not in after.legal_moves:
+        # We took the forker, blocked its route, or pinned it out of the move.
+        return True
+
+    return evaluate_fork(after, fork_move, min_gain)[0] <= 0

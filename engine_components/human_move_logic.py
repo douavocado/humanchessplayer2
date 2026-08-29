@@ -26,6 +26,8 @@ from common.board_information import (
     is_offer_exchange, king_danger, is_open_file, calculate_threatened_levels,
     is_weird_move, is_under_mate_threat,
     opponent_can_promote, stops_opponent_promotion,
+    opponent_advanced_passed_pawn_path_squares,
+    opponent_fork_threat, defends_against_fork,
 )
 from common.utils import flip_uci, patch_fens, extend_mate_score
 from common.constants import (
@@ -33,7 +35,7 @@ from common.constants import (
     PROTECT_KING_SF, CAPTURE_EN_PRIS_SF, BREAK_PIN_SF, CAPTURE_SF,
     CAPTURE_SF_KING_DANGER, CAPTURABLE_SF, CHECK_SF_DIC, TAKEBACK_SF,
     NEW_THREATENED_SF_DIC, EXCHANGE_SF_DIC, EXCHANGE_K_DANGER_SF_DIC,
-    PROMOTION_STOP_SF,
+    PROMOTION_STOP_SF, ADVANCED_PASSED_PAWN_DEFENCE_SF, FORK_DEFENCE_SF,
     PASSED_PAWN_END_SF, SOLO_FACTOR_SF, THREATENED_LVL_DIFF_SF,
 )
 
@@ -429,6 +431,51 @@ def alter_move_probabilties(engine, move_dic, board, prev_board=None, prev_prev_
                 promotion_stopping_moves.append(board.san(chess.Move.from_uci(move_uci)))
         if log:
             engine.log += "Found moves that stop the opponent promoting: {} \n".format(promotion_stopping_moves)
+
+    # An opponent passed pawn that has already reached the 6th rank (3rd for
+    # a black pawn) is a serious threat two pushes out, well before the
+    # opponent_can_promote check above ever fires (that only triggers one
+    # push away). Reward moves that land on a square still ahead of it on
+    # its file (a physical blockade) or that newly attack such a square
+    # (cover the queening lane without occupying it).
+    passed_pawn_path_squares = opponent_advanced_passed_pawn_path_squares(board)
+    if passed_pawn_path_squares:
+        passed_pawn_defence_moves = []
+        for move_uci in move_dic.keys():
+            move_obj = chess.Move.from_uci(move_uci)
+            dummy_board = board.copy()
+            dummy_board.push(move_obj)
+            to_square = move_obj.to_square
+            blockades = to_square in passed_pawn_path_squares
+            covers = bool(dummy_board.attacks(to_square) & passed_pawn_path_squares)
+            if blockades or covers:
+                move_dic[move_uci] = max(move_dic[move_uci], lower_threshold_prob)
+                move_dic[move_uci] *= ADVANCED_PASSED_PAWN_DEFENCE_SF
+                passed_pawn_defence_moves.append(board.san(move_obj))
+        if log:
+            engine.log += "Found moves that blockade or cover an advanced opponent passed pawn's path: {} \n".format(passed_pawn_defence_moves)
+
+    # A fork the opponent can play next move is invisible to every heuristic
+    # above: nothing is en pris yet, so the threat-response and en-pris
+    # blocks see a quiet position. Reward the two defences a human actually
+    # spots over the board -- move the forked piece, or cover the square the
+    # fork lands on. Gated on there being a fork at all, which is rare, so
+    # the scan costs nothing in the common case.
+    fork_threat = opponent_fork_threat(board)
+    if fork_threat is not None:
+        fork_defence_moves = []
+        for move_uci in move_dic.keys():
+            # Every defence gets the boost, including ones already above the
+            # interesting-move threshold: skipping those made it impossible to
+            # promote a genuine defence past a higher-ranked non-defence. See
+            # the matching block in models/alter_move_prob_nn.py.
+            if defends_against_fork(board, move_uci, fork_threat):
+                move_dic[move_uci] = max(move_dic[move_uci], lower_threshold_prob)
+                move_dic[move_uci] *= FORK_DEFENCE_SF
+                fork_defence_moves.append(board.san(chess.Move.from_uci(move_uci)))
+        if log:
+            engine.log += "Opponent threatens a fork on {} worth {}; moves defending it: {} \n".format(
+                chess.square_name(fork_threat["square"]), fork_threat["value"], fork_defence_moves)
 
     # Offering exchanges/exchanging when material up appealing
     # likewise offering exchanges when material down unappealing

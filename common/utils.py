@@ -308,6 +308,43 @@ def _ordered_patch_moves(board, diff):
             other.append(move)
     return touching + other
 
+def highlight_squares_to_chess(highlighted, bottom):
+    """ Map image-space square indices (0-63, row-major from the top-left of
+        the board crop) onto python-chess squares for the given orientation. """
+    if bottom == "w":
+        return {chess.square_mirror(square) for square in highlighted}
+    return {chess.square_mirror(63 - square) for square in highlighted}
+
+
+def highlights_contradict_move(highlighted, move_uci, bottom):
+    """ Whether the site's last-move highlights disagree with the move a scan
+        has just been linked to.
+
+        A linked scan is the one path that is adopted with no second look at
+        the board, so a mid-animation frame that happens to spell a legal
+        move sails straight through. That is how 19...Rae8 became 19...Rab8
+        in the 2026-08-22 game: the rook was caught over b8 a quarter of the
+        way through its slide, a8b8 linked, and the engine spent the rest of
+        the position unable to see the rook it was allowed to take on e8.
+
+        The highlights are an independent reading of the same frame - they
+        mark where the move really came from and went to, and a piece in
+        flight does not carry them with it. Castling and en passant both
+        highlight exactly the moving piece's own from/to pair, so the plain
+        uci squares are the right thing to compare against.
+
+        Only an unambiguous pair is trusted. Anything else - nothing
+        detected, a square hidden under a premove overlay, a stray tint -
+        counts as no signal rather than as disagreement, so this can raise a
+        doubt about a reading but can never invent one out of a blank one.
+    """
+    if len(highlighted) != 2:
+        return False
+    move = chess.Move.from_uci(move_uci)
+    marked = highlight_squares_to_chess(highlighted, bottom)
+    return marked != {move.from_square, move.to_square}
+
+
 def flip_uci(move_uci):
     """ Given a move uci, return a uci which is the move flipped. For example
         g2g3 is flipped to g7g6. """

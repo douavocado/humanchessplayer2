@@ -1137,21 +1137,68 @@ def is_white_turn_from_notation(white_notation_img):
     has_red = (colours[:,0] > 1.1*colours[:,2]).any()
     return not has_red
 
-def check_turn_from_last_moved(fen, board_img, bottom):
-    detected_moved = detect_last_move_from_img(board_img)
-    if len(detected_moved) == 0:
-        return chess.Board(fen).turn == chess.WHITE # didn't detect any new moves. Can only assume it's white turn from opening position
-    
-    board = chess.Board(fen)
+def _mover_colour_count(board, squares, bottom):
+    """
+    Signed tally of how many highlighted squares hold a piece of the side the
+    board says is to move. Negative means the pieces standing on the
+    highlights belong to the *other* side, i.e. the board's turn is right.
+    """
     test_turn = board.turn
     colour_count = 0
-    for square in detected_moved:
+    for square in squares:
         if bottom == "w":
             colour = board.color_at(chess.square_mirror(square))
         else:
             colour = board.color_at(chess.square_mirror(63-square))
         if colour is not None:
             colour_count += 2*((colour == test_turn)-0.5)
+    return colour_count
+
+
+def _turn_from_premove_marks(board, board_img, detected_moved, bottom):
+    """
+    Last-resort turn reading for when the last-move highlights say nothing.
+
+    A queued premove is painted over the last-move highlight, and on Lichess
+    the overlay is opaque enough to hide it completely. Since we almost always
+    premove with the piece we just moved, the square that goes missing is the
+    last move's *destination* - the only one of the pair that carries a piece,
+    and so the only one that says anything about whose turn it is. What is
+    left is a lone empty origin square, which tallies to nothing; that used to
+    be given up on as unreadable, and on Lichess it was the single largest
+    source of turn-detection failures.
+
+    Only reached once the plain highlights have come up blank, so this can
+    turn "no signal" into a signal but can never overturn one. The premove's
+    origin always holds a piece of ours, and a premove is only drawn while we
+    are waiting on the opponent, so the recovered square identifies the mover
+    correctly.
+
+    Returns the same tri-state as check_turn_from_last_moved: True if the
+    board's turn is already right, False if it must be flipped, None if the
+    premove marks say nothing either.
+    """
+    premove_squares = [s for s in detect_premove_squares(board_img)
+                       if s not in detected_moved]
+    if not premove_squares:
+        return None
+    colour_count = _mover_colour_count(
+        board, list(detected_moved) + premove_squares, bottom)
+    if colour_count < 0:
+        return True
+    elif colour_count > 0:
+        return False
+    return None
+
+
+def check_turn_from_last_moved(fen, board_img, bottom):
+    detected_moved = detect_last_move_from_img(board_img)
+    if len(detected_moved) == 0:
+        return chess.Board(fen).turn == chess.WHITE # didn't detect any new moves. Can only assume it's white turn from opening position
+
+    board = chess.Board(fen)
+    test_turn = board.turn
+    colour_count = _mover_colour_count(board, detected_moved, bottom)
     if colour_count == 0:
         if len(detected_moved) > 0:
             if len(detected_moved) % 2 == 0:
@@ -1166,11 +1213,12 @@ def check_turn_from_last_moved(fen, board_img, bottom):
                     return test_turn == chess.WHITE
                 else:
                     # there was an error, expected to be castle move but wasn't
-                    return None
+                    return _turn_from_premove_marks(board, board_img, detected_moved, bottom)
             else:
                 # then it must have been a move followed by an immediate premove with the same piece.
-                # in which case it may be impossible to work out whos turn it is.
-                return None
+                # in which case the piece-bearing square of the pair is hidden
+                # under the premove marking - recover it from there.
+                return _turn_from_premove_marks(board, board_img, detected_moved, bottom)
         # no detected moves, there was error, return None
         return None
     elif colour_count < 0:
@@ -1537,6 +1585,26 @@ RATING_MAX = 3999
 RATING_MIN_CONFIDENCE = 75
 RATING_BRACKETED_MIN_CONFIDENCE = 60
 
+# A rating read is only trusted once this many independent reads agree on it.
+# Reads come from two sources, both needed: several binarisations of one frame
+# (_rating_binarisations, which decorrelates the threshold) and several frames
+# (capture_rating_agreed, which decorrelates the render).
+RATING_MIN_VOTES = 2
+
+# How hard capture_rating_agreed tries before giving up and returning None.
+# A missing rating is free -- decision_logic skips the rating factor entirely
+# -- while a wrong one biases every move time for the whole game, so abstaining
+# is always the better failure.
+RATING_AGREEMENT_ATTEMPTS = 3
+# Small on purpose: the OCR passes on the previous frame already put ~140ms
+# between captures, and this runs at game start with our clock ticking.
+RATING_AGREEMENT_DELAY = 0.03
+
+# Tesseract wants glyphs bigger than the ~10px this row is drawn at, and a
+# margin around the line; both are free at this crop size.
+RATING_UPSCALE = 3
+RATING_BORDER = 12
+
 
 def rating_from_words(words):
     """ Pick the rating out of one OCR'd line of player info.
@@ -1586,14 +1654,175 @@ def rating_from_words(words):
     return None
 
 
-def capture_rating(side, position):
+def _drop_non_glyph_blobs(binary):
+    """ Strip everything from a thresholded info row that cannot be a letter.
+
+        The chess.com row shares its crop with the board's file letter drawn
+        behind it (clipped by the crop, so it spans the full height) and with
+        the player avatar. Both are far taller than the ~10px text, and both
+        drag the global Otsu threshold around: on 2026-08-23 an avatar corner
+        moved it enough that "(1803)" read as "(1203)", which then priced
+        every move of that game against a 587-point rating gap that did not
+        exist.
+
+        Sizes are measured against the median blob height rather than the crop
+        height, so a tight Lichess crop that holds nothing but the number
+        keeps all four digits.
+    """
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(binary, 8)
+    heights = [stats[i, cv2.CC_STAT_HEIGHT] for i in range(1, count)]
+    if not heights:
+        return binary
+    typical = float(np.median(heights))
+    kept = np.zeros_like(binary)
+    for i in range(1, count):
+        height = stats[i, cv2.CC_STAT_HEIGHT]
+        width = stats[i, cv2.CC_STAT_WIDTH]
+        if not (0.45 * typical <= height <= 2.0 * typical):
+            continue
+        if width > 3.0 * typical:
+            continue
+        kept[labels == i] = 255
+    return kept
+
+
+def _rating_binarisations(gray):
+    """ The same crop prepared three ways, most accurate first.
+
+        One global threshold over a crop that also holds a board watermark and
+        an avatar is a coin toss on a digit (see _drop_non_glyph_blobs), so the
+        crop is read more than once and the reads have to agree. The three
+        preparations fail differently: the decluttered pass removes what
+        pollutes the threshold, plain Otsu is what shipped before, and the
+        upscaled pass gives tesseract glyphs at a size it is comfortable with.
+
+        Order matters only for callers that stop early. Over the 291 readable
+        rating rows in logs/sessions the decluttered pass disagreed with the
+        full vote once, plain Otsu seven times and the upscaled pass 42 times,
+        so a one-pass read is the decluttered one.
+    """
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    yield _drop_non_glyph_blobs(otsu)
+    yield otsu
+    scaled = cv2.resize(otsu, None, fx=RATING_UPSCALE, fy=RATING_UPSCALE,
+                        interpolation=cv2.INTER_CUBIC)
+    yield cv2.copyMakeBorder(scaled, RATING_BORDER, RATING_BORDER,
+                             RATING_BORDER, RATING_BORDER,
+                             cv2.BORDER_CONSTANT, value=0)
+
+
+def _is_dropped_digit(short, long_):
+    """ Is `short` just `long_` with one digit lost in the OCR?
+
+        The commonest misread of this row by far: "(1643)" comes back as
+        "643", "(1790)" as "790", "(1771)" as "171". The truncation still
+        parses as a valid rating, so it competes with the correct read instead
+        of being thrown out. Treating it as a vote *for* the longer value is
+        safe in the one direction it is applied (never between two reads of
+        the same length, so two genuinely different ratings cannot merge).
+    """
+    short, long_ = str(short), str(long_)
+    if len(short) + 1 != len(long_):
+        return False
+    remaining = iter(long_)
+    return all(digit in remaining for digit in short)
+
+
+def combine_rating_votes(values, min_votes=RATING_MIN_VOTES):
+    """ The rating that the reads agree on, or None if they don't.
+
+        values: ratings read independently (different binarisations, different
+        frames, or both); None entries are simply reads that found nothing.
+
+        Requires min_votes agreeing reads and no runner-up level with them.
+        Abstaining is the cheap failure here, so ties are not broken.
+    """
+    seen = [value for value in values if value is not None]
+    if not seen:
+        return None
+    tally = {}
+    for value in seen:
+        # a truncated read is evidence for the full-length one, not against it
+        full = next((other for other in seen if _is_dropped_digit(value, other)), value)
+        tally[full] = tally.get(full, 0) + 1
+    ranked = sorted(tally.items(), key=lambda item: -item[1])
+    if ranked[0][1] < min_votes:
+        return None
+    if len(ranked) > 1 and ranked[1][1] == ranked[0][1]:
+        return None
+    return ranked[0][0]
+
+
+def _ocr_rating(processed_img):
+    """ One tesseract pass over one prepared crop. """
+    # Read word by word rather than treating the crop as one number:
+    # int() on the whole string returned None for every chess.com game
+    # (2026-07-25), because the line reads "squishypup (1453)".
+    try:
+        data = pytesseract.image_to_data(processed_img,
+                                         output_type=pytesseract.Output.DICT,
+                                         config='--oem 3 --psm 7')
+    except Exception as e:
+        print("Tesseract Error in capture_rating: {} \n".format(e))
+        _save_rating_error_image(processed_img)
+        return None
+    return rating_from_words(zip(data['text'], (int(c) for c in data['conf'])))
+
+
+def _save_rating_error_image(processed_img):
+    """ Keep the crop that broke tesseract, for debugging. """
+    try:
+        error_dir = "Error_files"
+        if not os.path.exists(error_dir):
+            os.makedirs(error_dir)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        error_filename = os.path.join(error_dir, f"tesseract_error_{timestamp}.png")
+        cv2.imwrite(error_filename, processed_img)
+        print(f"Saved error image to {error_filename}")
+    except Exception as save_error:
+        print(f"Could not save error image: {save_error}")
+
+
+def read_rating(gray, min_votes=RATING_MIN_VOTES):
+    """ Read a rating out of one already-captured, grayscale info row.
+
+        Runs the binarisations in order and stops as soon as enough of them
+        agree, so the usual case costs two tesseract passes and only a
+        contested crop pays for the third.
+    """
+    votes = []
+    for binary in _rating_binarisations(gray):
+        votes.append(_ocr_rating(binary))
+        decided = combine_rating_votes(votes, min_votes=min_votes)
+        if decided is not None:
+            return decided
+    return None
+
+
+def read_rating_once(gray):
+    """ A single pass over the row, for a caller that already holds a read to
+        corroborate and only needs a second opinion on it.
+
+        Answers "what does this frame say", not "what is the rating" -- one
+        pass can never meet the vote threshold on its own. Costs one tesseract
+        call instead of two or three, which is what keeps the confirmation
+        frames in capture_rating_agreed off the clock at game start.
+    """
+    for binary in _rating_binarisations(gray):
+        return _ocr_rating(binary)
+    return None
+
+
+def capture_rating(side, position, single_pass=False):
     """
     Capture and recognize a chess rating from the screen using pytesseract
 
     Args:
-        side (str): Either 'own' or 'opp' 
+        side (str): Either 'own' or 'opp'
         position (str): Either 'start' or 'playing'
-    
+        single_pass (bool): read the crop one way only, for a caller that is
+            confirming a rating it already has (see capture_rating_agreed)
+
     Returns:
         int: The recognized rating, or None if confidence is too low
     """
@@ -1617,48 +1846,47 @@ def capture_rating(side, position):
     
     # Capture screenshot
     rating_img = SCREEN_CAPTURE.capture((RATING_X, y_coord, RATING_WIDTH, RATING_HEIGHT)).copy()
-    
-    img = rating_img[:,:,:3]
-    
-    # Preprocess image using the same approach as the notebook's preprocess_image function
-    # Convert to grayscale (similar to preprocess_image "default" type)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Apply threshold to get image with only black and white
-    _, processed_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Use pytesseract to extract text with confidence
-    custom_config = '--oem 3 --psm 7'
-    
-    try:
-        # Read word by word rather than treating the crop as one number:
-        # int() on the whole string returned None for every chess.com game
-        # (2026-07-25), because the line reads "squishypup (1453)".
-        data = pytesseract.image_to_data(processed_img, output_type=pytesseract.Output.DICT, config=custom_config)
-        return rating_from_words(zip(data['text'], (int(c) for c in data['conf'])))
 
-    except Exception as e:
-        # Handle any pytesseract errors
-        print("Tesseract Error in capture_rating: {} \n".format(e))
-        # Save the image to Error_files/ directory with timestamp for debugging
-        try:
-            # Create Error_files directory if it doesn't exist
-            error_dir = "Error_files"
-            if not os.path.exists(error_dir):
-                os.makedirs(error_dir)
-            
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            error_filename = os.path.join(error_dir, f"tesseract_error_{timestamp}.png")
-            
-            # Save the original and processed images
-            cv2.imwrite(error_filename, img)
-            cv2.imwrite(error_filename.replace(".png", "_processed.png"), processed_img)
-            
-            print(f"Saved error images to {error_filename}")
-        except Exception as save_error:
-            print(f"Could not save error image: {save_error}")
-        return None
+    img = rating_img[:,:,:3]
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    return read_rating_once(gray) if single_pass else read_rating(gray)
+
+
+def capture_rating_agreed(side, attempts=RATING_AGREEMENT_ATTEMPTS,
+                          delay=RATING_AGREEMENT_DELAY):
+    """ A rating trusted enough to pace a whole game by.
+
+        The rating is read once, at game start, and cached for the rest of the
+        game -- so a single bad frame is not a blip, it is a standing bias on
+        every move time (decision_logic scales think time by the rating gap).
+        One frame is therefore not enough: sample several and only return a
+        value the frames agree on.
+
+        Returns the agreed rating, or None if the reads never settle. None is
+        the safe outcome: the engine skips the rating factor without it.
+    """
+    values = []
+    for attempt in range(attempts):
+        if attempt:
+            # a fresh frame, in case the first caught the row mid-render
+            time.sleep(delay)
+        # Read the first frame every way we know; once there is a value on the
+        # table later frames only have to second it, and one pass does that.
+        # A clean game start therefore costs three tesseract calls per side,
+        # which matters because our clock is already running here.
+        single_pass = bool(values) and values[-1] is not None
+        value = capture_rating(side, "start", single_pass=single_pass)
+        if value is None:
+            # the two layouts differ on Lichess (the panels follow the board
+            # orientation); on chess.com they are the same crop
+            value = capture_rating(side, "playing", single_pass=single_pass)
+        values.append(value)
+        decided = combine_rating_votes(values)
+        if decided is not None:
+            return decided
+    return None
 
 if __name__ == "__main__":
     time.sleep(5)

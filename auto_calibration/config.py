@@ -83,8 +83,16 @@ class ChessConfig:
         # turn detection (2026-07-12 game-4 flag).
         'highlight_light': [205, 209, 177],    # Light square with last move highlight
         'highlight_dark': [144, 151, 100],     # Dark square with last move highlight
-        'premove_light': [160, 165, 170],      # Premove on light square
-        'premove_dark': [135, 140, 147],       # Premove on dark square
+        # Lichess paints a queued premove as a near-opaque overlay, so the
+        # square reads the same whether a last-move highlight or the plain
+        # board sits underneath - only the light/dark parity survives.
+        # Measured off 30 real 4K frames (each carrying exactly one premove
+        # pair): light squares 134,138,133 and dark squares 90,87,64, each
+        # on one parity only. The previous values were guesses that landed
+        # within tolerance of the light shade by luck and missed the dark
+        # one entirely, so half of every premove pair was invisible.
+        'premove_light': [134, 138, 133],      # Premove on light square
+        'premove_dark': [90, 87, 64],          # Premove on dark square
     }
     
     def __init__(self, config_file: Optional[str] = None):

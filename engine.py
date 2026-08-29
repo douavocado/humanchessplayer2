@@ -409,6 +409,10 @@ class Engine:
         # of them (see REEVAL_ORDER). Missing out means depth_considered 0 and
         # a ~60cp penalty, which in a quiet position dwarfs the real eval
         # spread -- so this choice is effectively a disqualification draw.
+        # The list order matters as much as its membership: the budget is
+        # spent front to back and whatever it does not reach is disqualified.
+        # ponderer.reeval_sequence preserves this ordering (and re-draws it
+        # only under "random"), so the sort below is what actually decides.
         _k = min(re_evaluations, len(top_human_moves))
         if self.reeval_order == "eval":
             re_evaluate_moves = top_human_moves[:_k]
@@ -420,7 +424,10 @@ class Engine:
             re_evaluate_moves = random.sample(top_human_moves, _k)
         san_re_evaluate_moves = [self.current_board.san(chess.Move.from_uci(x)) for x in re_evaluate_moves]
         time_allowed = target_time - (reval_start - start)
-        self.log += "Re-evaluating moves: {} with depth {} with time allowed {} \n".format(san_re_evaluate_moves, depth, time_allowed)
+        # Search order, not just the shortlist -- except under "random",
+        # which re-draws it inside re_evaluate; there the executed order is
+        # the key order of the results line below.
+        self.log += "Re-evaluating moves: {} ({} order) with depth {} with time allowed {} \n".format(san_re_evaluate_moves, self.reeval_order, depth, time_allowed)
         # Targeted console output
         print(f"[ENGINE] Re-evaluating moves: {san_re_evaluate_moves} with depth {depth}")
         re_evaluations_dic = self._re_evaluate(self.current_board, re_evaluate_moves, no_root_moves, depth=depth, prev_board=prev_board, limit=[depth*no_root_moves, time_allowed])
@@ -776,6 +783,7 @@ class Engine:
                     book_pm[0], book_pm[1])
             else:
                 return_dic["premove"] = None
+            return_dic["ponder_dic"] = None
             self.book_fast_move = None
             self.log += "Opening book fast path: playing {} in {} seconds without analysis. \n".format(
                 return_dic["move_made"], return_dic["time_take"])
@@ -793,6 +801,18 @@ class Engine:
         obvious_move, obvious_move_found = self.check_obvious_move()
         obvious_move_end= time.time()
         self.log += "Obvious move check performed in {} seconds. \n".format(obvious_move_end-obvious_move_start)
+
+        # Check whether the opponent's last move hung material -- this has
+        # to run before _get_time_taken (below), which is what actually
+        # reacts to it by doubling the think time ("act startled"). It used
+        # to run at the very end of make_move, by which point this move's
+        # time was already decided, so it could only ever affect the
+        # *next* move's pacing instead of this one.
+        opp_blunder_check_start = time.time()
+        self.log += "Checking for opponent blunders. \n"
+        self._check_opp_blunder()
+        opp_blunder_check_end = time.time()
+        self.log += "Opponent blunder check took {} seconds. \n".format(opp_blunder_check_end - opp_blunder_check_start)
         if log == True:
             self._write_log()
         if obvious_move_found == True:
@@ -834,16 +854,7 @@ class Engine:
 
         if log == True:
             self._write_log()
-        # Now that we have decided what move are going to make, lets check whether the opponent
-        # hung a big piece the previous move (and it was a blunder), so we can act startled
-        opp_blunder_check_start = time.time()
-        self.log += "Checking for opponent blunders. \n"
-        self._check_opp_blunder()
-        opp_blunder_check_end = time.time()
-        self.log += "Opponent blunder check took {} seconds. \n".format(opp_blunder_check_end- opp_blunder_check_start)
-        if log == True:
-            self._write_log()
-        
+
         # If we are in a hurry, and our time is absolutely low then we also return 
         # a premove for the next move.
         # If we are not in a hurry, look for takeback premoves

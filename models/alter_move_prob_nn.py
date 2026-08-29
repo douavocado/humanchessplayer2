@@ -7,10 +7,14 @@ from common.board_information import (
     phase_of_game, PIECE_VALS, king_danger, get_threatened_board, is_capturing_move, is_capturable,
     is_attacked_by_pinned, is_check_move, is_takeback, is_newly_attacked, is_offer_exchange,
     is_open_file, calculate_threatened_levels, is_weird_move,
-    opponent_can_promote, stops_opponent_promotion
+    opponent_can_promote, stops_opponent_promotion,
+    opponent_advanced_passed_pawn_path_squares,
+    opponent_fork_threat, defends_against_fork,
 )
 from common.utils import patch_fens
-from common.constants import PROMOTION_STOP_SF
+from common.constants import (
+    PROMOTION_STOP_SF, ADVANCED_PASSED_PAWN_DEFENCE_SF, FORK_DEFENCE_SF,
+)
 
 
 class AlterMoveProbNN(nn.Module):
@@ -410,25 +414,28 @@ class AlterMoveProbNN(nn.Module):
     def get_parameters_dict(self):
         """
         Returns a dictionary of all trainable parameters.
+
+        Enumerated from named_parameters() rather than hand-listed. The
+        hand-written version omitted three of the nineteen -- solo_factor_sf,
+        threatened_lvl_diff_sf and interesting_move_threshold -- and because
+        forward_numpy reads this dict with `.get(name, <default>)`, the live
+        engine silently ran those three at their *untrained* defaults from the
+        day the numpy path was introduced: the interesting-move threshold
+        3.06x too high (exp(0.0) vs exp(-1.118)), the threat-block exponent
+        2.24x too strong (1.0 vs 0.446), and the solo-threat magnifier at 1.0
+        vs 1.372. Measured over 7779 held-out 2300+ bullet positions, that
+        cost 1.70pp of top-1 human-move agreement (34.77% vs forward's
+        36.47%) and made the two implementations pick a different top move in
+        21.5% of positions. With all nineteen present they agree 100% wherever
+        the three forward_numpy-only rules (PROMOTION_STOP_SF,
+        ADVANCED_PASSED_PAWN_DEFENCE_SF, FORK_DEFENCE_SF) stay silent.
+
+        Deriving the dict from the parameter list is the point: a hand-written
+        one cannot be kept in step with __init__, and the `.get` defaults in
+        forward_numpy turn any omission into a silent wrong answer rather than
+        a KeyError.
         """
-        return {
-            "weird_move_sd_opening": float(self.weird_move_sd_opening),
-            "weird_move_sd_midgame": float(self.weird_move_sd_midgame),
-            "weird_move_sd_endgame": float(self.weird_move_sd_endgame),
-            "protect_king_sf": float(self.protect_king_sf),
-            "capture_en_pris_sf": float(self.capture_en_pris_sf),
-            "break_pin_sf": float(self.break_pin_sf),
-            "capture_sf": float(self.capture_sf),
-            "capture_sf_king_danger": float(self.capture_sf_king_danger),
-            "capturable_sf": float(self.capturable_sf),
-            "check_sf": float(self.check_sf),
-            "takeback_sf": float(self.takeback_sf),
-            "new_threatened_sf": float(self.new_threatened_sf),
-            "exchange_sf": float(self.exchange_sf),
-            "exchange_k_danger_sf": float(self.exchange_k_danger_sf),
-            "passed_pawn_end_sf": float(self.passed_pawn_end_sf),
-            "repeat_sf": float(self.repeat_sf),
-        }
+        return {name: float(param) for name, param in self.named_parameters()}
 
     def load_params_dict(self, params_dict=None):
         """
@@ -704,6 +711,75 @@ class AlterMoveProbNN(nn.Module):
                     altered_move_dic[move_uci] = altered_move_dic[move_uci] * PROMOTION_STOP_SF
                     promotion_stopping_moves.append(board.san(chess.Move.from_uci(move_uci)))
             log += f"Found moves that stop the opponent promoting: {promotion_stopping_moves} \n"
+
+        # An opponent passed pawn that has already reached the 6th rank (3rd
+        # for a black pawn) is a serious threat two pushes out, well before
+        # opponent_can_promote/stops_opponent_promotion above ever fire (those
+        # only trigger one push away). Reward moves that land on a square
+        # still ahead of it on its file (a physical blockade) or that newly
+        # attack such a square (cover the queening lane without occupying
+        # it -- e.g. a knight eyeing the promotion square). Hand-set
+        # constant (common.constants.ADVANCED_PASSED_PAWN_DEFENCE_SF), not a
+        # learned parameter, same rationale as PROMOTION_STOP_SF: these
+        # positions are rare in the training data.
+        passed_pawn_path_squares = opponent_advanced_passed_pawn_path_squares(board)
+        if passed_pawn_path_squares:
+            passed_pawn_defence_moves = []
+            for move_uci in move_dic.keys():
+                move_obj = chess.Move.from_uci(move_uci)
+                dummy_board = board.copy()
+                dummy_board.push(move_obj)
+                to_square = move_obj.to_square
+                blockades = to_square in passed_pawn_path_squares
+                covers = bool(dummy_board.attacks(to_square) & passed_pawn_path_squares)
+                if blockades or covers:
+                    altered_move_dic[move_uci] = max(altered_move_dic[move_uci] - threshold, 0) + threshold
+                    altered_move_dic[move_uci] = altered_move_dic[move_uci] * ADVANCED_PASSED_PAWN_DEFENCE_SF
+                    passed_pawn_defence_moves.append(board.san(move_obj))
+            log += f"Found moves that blockade or cover an advanced opponent passed pawn's path: {passed_pawn_defence_moves} \n"
+
+        # A fork the opponent can play next move is invisible to every
+        # heuristic above: nothing is en pris yet, so the threat-response and
+        # en-pris blocks see a quiet position. Reward the two defences a
+        # human actually spots over the board -- move the forked piece, or
+        # cover the square the fork lands on. Gated on there being a fork at
+        # all, which is rare (~7% of real positions), so the scan costs
+        # nothing in the common case. Hand-set constant
+        # (common.constants.FORK_DEFENCE_SF), not a learned parameter, same
+        # rationale as PROMOTION_STOP_SF above.
+        fork_threat = opponent_fork_threat(board)
+        if fork_threat is not None:
+            fork_defence_moves = []
+            for move_uci in move_dic.keys():
+                # Every defence gets the boost, including ones the net already
+                # ranks highly. An earlier version skipped anything already at
+                # or above the interesting-move threshold, on the grounds that
+                # multiplying an already-top defence soaks up the boost and
+                # renormalises a buried one straight back down. That reasoning
+                # only holds when the moves above the buried defence are
+                # themselves defences -- and it inverted the whole point of the
+                # boost in the far more common case where they are not: a
+                # genuine defence sitting at rank #2 behind a non-defence could
+                # never be promoted past it, however good it was. That is
+                # exactly how the bot walked into Nxf7+ in
+                # r1bk3r/ppp2p2/5npb/2n1N3/2P1P3/2N5/PP3PP1/R3KB1R b (Ke7 was
+                # rank #2 at 0.112, behind Bg7 at 0.225, and was skipped).
+                #
+                # The gate's other job -- suppressing king moves that satisfy
+                # the geometric test while still dropping material -- is now
+                # done properly by defends_against_fork itself, which re-runs
+                # evaluate_fork on the post-move position instead of
+                # re-deriving the geometry (see common/board_information.py).
+                # A uniform multiplicative boost is rank-preserving among
+                # defences and promotes all of them over non-defences, which
+                # is what this feature is for; the net's ordering among
+                # several genuine defences is a reasonable tiebreak.
+                if defends_against_fork(board, move_uci, fork_threat):
+                    altered_move_dic[move_uci] = max(altered_move_dic[move_uci] - threshold, 0) + threshold
+                    altered_move_dic[move_uci] = altered_move_dic[move_uci] * FORK_DEFENCE_SF
+                    fork_defence_moves.append(board.san(chess.Move.from_uci(move_uci)))
+            log += (f"Opponent threatens a fork on {chess.square_name(fork_threat['square'])} "
+                    f"worth {fork_threat['value']}; moves defending it: {fork_defence_moves} \n")
 
         # Offering exchanges/exchanging when material up appealing
         # likewise offering exchanges when material down unappealing

@@ -90,7 +90,7 @@ def main():
     # Launch the application
     try:
         from app import main
-        main()
+        main(sys.argv[1:])
         return 0
     except Exception as e:
         print(f"Error launching application: {e}")

@@ -80,6 +80,17 @@ ENDGAME_BREADTH_BONUS = 5
 # moves: slightly narrower than base, since any sensible move is fine.
 STANDARD_BREADTH_DELTA = -1
 
+# Floor for the same "plenty of good moves" branch. At DIFFICULTY=3 this
+# branch (base_no + STANDARD_BREADTH_DELTA) already lands at 2, but a lower
+# DIFFICULTY or a future negative per-phase/strength adjustment could push it
+# to 1 -- collapsing root_moves to a single NN candidate with nothing to
+# compare it against before it's played. Unlike the tactical/forced branches
+# above (which floor at 1 deliberately -- tunnel vision on a near-forced
+# move is realistic), a quiet/flat position with "plenty of good moves" is
+# exactly the case where a human would glance at a second candidate, so this
+# branch keeps a wider floor.
+STANDARD_BREADTH_FLOOR = 2
+
 # ---------------------------------------------------------------------------
 # 3. Search breadth: mood adjustments
 # ---------------------------------------------------------------------------
@@ -283,6 +294,33 @@ STOCKFISH_HASH_MB = 128
 
 
 # ---------------------------------------------------------------------------
+# 7b. Endgame quick-scan depth -- MEASURED AND REJECTED (2026-08-05)
+# ---------------------------------------------------------------------------
+# Don't re-add this: giving low-piece positions a deeper quick scan
+# (depth 14 / 120ms instead of depth 10 under a 20ms cap, once total
+# material drops to ~12 pieces) is *more accurate and plays worse*. Isolated
+# as its own arm over 75 endgame scrambles it nearly doubled thrown won
+# games (18 -> 33) while moving no human-likeness metric at all: repeat rate
+# 0.035 -> 0.032, undo rate 0.109 -> 0.099.
+#
+# The reason is the flag-race autopilot downstream (FLAG_RACE_* in
+# common/constants.py). Under 10s the bot is deliberately not allowed to
+# tell "winning by a lot" from "forced mate" -- both are capped to the same
+# perceived value, which is what produces the human catastrophe tail. A
+# deeper scan finds mate for most candidates in a won ending, and
+# extend_mate_score then amplifies mate distance by 100cp per move, so the
+# whole candidate set saturates that cap and goes flat -- destroying the
+# genuine centipawn spread the shallow scan happened to preserve. The
+# accuracy is thrown away by the blindfold and takes real information with
+# it. Any future attempt needs the cap logic reworked in the same change.
+#
+# (Aimless shuffling in a decided ending is a separate problem that depth
+# never addressed anyway -- a rook-up position spreads under 100cp across
+# every legal move even at depth 16. That is what the PROGRESS_* terms in
+# common/constants.py are for.)
+
+
+# ---------------------------------------------------------------------------
 # 8. Re-evaluation ordering (Engine.get_human_move)
 # ---------------------------------------------------------------------------
 # Which root moves get the deeper second look, when there is not time for all
@@ -331,5 +369,51 @@ STOCKFISH_HASH_MB = 128
 # The independent argument, which does not depend on any metric: uniformly
 # random sampling of which candidates to calculate was never a defensible
 # model of human thought. A player calculates the moves that look plausible.
+#
+# ⚠️ The t1 figures above are STALE for "human" and "eval", and understate
+# them. They were measured while ponderer.re_evaluate opened with an
+# unconditional random.shuffle, so the ordering computed here survived only
+# as far as the shortlist: which candidates were searched *first*, and hence
+# which ones the budget failed to reach, stayed a uniform draw. Fixed
+# 2026-08-22 (ponderer.reeval_sequence), after a live game where Nxa1 won
+# the position's human prior at p=0.888, was shortlisted first, shuffled
+# last, was never reached, and lost the comparison on the depth-0 penalty.
+# Re-run the four arms before quoting an effect size for this knob. Note the
+# direction of the correction is toward the bot playing better, which is the
+# axis "eval" was rejected on, so it wants measuring rather than assuming.
 REEVAL_ORDER = "human"
 REEVAL_ORDERS = ("random", "human", "eval")
+
+# Minimum number of our own candidate moves the ponder shortlists for a
+# position it is preparing a reply to (ponderer.ponder). The shortlist is
+# `[:search_width]` off the altered NN ranking and is then handed to
+# re_evaluate, so at search_width 1 the engine never gets a choice: the single
+# shortlisted move is the argmax by construction, Stockfish is asked "which of
+# these one moves is best", and the NN's top pick is cached and played
+# instantly on the opponent's next move -- skipping check_obvious_move and any
+# re-evaluation, because a cached reply is played the moment the position is
+# recognised.
+#
+# Two logged losses came through that path. 2026-08-24, after Nxe4+ dxe4:
+# Rd2+ was cached (NN p=0.977) and played in one second, vacating the c-file
+# and turning +380 into -432; Rxc8 won a rook outright. 2026-08-25, after
+# dxc6+ bxc6: Bxc6+ was cached and played, +569 -> +233, a bishop for a pawn.
+# In the second case the raw net had it right (Bd3 0.2276 ahead of Bxc6+
+# 0.1505) and the alteration's capture (x1.173) and check (x1.231) multipliers
+# flipped the order -- so the shortlist was wrong even though the policy was
+# not, which is exactly the case a second opinion is for. Replaying that
+# position with the ponder's own 20ms budget, root_moves ['Bxc6+'] returns
+# Bxc6+ at +227 and ['Bxc6+', 'Bd3'] returns Bd3 at +615.
+#
+# Costs no wall clock: the ponder's per-position budget is a fixed
+# chess.engine.Limit, so a second candidate splits the same time rather than
+# adding to it.
+#
+# ⚠️ Scoped to the ponder's shortlist of OUR moves only. It deliberately does
+# NOT touch ponder_moves' `[:search_width]` slice, which narrows the
+# OPPONENT's replies when scoring one of our candidates -- that narrowing is
+# load-bearing ("simulates human foresight not being exhaustive", see
+# re_evaluate) and is shared with the live move path, so widening it is a
+# separate decision with its own strength implications. Nor does it floor
+# decide_breadth, which is the calibrated strength knob.
+PONDER_MIN_ROOT_MOVES = 2
