@@ -25,6 +25,7 @@ from chessimage.image_scrape_utils import (
     capture_bottom_clock,
     capture_top_clock,
     get_fen_from_image,
+    get_game_controls_position,
     read_clock,
 )
 
@@ -51,6 +52,18 @@ MODAL_DARK_FRACTION = 0.20
 
 # Confidence needed to name which ending the modal shows.
 TITLE_MATCH_THRESHOLD = 0.75
+
+# The title is searched over a band of its own, not the dark-fraction band
+# above. Those two ratios were measured together on one screen, and the modal
+# does not in fact scale with the board: on a 536px board it is 735px tall,
+# 1.37x the board, against 0.26x on the 1872px board they were measured from.
+# So a band sized to catch the modal *body* at one board size can sit
+# entirely below the title at another - which silently costs nothing but the
+# ending's name, since presence is what ends the game. Searching the whole
+# board crop instead makes naming board-size-independent, and costs only a
+# larger matchTemplate over a region that is by then known to be modal.
+# Presence detection is deliberately left on its own measured band.
+TITLE_BAND_HALF_RATIO = 0.5
 
 # --- lobby geometry -------------------------------------------------------
 # Offsets are in board steps from the board origin, matching how the Lichess
@@ -196,6 +209,21 @@ class ChessComSite(Site):
         cx, cy = w // 2, h // 2
         return board[cy - half_h:cy + half_h, cx - half_w:cx + half_w]
 
+    def _title_band(self):
+        """The crop the modal title is searched in, or None.
+
+        Wider and taller than _centre_band: see TITLE_BAND_HALF_RATIO.
+        """
+        board = capture_board()
+        if board is None or board.size == 0:
+            return None
+        h, w = board.shape[:2]
+        half_w = int(w * TITLE_BAND_HALF_RATIO)
+        half_h = int(h * TITLE_BAND_HALF_RATIO)
+        cx, cy = w // 2, h // 2
+        return board[max(0, cy - half_h):cy + half_h,
+                     max(0, cx - half_w):cx + half_w]
+
     @staticmethod
     def _dark_fraction(band):
         return float((band.max(axis=2) < MODAL_DARK_MAX_CHANNEL).mean())
@@ -203,7 +231,7 @@ class ChessComSite(Site):
     def _identify_ending(self, band):
         """Best-matching modal title within the band, or None."""
         refs = self._title_references()
-        if not refs:
+        if not refs or band is None or band.size == 0:
             return None, 0.0
         try:
             band_gray = cv2.cvtColor(np.ascontiguousarray(band), cv2.COLOR_BGR2GRAY)
@@ -385,6 +413,29 @@ class ChessComSite(Site):
                           int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT]))
         return x0 + bx + bw // 2, y0 + by + bh // 2
 
+    def _game_controls_box(self):
+        """
+        Where to look for the move-navigation bar, in absolute pixels.
+
+        Prefers the box measured during calibration. The board-relative
+        constant is only a fallback for profiles fitted before the bar was
+        measured, and it is a poor one: chess.com sizes the side panel from
+        the viewport, not from the board, so the bar keeps its absolute size
+        (62px on one device, 65px on another) while the board changes by a
+        factor of three. Expressing it in board steps therefore only works at
+        the board size it was fitted on. On a 536px board the constant lands
+        in the middle of the moves list, reads no bar, and every game start is
+        rejected - the bot seeks, the game begins, and it waits out the full
+        new-game timeout staring at a live board.
+        """
+        measured = get_game_controls_position()
+        if measured is not None:
+            return measured
+        return (int(START_X + GAME_CONTROLS_BOX[0] * STEP),
+                int(START_Y + GAME_CONTROLS_BOX[1] * STEP),
+                int(GAME_CONTROLS_BOX[2] * STEP),
+                int(GAME_CONTROLS_BOX[3] * STEP))
+
     def _game_controls_visible(self):
         """
         Whether the move-navigation bar is on screen, i.e. whether this is a
@@ -395,10 +446,7 @@ class ChessComSite(Site):
         the captured area entirely) degrades to the old behaviour rather than
         wedging the bot into never finding a game.
         """
-        x0 = int(START_X + GAME_CONTROLS_BOX[0] * STEP)
-        y0 = int(START_Y + GAME_CONTROLS_BOX[1] * STEP)
-        w = int(GAME_CONTROLS_BOX[2] * STEP)
-        h = int(GAME_CONTROLS_BOX[3] * STEP)
+        x0, y0, w, h = self._game_controls_box()
         try:
             band = SCREEN_CAPTURE.capture((x0, y0, w, h))
         except Exception:
@@ -534,7 +582,7 @@ class ChessComSite(Site):
             dark = self._dark_fraction(band)
             if dark < MODAL_DARK_FRACTION:
                 return None
-            name, score = self._identify_ending(band)
+            name, score = self._identify_ending(self._title_band())
             return GameEndSignal(
                 method="modal",
                 result=name,

@@ -23,7 +23,12 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 # Imported after the path append so this module still works when it is loaded
 # directly rather than as part of the package from the repo root.
-from common.platform_compat import make_screen_capture
+from common.platform_compat import configure_tesseract, make_screen_capture
+
+# pytesseract only wraps the tesseract executable, which pip cannot install.
+# Resolve it now so the rating OCR below fails loudly at startup if it is
+# genuinely absent, rather than silently returning None on every game.
+configure_tesseract()
 
 try:
     from auto_calibration.config import get_config
@@ -121,6 +126,23 @@ def get_board_info():
     step = board['width'] // 8  # Chess board is 8x8
     return board['x'], board['y'], step
 
+def get_game_controls_position():
+    """
+    Get the measured move-navigation bar box as (x, y, width, height).
+
+    Returns None when the profile carries no measurement - the normal state
+    for Lichess profiles, and for chess.com profiles fitted before the bar
+    was measured. Callers keep their previous behaviour in that case; there
+    is deliberately no default, because the bar is sized by the viewport
+    rather than by the board and so cannot be estimated from board geometry.
+    """
+    coords = get_coordinates()
+    controls = coords.get('game_controls')
+    if not controls:
+        return None
+    return (controls['x'], controls['y'],
+            controls['width'], controls['height'])
+
 def get_clock_info(clock_type, state="play"):
     """Get clock position info."""
     coords = get_coordinates()
@@ -142,6 +164,18 @@ try:
     # Board coordinates
     START_X, START_Y, STEP = get_board_info()
     PIECE_STEP = STEP
+    # The captured board size, kept separate from 8 * STEP on purpose.
+    # STEP is an integer, but a board is not obliged to be a multiple of
+    # eight pixels: a 540px board renders as squares of 67, 68, 67, 68...
+    # for an average pitch of 67.5. get_fen_from_image already slices with a
+    # float step (width / 8.0) and reproduces those alternating boundaries
+    # exactly - but only if it is handed the whole board. Cropping 8 * STEP
+    # instead trims it to 536 and forces a uniform 67px grid, which slips a
+    # pixel every other square and is 4px out by the right-hand file. That
+    # drift makes one piece render differently depending on its column, and
+    # since flipping the board moves every piece to a new column, templates
+    # cut while playing white stop matching while playing black.
+    BOARD_SIZE = coords['board']['width']
     
     # Clock coordinates (using 'play' state as default)
     BOTTOM_CLOCK_X, BOTTOM_CLOCK_Y, CLOCK_WIDTH, CLOCK_HEIGHT = get_clock_info('bottom_clock', 'play')
@@ -186,6 +220,7 @@ except Exception as e:
     print("Using fallback hardcoded coordinates")
     # Fallback values
     START_X, START_Y, STEP, PIECE_STEP = 543, 179, 106, 106
+    BOARD_SIZE = 8 * STEP
     BOTTOM_CLOCK_X, BOTTOM_CLOCK_Y = 1420, 742
     BOTTOM_CLOCK_Y_START, BOTTOM_CLOCK_Y_START_2 = 756, 770
     BOTTOM_CLOCK_Y_END, BOTTOM_CLOCK_Y_END_2, BOTTOM_CLOCK_Y_END_3 = 811, 747, 776
@@ -1024,9 +1059,9 @@ def capture_result(arena=False):
 
 def capture_board(shift=False):
     if shift:
-        im = SCREEN_CAPTURE.capture((int(START_X-7),int(START_Y), int(8*STEP), int(8*STEP))).copy()
+        im = SCREEN_CAPTURE.capture((int(START_X-7),int(START_Y), int(BOARD_SIZE), int(BOARD_SIZE))).copy()
     else:
-        im = SCREEN_CAPTURE.capture((int(START_X),int(START_Y), int(8*STEP), int(8*STEP))).copy()
+        im = SCREEN_CAPTURE.capture((int(START_X),int(START_Y), int(BOARD_SIZE), int(BOARD_SIZE))).copy()
     img= im[:,:,:3]
     return img
 
@@ -1039,7 +1074,7 @@ def capture_all_regions(state="play"):
     """
     # Get all region coordinates
     board_x, board_y = int(START_X), int(START_Y)
-    board_size = int(8 * STEP)
+    board_size = int(BOARD_SIZE)
     
     try:
         top_x, top_y, clock_w, clock_h = get_clock_info('top_clock', state)

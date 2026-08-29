@@ -29,7 +29,7 @@ from common.move_timing import (MOVE_DELAY, DRAG_MOVE_DELAY, CLICK_MOVE_DELAY,
 from common.utils import patch_fens, check_safe_premove, scramble_fire_veto, scraped_fen_sanity_issues, InvalidPositionError, premove_render_placement, highlights_contradict_move
 from common.logging import get_logger, LogLevel, LegacyLoggerAdapter
 
-from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, capture_board, capture_top_clock, premove_is_pending,
+from chessimage.image_scrape_utils import (SCREEN_CAPTURE, START_X, START_Y, STEP, BOARD_SIZE, capture_board, capture_top_clock, premove_is_pending,
                                            capture_bottom_clock, capture_all_regions, get_fen_from_image, check_fen_last_move_bottom,
                                            read_clock, find_initial_side, detect_last_move_from_img, check_turn_from_last_moved,
                                            capture_rating_agreed)
@@ -413,7 +413,11 @@ def click_mouse(x, y, tolerance=0, clicks=1, duration=0.5):
 
 
 def scrape_move_change(side):
-    im = SCREEN_CAPTURE.capture((int(START_X),int(START_Y), int(8*STEP), int(8*STEP)))
+    # BOARD_SIZE, not 8 * STEP: a board is not obliged to be a multiple of
+    # eight pixels, and capture_board takes the calibrated width. Cropping a
+    # different rectangle here would have this function and the FEN scraper
+    # disagreeing about which pixels are which square.
+    im = SCREEN_CAPTURE.capture((int(START_X),int(START_Y), int(BOARD_SIZE), int(BOARD_SIZE)))
     return get_move_change(im[:,:,:3], bottom=side)
 
 def get_move_change(image, bottom='w'):

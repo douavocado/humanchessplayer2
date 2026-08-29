@@ -59,11 +59,17 @@ def load_ground_truth(screenshot_path: Path) -> dict:
             res['fen'] = lines[0].strip()
             for line in lines[1:]:
                 line = line.lower().strip()
+                # int() here rejected any time with tenths - which is every
+                # clock a chess.com sidecar carries, since the PGN %clk source
+                # records them - and the bare except swallowed it, so those
+                # frames silently counted as "no ground truth" instead of
+                # being checked. Truncate rather than round: a clock showing
+                # "2:58" with 178.5s left is displaying 178.
                 if line.startswith('top:'):
-                    try: res['top_time'] = int(line.split(':')[1])
+                    try: res['top_time'] = int(float(line.split(':')[1]))
                     except: pass
                 elif line.startswith('bottom:'):
-                    try: res['bottom_time'] = int(line.split(':')[1])
+                    try: res['bottom_time'] = int(float(line.split(':')[1]))
                     except: pass
                 elif line.startswith('result:'):
                     res['result'] = line.split(':')[1].strip()
@@ -75,6 +81,45 @@ def load_ground_truth(screenshot_path: Path) -> dict:
 def extract_board_position(fen: str) -> str:
     """Extract just the board position part of a FEN (first field)."""
     return fen.split()[0] if fen else ""
+
+
+def game_over_by_modal(board_img):
+    """
+    Whether chess.com's result modal is covering the board centre.
+
+    Mirrors ChessComSite's own game-end test, reading its thresholds from the
+    site module so the two cannot drift apart. Takes the board crop rather
+    than capturing the screen, which is the only difference from production.
+
+    Args:
+        board_img: The cropped board region.
+
+    Returns:
+        True if the centre band is modal-dark.
+    """
+    try:
+        from sites.chess_com import (
+            MODAL_DARK_FRACTION,
+            MODAL_DARK_MAX_CHANNEL,
+            MODAL_HALF_HEIGHT_RATIO,
+            MODAL_HALF_WIDTH_RATIO,
+        )
+    except ImportError:
+        return False
+
+    if board_img is None or board_img.size == 0:
+        return False
+
+    h, w = board_img.shape[:2]
+    half_w = int(w * MODAL_HALF_WIDTH_RATIO)
+    half_h = int(h * MODAL_HALF_HEIGHT_RATIO)
+    cx, cy = w // 2, h // 2
+    band = board_img[cy - half_h:cy + half_h, cx - half_w:cx + half_w]
+    if band.size == 0:
+        return False
+
+    dark = float((band.max(axis=2) < MODAL_DARK_MAX_CHANNEL).mean())
+    return dark >= MODAL_DARK_FRACTION
 
 
 def compare_board_positions(detected: str, ground_truth: str) -> dict:
@@ -441,6 +486,7 @@ def main():
 
     coords = config.get_coordinates()
     board = coords['board']
+    site = config.get_site()
 
     shots = iter_screenshots(screenshots_dir)
     if not shots:
@@ -870,15 +916,26 @@ def main():
         detected_false_end = False
         if not is_actual_end:
             fp_stats['total_non_end'] += 1
-            for end_state in ['end1', 'end2', 'end3']:
-                if 'bottom_clock' in coords and end_state in coords['bottom_clock']:
-                    c = coords['bottom_clock'][end_state]
-                    crop = img[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
-                    # Basic game_over_found logic just checks for any readable clock at end position
-                    if read_clock(crop) is not None:
-                        detected_false_end = True
-                        fp_stats['false_ends'] += 1
-                        break
+            if site == "chess_com":
+                # chess.com's clock does not move between game states, so
+                # "a clock reads at the end-state coordinates" is true of
+                # every in-play frame and would score a 100% false-end rate
+                # against a perfectly good profile. The site ends a game on
+                # the dark result modal over the board centre instead, so
+                # that is what has to be exercised here.
+                if game_over_by_modal(board_img):
+                    detected_false_end = True
+                    fp_stats['false_ends'] += 1
+            else:
+                for end_state in ['end1', 'end2', 'end3']:
+                    if 'bottom_clock' in coords and end_state in coords['bottom_clock']:
+                        c = coords['bottom_clock'][end_state]
+                        crop = img[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
+                        # Basic game_over_found logic just checks for any readable clock at end position
+                        if read_clock(crop) is not None:
+                            detected_false_end = True
+                            fp_stats['false_ends'] += 1
+                            break
         
         # Result detection (only for end states)
         detected_result = None

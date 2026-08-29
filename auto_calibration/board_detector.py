@@ -626,3 +626,174 @@ def detect_board_from_screenshot() -> Optional[Dict]:
         return None
     
     return detect_board(screenshot)
+
+
+# --- sub-pixel grid refinement ---------------------------------------------
+# The contour-based detection above locates the board to within a few pixels,
+# which sounds harmless and is not. Piece templates are cut from one square
+# and matched against every other, so an error in the *pitch* accumulates
+# across the board: 0.5px per square puts column 7 four pixels out of step
+# with column 0. The same piece then presents a different sub-tile offset
+# depending on where it stands, and - because flipping the board moves every
+# piece to a new column - a template cut while playing white can fail while
+# playing black. That is not hypothetical: a profile fitted at size 536 on a
+# board whose true pitch was 67.5 (size 540) scraped the starting position as
+# "rbbqkbnr", its a8 rook matching the pawn template better than the rook
+# one, so no game played as black was ever recognised as starting.
+#
+# The square boundaries themselves are a far better ruler than the board
+# outline: there are seven of them per axis, they are high-contrast, and
+# fitting a line through them averages out the noise in any single edge.
+REFINE_INSET_RATIO = 0.10      # ignore the outer border when profiling
+REFINE_PITCH_SPAN = 0.06       # search +/- this fraction around the estimate
+REFINE_PITCH_STEP = 0.02       # px
+REFINE_OFFSET_STEP = 0.25      # px
+REFINE_MIN_CONTRAST = 0.15     # below this the grid is not believed
+REFINE_MAX_SHIFT_RATIO = 0.05  # reject implausible corrections
+
+
+def _sample(profile: np.ndarray, positions: np.ndarray) -> float:
+    """Sum a 1-D profile at fractional positions, linearly interpolated."""
+    lo = np.floor(positions).astype(int)
+    frac = positions - lo
+    return float(((1 - frac) * profile[lo] + frac * profile[lo + 1]).sum())
+
+
+def _best_phase(profile: np.ndarray, pitch: float) -> Tuple[float, float]:
+    """
+    Best alignment of a seven-tooth comb of spacing `pitch` to a profile.
+
+    Scoring all seven boundaries jointly is what makes this robust. Taking
+    the strongest gradient near each boundary independently - the obvious
+    approach - lets a piece's own edge win a window and drag the fit, which
+    is exactly how the vertical axis of a starting position goes wrong: the
+    back rank is solid with pieces and their outlines are stronger than the
+    square boundary beneath them.
+
+    Args:
+        profile: Absolute intensity change along one axis.
+        pitch: Square pitch to test.
+
+    Returns:
+        (score, offset) for the best-scoring alignment.
+    """
+    teeth = pitch * np.arange(1, 8)
+    best = (-np.inf, 0.0)
+    offset = -pitch / 2.0
+    while offset <= pitch / 2.0:
+        positions = offset + teeth
+        if positions.min() >= 1 and positions.max() <= len(profile) - 2:
+            score = _sample(profile, positions)
+            if score > best[0]:
+                best = (score, offset)
+        offset += REFINE_OFFSET_STEP
+    return best
+
+
+def _phase_contrast(profile: np.ndarray, pitch: float, offset: float) -> float:
+    """
+    How much a fitted grid stands out against its own anti-phase.
+
+    Validating by "is there a strong peak near each predicted boundary"
+    fails on a starting position: the back ranks are solid with pieces whose
+    outlines are stronger than the square boundary beneath them, so the
+    check finds a peak 7px away and rejects a fit that was in fact exact.
+    Comparing the comb's score against the same comb shifted half a pitch
+    asks the question that actually matters - are the boundaries where this
+    grid says they are, rather than between them - and is indifferent to
+    whatever else the squares happen to contain.
+
+    Args:
+        profile: Absolute intensity change along one axis.
+        pitch: Fitted square pitch.
+        offset: Fitted grid offset.
+
+    Returns:
+        Contrast in [0, 1]; 0 when the grid explains nothing.
+    """
+    teeth = pitch * np.arange(1, 8)
+    on = offset + teeth
+    off = offset + pitch / 2.0 + teeth
+    if (min(on.min(), off.min()) < 1
+            or max(on.max(), off.max()) > len(profile) - 2):
+        return 0.0
+    a, b = _sample(profile, on), _sample(profile, off)
+    if a + b <= 0:
+        return 0.0
+    return (a - b) / (a + b)
+
+
+def refine_board_grid(image: np.ndarray,
+                      board_detection: Dict) -> Dict:
+    """
+    Refine a board detection by measuring its square boundaries.
+
+    One pitch is fitted for both axes at once, because the board is square:
+    that keeps the result square by construction and doubles the evidence
+    behind the number that matters most.
+
+    Falls back to the input detection whenever the fit is not clean - a bad
+    refinement would be worse than none, since every template and every
+    coordinate downstream is cut relative to this box.
+
+    Args:
+        image: Full-screen BGR image.
+        board_detection: Detection with 'x', 'y', 'size'.
+
+    Returns:
+        A detection dict with refined 'x', 'y' and 'size'. Carries
+        'refined': True when the measurement was applied.
+    """
+    if image is None or image.size == 0 or not board_detection:
+        return board_detection
+
+    x, y, size = (board_detection['x'], board_detection['y'],
+                  board_detection['size'])
+    height, width = image.shape[:2]
+    if x < 0 or y < 0 or x + size > width or y + size > height or size < 32:
+        return board_detection
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    board = gray[y:y + size, x:x + size]
+    inset = int(size * REFINE_INSET_RATIO)
+    step = size / 8.0
+
+    gx = np.abs(np.diff(board[inset:size - inset, :], axis=1)).mean(axis=0)
+    gy = np.abs(np.diff(board[:, inset:size - inset], axis=0)).mean(axis=1)
+
+    best = None
+    pitch = step * (1 - REFINE_PITCH_SPAN)
+    while pitch <= step * (1 + REFINE_PITCH_SPAN):
+        score_x, offset_x = _best_phase(gx, pitch)
+        score_y, offset_y = _best_phase(gy, pitch)
+        total = score_x + score_y
+        if best is None or total > best[0]:
+            best = (total, pitch, offset_x, offset_y)
+        pitch += REFINE_PITCH_STEP
+
+    if best is None:
+        return board_detection
+    _, pitch, offset_x, offset_y = best
+
+    if min(_phase_contrast(gx, pitch, offset_x),
+           _phase_contrast(gy, pitch, offset_y)) < REFINE_MIN_CONTRAST:
+        return board_detection
+
+    # Reported as measured, including sizes that are not a multiple of
+    # eight: a 540px board renders as 67, 68, 67, 68... and the FEN slicer
+    # reproduces exactly that from a float step, so rounding the box to suit
+    # an integer pitch would throw away the precision it needs.
+    new_size = int(round(pitch * 8))
+    new_x = int(round(x + offset_x))
+    new_y = int(round(y + offset_y))
+
+    limit = max(2.0, size * REFINE_MAX_SHIFT_RATIO)
+    if (abs(new_size - size) > limit or abs(new_x - x) > limit
+            or abs(new_y - y) > limit):
+        return board_detection
+    if new_x < 0 or new_y < 0 or new_x + new_size > width or new_y + new_size > height:
+        return board_detection
+
+    refined = dict(board_detection)
+    refined.update({'x': new_x, 'y': new_y, 'size': new_size, 'refined': True})
+    return refined

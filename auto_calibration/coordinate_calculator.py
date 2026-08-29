@@ -86,6 +86,8 @@ class CoordinateCalculator:
         self.board = board_detection
         self.clocks = clock_detection
         self.site = site or DEFAULT_SITE
+        self.player_rows = {}
+        self.game_controls = None
         self.scale = 1.0
 
         if board_detection:
@@ -103,6 +105,28 @@ class CoordinateCalculator:
     def set_clocks(self, clock_detection: Dict):
         """Set clock detection result."""
         self.clocks = clock_detection
+
+    def set_player_rows(self, player_rows: Optional[Dict]):
+        """
+        Set measured chess.com player-row boxes, if any were detected.
+
+        Args:
+            player_rows: {'top': {x,y,width,height}, 'bottom': {...}}, either
+                key optional. Rows that are absent fall back to the
+                board-relative estimate.
+        """
+        self.player_rows = player_rows or {}
+
+    def set_game_controls(self, game_controls: Optional[Dict]):
+        """
+        Set the measured chess.com move-navigation bar, if it was detected.
+
+        Args:
+            game_controls: {x, y, width, height}, or None. Omitted from the
+                profile when None, which leaves sites/chess_com.py on its
+                board-relative constant.
+        """
+        self.game_controls = game_controls or None
     
     def calculate_all(self) -> Dict:
         """
@@ -168,7 +192,15 @@ class CoordinateCalculator:
         
         # Calculate resign button position (below notation panel)
         coordinates['resign_button'] = self._calculate_resign_button(coordinates['notation'])
-        
+
+        # The move-navigation bar, when it was measured. Unlike everything
+        # above it is not derived from the board at all: chess.com sizes the
+        # side panel from the viewport, so the bar keeps its absolute size
+        # while the board scales, and a board-relative estimate would be
+        # wrong at every board size but the one it was fitted on.
+        if self.site == "chess_com" and self.game_controls:
+            coordinates['game_controls'] = dict(self.game_controls)
+
         return coordinates
     
     def _format_clock_coords(self, clock_states: Dict) -> Dict:
@@ -225,11 +257,20 @@ class CoordinateCalculator:
         def row(y):
             return {'x': x, 'y': y, 'width': width, 'height': height}
 
+        # A measured row always beats the board-relative estimate above. The
+        # row's furniture - avatar, flag, membership icons - is not a fixed
+        # fraction of the board, so these steps only hold at the board size
+        # they were measured at: on a 536px board they put the crop on the
+        # avatar, 56px left of and 50px above the actual text.
+        measured = getattr(self, 'player_rows', None) or {}
+        top = measured.get('top')
+        bottom = measured.get('bottom')
+
         return {
-            'opp_white': row(opp_y),
-            'opp_black': row(opp_y),
-            'own_white': row(own_y),
-            'own_black': row(own_y),
+            'opp_white': dict(top) if top else row(opp_y),
+            'opp_black': dict(top) if top else row(opp_y),
+            'own_white': dict(bottom) if bottom else row(own_y),
+            'own_black': dict(bottom) if bottom else row(own_y),
         }
 
     def _calculate_ratings(self, clock_x: int, clock_detection: Optional[Dict]) -> Dict:

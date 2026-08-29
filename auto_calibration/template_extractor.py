@@ -297,6 +297,151 @@ class TemplateExtractor:
         
         return extracted
     
+    def extract_digits_by_segmentation(
+        self,
+        clock_img: np.ndarray,
+        displayed_text: str
+    ) -> Dict[int, np.ndarray]:
+        """
+        Extract digit templates by segmenting the clock, not by fixed offsets.
+
+        extract_digits_from_clock slices at four calibrated x-positions, which
+        assumes the clock always renders four digits in the same places. That
+        holds for Lichess's zero-padded MM:SS and nowhere else: chess.com
+        drops the leading zero ("2:58" is three glyphs) and adds a tenths
+        digit below twenty seconds ("0:04.9"), so a fixed d1..d4 slicing
+        mislabels every digit it cuts.
+
+        Segmenting instead makes the layout irrelevant. The glyph boundaries
+        come from a horizontal projection and the digit/separator split from
+        vertical extent - the same rules production's read_clock uses, so a
+        template cut here is cut the way it will later be matched.
+
+        Args:
+            clock_img: The clock crop (BGR or grayscale).
+            displayed_text: The clock exactly as rendered, e.g. "2:58" or
+                "0:04.9". Its digits label the segmented glyphs in order.
+
+        Returns:
+            Mapping of digit value to template. Empty if the segmentation
+            did not produce exactly as many digits as the text has - a
+            mismatch means the crop or the expected time is wrong, and a
+            mislabelled digit template is worse than a missing one.
+        """
+        if clock_img is None or clock_img.size == 0:
+            return {}
+
+        expected = [int(c) for c in displayed_text if c.isdigit()]
+        if not expected:
+            return {}
+
+        if clock_img.ndim == 3:
+            gray = cv2.cvtColor(clock_img, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = clock_img.copy()
+
+        # chess.com's active clock is three-tone (dark digits on a light chip
+        # on a dark page), which Otsu handles badly; the background-relative
+        # binarisation exists for exactly that case. Neither wins everywhere,
+        # so try both and accept whichever segments into the expected count.
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, otsu = cv2.threshold(blur, 0, 255,
+                                cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        if np.mean(otsu) > 127:
+            otsu = 255 - otsu
+
+        candidates = [otsu]
+        try:
+            from chessimage.image_scrape_utils import _background_relative_binary
+            candidates.append(_background_relative_binary(gray))
+        except ImportError:
+            pass
+
+        for binary in candidates:
+            regions = self._segment_glyphs(binary)
+            if len(regions) != len(expected):
+                continue
+
+            extracted = {}
+            for value, (start, end) in zip(expected, regions):
+                glyph = self._crop_digit(binary, start, end)
+                if glyph is not None:
+                    extracted[value] = glyph
+            return extracted
+
+        return {}
+
+    @staticmethod
+    def _segment_glyphs(binary: np.ndarray) -> List[Tuple[int, int]]:
+        """
+        Split a binarised clock into digit column ranges.
+
+        Mirrors read_clock's segmentation: contiguous runs of lit columns are
+        glyph candidates, and a run is a digit only if it is tall enough -
+        which is what separates digits from the colon and the decimal point.
+
+        Args:
+            binary: White-glyphs-on-black clock image.
+
+        Returns:
+            (start, end) column ranges of the digit glyphs, left to right.
+        """
+        if binary is None or binary.size == 0:
+            return []
+
+        projection = np.max(binary, axis=0) > 0
+
+        runs = []
+        start = None
+        for index, lit in enumerate(projection):
+            if lit and start is None:
+                start = index
+            elif not lit and start is not None:
+                if index - start > 2:
+                    runs.append((start, index))
+                start = None
+        if start is not None:
+            runs.append((start, len(projection)))
+
+        height = binary.shape[0]
+        digits = []
+        for run_start, run_end in runs:
+            rows = np.max(binary[:, run_start:run_end], axis=1) > 0
+            if np.sum(rows) < height * 0.3:
+                continue  # colon or decimal point
+            digits.append((run_start, run_end))
+
+        return digits
+
+    @staticmethod
+    def _crop_digit(binary: np.ndarray, start: int, end: int) -> Optional[np.ndarray]:
+        """
+        Cut one digit out of a binarised clock and normalise its size.
+
+        Args:
+            binary: White-glyphs-on-black clock image.
+            start: Left column of the glyph.
+            end: Right column (exclusive).
+
+        Returns:
+            The digit at DIGIT_TEMPLATE_SIZE, or None if the crop was empty.
+        """
+        region = binary[:, start:end]
+        if region.size == 0:
+            return None
+
+        lit = np.where(region > 50)
+        if lit[0].size == 0 or lit[1].size == 0:
+            return None
+
+        y_min, y_max = np.min(lit[0]), np.max(lit[0])
+        x_min, x_max = np.min(lit[1]), np.max(lit[1])
+        region = region[y_min:y_max + 1, x_min:x_max + 1]
+        if region.size == 0:
+            return None
+
+        return cv2.resize(region, DIGIT_TEMPLATE_SIZE, interpolation=cv2.INTER_AREA)
+
     def save_digit_template(self, digit: int, template: np.ndarray, overwrite: bool = False) -> bool:
         """
         Save a digit template to disk.

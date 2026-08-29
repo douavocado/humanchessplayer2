@@ -16,6 +16,8 @@ What differs, and why:
 * **Caps lock** -- the manual kill-switch. X11 reads it out of ``xset q``.
 * **Sound** -- ``mpg123`` is not a thing on Windows.
 * **Engine binaries** -- ``Engines/`` ships ELF builds with ``-ubuntu`` names.
+* **Tesseract** -- the OCR engine is a system install, not a pip one, and its
+  Windows installer does not put itself on PATH. See ``configure_tesseract``.
 * **Process groups** -- ``os.killpg``/``start_new_session`` are POSIX-only.
 """
 
@@ -198,6 +200,64 @@ def _play_sound_windows(sound_file):
             winsound.MessageBeep()
     except (OSError, RuntimeError):
         pass
+
+
+# --------------------------------------------------------------------------
+# Tesseract OCR
+# --------------------------------------------------------------------------
+
+# Where the Windows installer actually puts it. It offers an "add to PATH"
+# checkbox that is off by default, so a perfectly good install is routinely
+# invisible to ``pytesseract`` - which shells out to a bare ``tesseract`` and
+# reports the miss as "tesseract is not installed".
+_WINDOWS_TESSERACT_CANDIDATES = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+)
+
+
+def configure_tesseract():
+    """Point ``pytesseract`` at the Tesseract binary, and say whether it worked.
+
+    ``pytesseract`` is only a wrapper: ``pip install -r requirements.txt``
+    satisfies the import but not the executable behind it, so the OCR paths
+    (ratings, and the calibration button detector) fail at *run* time rather
+    than import time, and silently -- ``read_rating`` just returns ``None``
+    every game. This is the one runtime prerequisite the repo cannot ship
+    itself, so the least it can do is find an install that is present.
+
+    Leaves a working PATH lookup alone, so a normal Linux install (and a
+    Windows one whose PATH box *was* ticked) behaves exactly as before.
+
+    Returns:
+        The resolved executable path, or None if Tesseract could not be found.
+    """
+    try:
+        import pytesseract
+    except ImportError:
+        return None
+
+    import shutil
+
+    configured = pytesseract.pytesseract.tesseract_cmd
+    if shutil.which(configured):
+        return configured
+
+    if IS_WINDOWS:
+        for candidate in _WINDOWS_TESSERACT_CANDIDATES:
+            if os.path.isfile(candidate):
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                return candidate
+
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            candidate = os.path.join(local, "Programs", "Tesseract-OCR",
+                                     "tesseract.exe")
+            if os.path.isfile(candidate):
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                return candidate
+
+    return None
 
 
 # --------------------------------------------------------------------------

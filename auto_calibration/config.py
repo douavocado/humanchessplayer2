@@ -255,6 +255,24 @@ class ChessConfig:
         centre_y = resign['y'] + resign.get('height', 40) // 2
         return centre_x, centre_y
     
+    def get_game_controls_position(self) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Get the chess.com move-navigation bar box as (x, y, width, height).
+
+        Returns None when the profile does not carry one, which is the normal
+        state for Lichess profiles and for chess.com profiles fitted before
+        the bar was measured. Callers must keep whatever behaviour they had
+        in that case rather than substituting a default: there is no
+        board-relative estimate that holds across board sizes, because the
+        side panel is sized by the viewport rather than by the board.
+        """
+        coords = self.get_coordinates()
+        controls = coords.get('game_controls')
+        if not controls:
+            return None
+        return (controls['x'], controls['y'],
+                controls['width'], controls['height'])
+
     def get_step_size(self) -> int:
         """Get size of one chess square in pixels."""
         _, _, step = self.get_board_info()

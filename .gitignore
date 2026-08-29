@@ -6,6 +6,8 @@ Error_files/**
 # New unified logs directory
 logs/sessions/**/*
 logs/latest
+# Full-screen frames saved by scripts/utilities/diagnose_new_game.py
+logs/new_game_diagnosis/
 
 # Debug output
 debug_detection_output/**/*

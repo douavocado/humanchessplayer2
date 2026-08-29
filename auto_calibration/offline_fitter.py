@@ -23,13 +23,15 @@ from .utils import (
     get_output_directory,
     ensure_directory,
 )
-from .board_detector import BoardDetector
+from .board_detector import BoardDetector, refine_board_grid
 from .clock_detector import ClockDetector
+from .panel_detector import detect_game_controls
 from .coordinate_calculator import CoordinateCalculator
 from .visualiser import CalibrationVisualiser
 from .config import DEFAULT_SITE, save_config
 from .template_extractor import TemplateExtractor
 from .colour_extractor import extract_colour_scheme
+from .video_frames import displayed_clock_text
 
 
 def detect_digit_positions(clock_image: np.ndarray) -> Optional[Dict[str, float]]:
@@ -137,6 +139,133 @@ def detect_digit_positions(clock_image: np.ndarray) -> Optional[Dict[str, float]
     }
 
 
+def _parse_clock_seconds(text: str):
+    """
+    Parse a ground-truth clock time.
+
+    Whole seconds stay ints so the MM:SS digit maths downstream is unchanged;
+    a value with tenths (chess.com shows them below 20s) comes back as a
+    float, which only the segmentation-based extractor consumes.
+
+    Args:
+        text: The value after "top:"/"bottom:" in a _fen.txt sidecar.
+
+    Returns:
+        int or float seconds.
+    """
+    value = float(text.strip())
+    return int(value) if value.is_integer() else value
+
+
+
+def _unit_rows(instances: List[np.ndarray]) -> np.ndarray:
+    """Zero-mean, unit-norm each instance, matching how the matcher scores."""
+    flat = np.stack([i.astype(np.float32).ravel() for i in instances])
+    flat -= flat.mean(axis=1, keepdims=True)
+    flat /= np.sqrt((flat ** 2).sum(axis=1))[:, None] + 1e-9
+    return flat
+
+
+def _template_margin(vector: np.ndarray, units: Dict[str, np.ndarray],
+                     symbol: str) -> float:
+    """
+    How well a candidate separates `symbol` from the other pieces of its
+    colour.
+
+    The live matcher picks the best-correlating template *within a colour
+    group*, so a template is only as good as its lead over the runner-up
+    piece type. Agreement uses the 10th percentile and confusion the 90th so
+    that a single corrupted instance cannot decide the outcome.
+
+    Args:
+        vector: Candidate, already zero-meaned and unit-normalised.
+        units: Symbol to unit-normalised instances, one colour group.
+        symbol: The piece the candidate is meant to represent.
+
+    Returns:
+        Agreement with its own kind minus resemblance to the nearest other.
+    """
+    agreement = float(np.percentile(units[symbol] @ vector, 10))
+    confusion = max(
+        (float(np.percentile(units[other] @ vector, 90))
+         for other in units if other != symbol),
+        default=0.0)
+    return agreement - confusion
+
+
+def _select_piece_templates(
+        piece_instances: Dict[str, List[np.ndarray]]) -> Dict[str, np.ndarray]:
+    """
+    Choose one template per piece, by separating power rather than typicality.
+
+    Two earlier rules ignored that margin and both produced silently wrong
+    boards. ``instances[0]`` took the first square in ``chess.SQUARES`` order
+    from the first frame and checked it against nothing, giving a b_knight
+    that matched a live b8 knight at 0.682 while b_bishop matched at 0.686.
+    Picking the most *typical* instance instead fixed the knight and broke
+    the rook, because an instance can be perfectly typical of its own type
+    and still sit close to another one. Two wrong squares break the exact
+    starting-position match that game-start detection needs, which cost every
+    game played as black (the board scraped ``rbbqkbnr``, not ``rnbqkbnr``).
+
+    A second pass then lets a piece borrow the other colour's shape. Piece
+    silhouettes are the same in both colours, but dark pieces are far lower
+    contrast against the removed background, so templates cut from them come
+    out noisy and their margins collapse - a real black rook matched the
+    *white* rook template at 0.925 and the black one at 0.728, close enough
+    to the black pawn's 0.739 to lose. Correlation is invariant to intensity,
+    so a white-derived shape is a perfectly good template for a black piece,
+    and the swap only happens where it measurably widens that piece's margin
+    against its own colour group. A piece set whose colours genuinely differ
+    in shape simply never passes that test and keeps its own template.
+
+    Args:
+        piece_instances: Symbol ("R", "n", ...) to extracted templates.
+
+    Returns:
+        Symbol to chosen template, omitting pieces with no instances.
+    """
+    groups = [g for g in ("RNBQKP", "rnbqkp")
+              if any(piece_instances.get(s) for s in g)]
+    units, chosen, margins = {}, {}, {}
+
+    for group in groups:
+        symbols = [s for s in group if piece_instances.get(s)]
+        units[group] = {s: _unit_rows(piece_instances[s]) for s in symbols}
+
+        for symbol in symbols:
+            rows = units[group][symbol]
+            scores = [_template_margin(rows[i], units[group], symbol)
+                      for i in range(len(rows))]
+            best = int(np.argmax(scores))
+            chosen[symbol] = piece_instances[symbol][best]
+            margins[symbol] = scores[best]
+
+    # Cross-colour promotion, measured rather than assumed. Compared against
+    # a snapshot of the per-colour picks, so the two groups cannot borrow
+    # each other's borrowings and the result does not depend on which colour
+    # is considered first.
+    original = dict(chosen)
+    for group in groups:
+        other = group.swapcase()
+        if other not in units:
+            continue
+        for symbol in units[group]:
+            counterpart = symbol.swapcase()
+            if counterpart not in original:
+                continue
+            candidate = _unit_rows([original[counterpart]])[0]
+            margin = _template_margin(candidate, units[group], symbol)
+            if margin > margins[symbol]:
+                print(f"    {symbol}: margin {margins[symbol]:+.3f} -> "
+                      f"{margin:+.3f} using the {counterpart} shape")
+                chosen[symbol] = original[counterpart]
+                margins[symbol] = margin
+            else:
+                print(f"    {symbol}: margin {margins[symbol]:+.3f}")
+
+    return chosen
+
 class OfflineFitter:
     """
     Fits calibration from saved screenshots.
@@ -169,7 +298,7 @@ class OfflineFitter:
         self.site = site or DEFAULT_SITE
 
         self.board_detector = BoardDetector()
-        self.clock_detector = ClockDetector()
+        self.clock_detector = ClockDetector(site=self.site)
         self.calculator = CoordinateCalculator(site=self.site)
         
         # Template extractor for the profile
@@ -232,6 +361,24 @@ class OfflineFitter:
                 if board_detection:
                     print(f"  Board detected: ({board_detection['x']}, {board_detection['y']}) "
                           f"size={board_detection['size']} conf={board_detection['confidence']:.2f}")
+                    # Contour detection is good to a few pixels, which is not
+                    # good enough: templates are cut from one square and
+                    # matched against every other, so an error in the pitch
+                    # accumulates across the board and the same piece presents
+                    # a different sub-tile offset depending on its column.
+                    # Flipping the board moves every piece to a new column,
+                    # which is why a profile fitted playing white could fail
+                    # playing black.
+                    refined = refine_board_grid(image, board_detection)
+                    if refined.get('refined'):
+                        print(f"  Board refined:  ({refined['x']}, {refined['y']}) "
+                              f"size={refined['size']} "
+                              f"(pitch {refined['size'] / 8:.2f}px)")
+                        board_detection = refined
+                    else:
+                        print("  ⚠️  Board grid could not be refined; using the "
+                              "contour box. Piece templates may not align "
+                              "across columns.")
             
             if board_detection is None:
                 print(f"  Skipping (no board detected)")
@@ -378,9 +525,9 @@ class OfflineFitter:
                 for line in lines[1:]:
                     line = line.strip().lower()
                     if line.startswith('top:'):
-                        gt['top_time'] = int(line.split(':')[1].strip())
+                        gt['top_time'] = _parse_clock_seconds(line.split(':')[1])
                     elif line.startswith('bottom:'):
-                        gt['bottom_time'] = int(line.split(':')[1].strip())
+                        gt['bottom_time'] = _parse_clock_seconds(line.split(':')[1])
                     elif line.startswith('result:'):
                         gt['result'] = line.split(':')[1].strip()
                     elif line.startswith('move:'):
@@ -433,6 +580,105 @@ class OfflineFitter:
         
         return None
     
+    def _detect_player_rows(self, detections, board_detection, clocks):
+        """
+        Measure the chess.com name-and-rating rows across the frame set.
+
+        Per-frame detection, then the median of each edge: one frame can
+        clip a row if the username happens to render faintly, but the
+        typical frame gets it right - the same argument the clock boxes use.
+
+        Args:
+            detections: Per-screenshot detection records.
+            board_detection: The fitted board.
+            clocks: Combined clock coordinates, whose 'play' boxes anchor
+                the search (the player row and the clock chip are one row).
+
+        Returns:
+            {'top': box, 'bottom': box} for whichever rows were found, empty
+            for any other site.
+        """
+        if self.site != "chess_com":
+            return {}
+
+        detector = self.clock_detector.text_detector
+        detector.set_board(board_detection)
+
+        rows = {}
+        for name, clock_key in (('top', 'top_clock'), ('bottom', 'bottom_clock')):
+            chip = clocks.get(clock_key, {}).get('play')
+            if not chip:
+                continue
+
+            found = []
+            for detection in detections:
+                image = detection.get('image')
+                if image is None:
+                    continue
+                row = detector.detect_player_row(image, chip)
+                if row:
+                    found.append(row)
+
+            if found:
+                rows[name] = {
+                    key: int(np.median([box[key] for box in found]))
+                    for key in ('x', 'y', 'width', 'height')
+                }
+                print(f"  Player row ({name}): {rows[name]} from {len(found)} frames")
+            else:
+                # Falling back to the board-relative estimate, which only
+                # holds at the board size it was measured on - say so rather
+                # than let a wrong rating box through quietly.
+                print(f"  ⚠️  Player row ({name}) not detected - falling back to "
+                      f"board-relative estimate, which may not fit this layout. "
+                      f"Check the rating crop before trusting it.")
+
+        return rows
+
+    def _detect_game_controls(self, detections, board_detection):
+        """
+        Measure the chess.com move-navigation bar across the frame set.
+
+        Median-aggregated for the same reason as the player rows: a single
+        frame can lose a button to a hover state or a scrollbar overlapping
+        the panel edge.
+
+        Args:
+            detections: Per-screenshot detection records.
+            board_detection: The fitted board.
+
+        Returns:
+            The bar's box, or None when it was not found in any frame (and
+            for every non-chess.com site).
+        """
+        if self.site != "chess_com":
+            return None
+
+        found = []
+        for detection in detections:
+            image = detection.get('image')
+            if image is None:
+                continue
+            box = detect_game_controls(image, board_detection)
+            if box:
+                found.append(box)
+
+        if not found:
+            # sites/chess_com.py needs this bar to tell a game page from the
+            # lobby. Without it that check stays on a board-relative constant
+            # that only holds at the board size it was measured on, and a
+            # wrong box reads as "not a game page" - so the bot waits out
+            # every new-game timeout without ever starting. Loud, not silent.
+            print("  ⚠️  Move-navigation bar not detected - game-start "
+                  "detection will fall back to a board-relative constant "
+                  "that may not fit this layout.")
+            return None
+
+        box = {key: int(np.median([b[key] for b in found]))
+               for key in ('x', 'y', 'width', 'height')}
+        print(f"  Game controls: {box} from {len(found)} frames")
+        return box
+
     def _combine_detections(self, detections: List[Dict],
                            board_detection: Dict) -> Dict:
         """
@@ -520,7 +766,17 @@ class OfflineFitter:
                 y = int(np.mean([c['y'] for c in coords_list]))
                 w = int(np.mean([c.get('width', 147) for c in coords_list]))
                 h = int(np.mean([c.get('height', 44) for c in coords_list]))
-                # STRICT FITTING: Tighten vertical coordinates to the actual digits
+                # STRICT FITTING: Tighten vertical coordinates to the actual
+                # digits. Lichess's detected box is a loose text block that
+                # can catch the username above or a panel border below, so
+                # trimming to the digit row is what makes it readable.
+                # chess.com's is the clock chip itself, already bounded and
+                # with its own margins, and trimming it to the digit strokes
+                # measurably breaks reading: on the inactive (dark chip, grey
+                # digits) state the tightened crop returns None where the
+                # untrimmed chip reads correctly.
+                if self.site == "chess_com":
+                    return {'x': x, 'y': y, 'width': w, 'height': h}
                 y_final, h_final = tighten_clock_vertical(x, y, w, h, dets=dets)
                 return {'x': x, 'y': y_final, 'width': w, 'height': h_final}
 
@@ -581,6 +837,10 @@ class OfflineFitter:
         }
 
         self.calculator.set_clocks(combined_clocks)
+        self.calculator.set_player_rows(
+            self._detect_player_rows(detections, board_detection, combined_clocks))
+        self.calculator.set_game_controls(
+            self._detect_game_controls(detections, board_detection))
         coordinates = self.calculator.calculate_all()
 
         # Estimate missing states to fill gaps
@@ -676,7 +936,11 @@ class OfflineFitter:
             # Only from play-state frames: we crop at the play-state clock
             # position, and start/end frames have their clocks shifted there
             digit_positions = config.get('digit_positions')
-            if digit_positions and (state_hint or 'play') == 'play':
+            # chess.com's clock is not a fixed four-digit MM:SS, so the
+            # calibrated d1..d4 slicing cannot label its digits - segment the
+            # crop instead (see extract_digits_by_segmentation).
+            segmented = self.site == "chess_com"
+            if (digit_positions or segmented) and (state_hint or 'play') == 'play':
                 times = {'top_clock': gt.get('top_time'), 'bottom_clock': gt.get('bottom_time')}
                 for clock_type in ['bottom_clock', 'top_clock']:
                     if clock_type in detection['clocks'] and times[clock_type] is not None:
@@ -691,9 +955,15 @@ class OfflineFitter:
                         clock_img = image[c['y']:c['y']+c['height'], c['x']:c['x']+c['width']]
                         
                         if clock_img.size > 0:
-                            digits = self.template_extractor.extract_digits_from_clock(
-                                clock_img, digit_positions, known_time
-                            )
+                            if segmented:
+                                digits = self.template_extractor.extract_digits_by_segmentation(
+                                    clock_img,
+                                    displayed_clock_text(known_time, self.site)
+                                )
+                            else:
+                                digits = self.template_extractor.extract_digits_from_clock(
+                                    clock_img, digit_positions, known_time
+                                )
                             for val, template in digits.items():
                                 if str(val) in digit_instances:
                                     digit_instances[str(val)].append(template)
@@ -775,20 +1045,14 @@ class OfflineFitter:
         else:
             print("  ⚠ Could not extract colour scheme, will use fallback")
 
-        # --- Finalize Piece Templates (use first clean instance) ---
+        # --- Finalize Piece Templates (pick the most representative) ---
         pieces_extracted = 0
         print(f"  Finalizing pieces (selecting best instance from {sum(len(v) for v in piece_instances.values())} total)...")
-        for piece, instances in piece_instances.items():
-            if not instances:
-                continue
-            
-            # Use the first instance directly instead of averaging
-            # Averaging tends to blur templates when pieces come from different
-            # backgrounds (light/dark squares, highlighted/normal, etc.)
-            template = instances[0]
-            if template is not None:
-                if self.template_extractor.save_piece_template(piece, template, overwrite=True):
-                    pieces_extracted += 1
+        # Averaging is still avoided - it blurs, because instances come off
+        # different backgrounds (light/dark squares, highlighted or not).
+        for piece, template in _select_piece_templates(piece_instances).items():
+            if self.template_extractor.save_piece_template(piece, template, overwrite=True):
+                pieces_extracted += 1
 
         # --- Finalize Digit Templates (pick best instance) ---
         digits_extracted = 0

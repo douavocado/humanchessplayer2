@@ -42,8 +42,6 @@ def extract_colour_scheme(
         - dark_square: [B, G, R]
         - highlight_light: [B, G, R] (extracted or estimated)
         - highlight_dark: [B, G, R] (extracted or estimated)
-        - premove_light: [B, G, R] (estimated)
-        - premove_dark: [B, G, R] (estimated)
     """
     if board_img is None or board_img.size == 0:
         return {}
@@ -193,15 +191,25 @@ def extract_colour_scheme(
         if highlight_dark is None:
             highlight_dark = find_best_highlight(dark_samples, dark_square)
 
-    # Estimate premove colours (greyish tint)
-    premove_light = _estimate_premove_colour(light_square)
-    premove_dark = _estimate_premove_colour(dark_square)
-    
+    # Premove colours are deliberately NOT emitted. They used to be guessed
+    # by desaturating the plain square colour, which lands within the 10-unit
+    # matching tolerance of that same square for any theme whose squares are
+    # not strongly saturated - so every plain square read as a queued
+    # premove, and premove_is_pending() returned True on ordinary in-play
+    # frames. (Measured on a fitted chess.com profile: 34 of 64 squares
+    # matched on a frame with no premove on the board.) The same guess is
+    # what the hardcoded Lichess fallback carried until real values were
+    # measured off 30 frames.
+    #
+    # A premove colour cannot be derived from the board colour - the site
+    # paints a near-opaque overlay whose shade is its own - so it has to come
+    # from frames that actually contain a queued premove. Until this module
+    # can measure that, omitting the keys is the safe answer:
+    # _build_premove_colours() returns an empty table for a profile that does
+    # not describe them, and detects nothing rather than everything.
     res = {
         'light_square': light_square,
         'dark_square': dark_square,
-        'premove_light': premove_light,
-        'premove_dark': premove_dark,
     }
     
     if highlight_light is not None:
@@ -233,24 +241,6 @@ def _estimate_highlight_colour(base_colour: List[int], is_light: bool) -> List[i
         h_r = min(255, int(r * 0.85))
     
     return [h_b, h_g, h_r]
-
-
-def _estimate_premove_colour(base_colour: List[int]) -> List[int]:
-    """
-    Estimate the premove colour based on the base square colour.
-    
-    Premoves have a greyish/desaturated tint.
-    """
-    b, g, r = base_colour
-    
-    # Desaturate by moving towards grey
-    avg = (b + g + r) // 3
-    
-    p_b = int(b * 0.7 + avg * 0.3)
-    p_g = int(g * 0.7 + avg * 0.3)
-    p_r = int(r * 0.7 + avg * 0.3)
-    
-    return [p_b, p_g, p_r]
 
 
 def extract_highlight_colours_from_move(

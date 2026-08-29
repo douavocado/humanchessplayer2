@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Tuple, Optional, Dict, List
 
 from .utils import extract_region, cluster_values, cluster_mean
-from .config import ChessConfig
+from .config import ChessConfig, DEFAULT_SITE
 from .panel_detector import ClockTextDetector
 
 
@@ -80,16 +80,20 @@ class ClockDetector:
     CLOCK_GAP_RATIO_MIN = 0.01  # ~1% of board size
     CLOCK_GAP_RATIO_MAX = 0.08  # ~8% of board size
     
-    def __init__(self, board_detection: Optional[Dict] = None):
+    def __init__(self, board_detection: Optional[Dict] = None,
+                 site: Optional[str] = None):
         """
         Initialise clock detector.
         
         Args:
             board_detection: Board detection result from BoardDetector.
+            site: Which site the screenshots came from, passed through to
+                  ClockTextDetector (chess.com has its own clock layout).
         """
         self.board = board_detection
+        self.site = site or DEFAULT_SITE
         self.read_clock = get_read_clock_function()
-        self.text_detector = ClockTextDetector(board_detection)
+        self.text_detector = ClockTextDetector(board_detection, site=self.site)
         
         # Calculate scaled clock dimensions
         self._update_clock_dimensions()
@@ -184,9 +188,14 @@ class ClockDetector:
         }
         
         # Apply vertical padding and enforce minimum height to avoid chopping digits
-        # Lichess digits need some breathing room for robust OCR
+        # Lichess digits need some breathing room for robust OCR.
+        # chess.com is detected as a whole chip with its own margins already,
+        # so padding it would only pull page background into the crop.
         target_height = int(REFERENCE_CLOCK_HEIGHT * self.scale)
         v_padding = int(4 * self.scale)  # Add 4 pixels of padding top/bottom
+        if self.site == "chess_com":
+            target_height = 0
+            v_padding = 0
         
         if top_clock:
             # Shift Y up by padding, increase height to target + extra padding
@@ -545,27 +554,31 @@ class ClockDetector:
         return results
 
 
-def detect_clocks(image: np.ndarray, board_detection: Dict) -> Optional[Dict]:
+def detect_clocks(image: np.ndarray, board_detection: Dict,
+                  site: Optional[str] = None) -> Optional[Dict]:
     """
     Convenience function to detect clocks.
     
     Args:
         image: BGR image to search.
         board_detection: Board detection result.
+        site: Which site the image came from (see ClockDetector).
     
     Returns:
         Clock detection result dict or None.
     """
-    detector = ClockDetector(board_detection)
+    detector = ClockDetector(board_detection, site=site)
     return detector.detect(image)
 
 
-def detect_clocks_from_screenshot(board_detection: Dict) -> Optional[Dict]:
+def detect_clocks_from_screenshot(board_detection: Dict,
+                                  site: Optional[str] = None) -> Optional[Dict]:
     """
     Detect clocks from current screen.
     
     Args:
         board_detection: Board detection result.
+        site: Which site the screen shows (see ClockDetector).
     
     Returns:
         Clock detection result dict or None.
@@ -576,4 +589,4 @@ def detect_clocks_from_screenshot(board_detection: Dict) -> Optional[Dict]:
     if screenshot is None:
         return None
     
-    return detect_clocks(screenshot, board_detection)
+    return detect_clocks(screenshot, board_detection, site=site)

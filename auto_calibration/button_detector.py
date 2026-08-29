@@ -12,6 +12,10 @@ Uses OCR and colour detection to find buttons regardless of screen resolution.
 import cv2
 import numpy as np
 import pytesseract
+
+from common.platform_compat import configure_tesseract
+
+configure_tesseract()
 from typing import Tuple, Optional, Dict, List
 from pathlib import Path
 
